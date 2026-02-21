@@ -51,6 +51,10 @@ class Settings(BaseSettings):
     max_concurrent_positions: int = Field(default=5, ge=1)
     stop_loss_pct: float = Field(default=3.0, ge=0, le=100)
 
+    # Paper trading
+    paper_initial_balance: float = Field(default=10000.0, gt=0)
+    paper_fee_pct: float = Field(default=0.1, ge=0, le=100)
+
     # Trading loop
     loop_interval_seconds: int = Field(default=60, ge=1)
 

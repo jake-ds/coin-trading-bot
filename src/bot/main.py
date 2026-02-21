@@ -12,6 +12,7 @@ from bot.data.collector import DataCollector
 from bot.data.store import DataStore
 from bot.exchanges.factory import ExchangeFactory
 from bot.execution.engine import ExecutionEngine
+from bot.execution.paper_portfolio import PaperPortfolio
 from bot.execution.resilient import ResilientExchange
 from bot.monitoring.logger import setup_logging
 from bot.monitoring.telegram import TelegramNotifier
@@ -34,6 +35,7 @@ class TradingBot:
         self._execution_engines: dict[str, ExecutionEngine] = {}
         self._telegram: TelegramNotifier | None = None
         self._dashboard_task: asyncio.Task | None = None
+        self._paper_portfolio: PaperPortfolio | None = None
 
     async def initialize(self) -> None:
         """Initialize all bot components."""
@@ -66,11 +68,17 @@ class TradingBot:
 
         # Initialize execution engines (one per exchange)
         is_paper = self._settings.trading_mode == TradingMode.PAPER
+        if is_paper:
+            self._paper_portfolio = PaperPortfolio(
+                initial_balance=self._settings.paper_initial_balance,
+                fee_pct=self._settings.paper_fee_pct,
+            )
         for exchange in self._exchanges:
             self._execution_engines[exchange.name] = ExecutionEngine(
                 exchange=exchange,
                 store=self._store,
                 paper_trading=is_paper,
+                paper_portfolio=self._paper_portfolio,
             )
 
         # Initialize Telegram notifier (gracefully skip if not configured)

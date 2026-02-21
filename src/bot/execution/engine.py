@@ -1,14 +1,20 @@
 """Order execution engine with paper trading and retry logic."""
 
+from __future__ import annotations
+
 import asyncio
 import uuid
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 
 import structlog
 
 from bot.data.store import DataStore
 from bot.exchanges.base import ExchangeAdapter
 from bot.models import Order, OrderSide, OrderStatus, OrderType, TradingSignal
+
+if TYPE_CHECKING:
+    from bot.execution.paper_portfolio import PaperPortfolio
 
 logger = structlog.get_logger()
 
@@ -23,6 +29,7 @@ class ExecutionEngine:
         paper_trading: bool = True,
         max_retries: int = 3,
         retry_delay: float = 1.0,
+        paper_portfolio: PaperPortfolio | None = None,
     ):
         self._exchange = exchange
         self._store = store
@@ -30,6 +37,7 @@ class ExecutionEngine:
         self._max_retries = max_retries
         self._retry_delay = retry_delay
         self._pending_orders: dict[str, Order] = {}
+        self._paper_portfolio = paper_portfolio
 
     async def execute_signal(
         self,
@@ -75,7 +83,7 @@ class ExecutionEngine:
         order_type: OrderType,
         quantity: float,
         price: float | None,
-    ) -> Order:
+    ) -> Order | None:
         """Simulate order execution in paper trading mode."""
         if price is None:
             try:
@@ -83,6 +91,26 @@ class ExecutionEngine:
                 price = ticker.get("last", 0)
             except (ValueError, ConnectionError, RuntimeError):
                 price = 0
+
+        # Use PaperPortfolio for balance tracking if available
+        if self._paper_portfolio is not None and price > 0:
+            if side == OrderSide.BUY:
+                success = self._paper_portfolio.buy(symbol, quantity, price)
+            else:
+                success = self._paper_portfolio.sell(symbol, quantity, price)
+            if not success:
+                logger.warning(
+                    "paper_order_rejected",
+                    symbol=symbol,
+                    side=side.value,
+                    quantity=quantity,
+                    price=price,
+                )
+                return None
+
+        fee = 0.0
+        if self._paper_portfolio is not None and price > 0:
+            fee = quantity * price * self._paper_portfolio.fee_pct / 100
 
         order_id = f"paper-{uuid.uuid4().hex[:12]}"
         now = datetime.now(timezone.utc)
@@ -100,7 +128,7 @@ class ExecutionEngine:
             filled_at=now,
             filled_price=price,
             filled_quantity=quantity,
-            fee=0.0,
+            fee=fee,
         )
 
     async def _live_execute(
