@@ -268,8 +268,8 @@
         "All existing tests pass (they use old mode implicitly), ruff check passes"
       ],
       "priority": 14,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Default mode is mean_reversion for backward compat; squeeze mode available via mode='squeeze'"
     },
     {
       "id": "V2-015",
