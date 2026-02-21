@@ -66,6 +66,16 @@ class ArbitrageStrategy(BaseStrategy):
         best_bid_exchange = max(prices, key=lambda e: prices[e].get("bid", 0))
         best_ask_exchange = min(prices, key=lambda e: prices[e].get("ask", float("inf")))
 
+        # Arbitrage requires buying and selling on DIFFERENT exchanges
+        if best_bid_exchange == best_ask_exchange:
+            return TradingSignal(
+                strategy_name=self.name,
+                symbol=symbol,
+                action=SignalAction.HOLD,
+                confidence=0.0,
+                metadata={"reason": "same_exchange"},
+            )
+
         best_bid = prices[best_bid_exchange]["bid"]
         best_ask = prices[best_ask_exchange]["ask"]
 

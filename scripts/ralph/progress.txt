@@ -7,7 +7,9 @@ Started: 2026년 2월 22일 일요일 00시 13분 50초 KST
 - **CORS**: Use `CORSMiddleware` from `fastapi.middleware.cors` with configurable origins
 - **Model serialization**: Use `joblib.dump()`/`joblib.load()` instead of pickle for sklearn models
 - **Config pattern**: Add new settings to `Settings` class with defaults that maintain backward compat
-- **Test count baseline**: 347 tests passing as of V2-005
+- **Test count baseline**: 357 tests passing as of V2-006
+- **DCA confirm_buy pattern**: After DCAStrategy.analyze() returns BUY, call `strategy.confirm_buy(buy_time, amount, quantity)` to commit state. analyze() is idempotent and side-effect-free.
+- **BacktestEngine entry_cost**: Track `entry_cost = cash` (total cash before buy, including fee) and compute PnL as `cash_after_sell - entry_cost`
 - **RiskManager pipeline**: After BUY, call `risk_manager.add_position(symbol, qty, price)`. After SELL, get position entry price via `risk_manager.get_position(symbol)`, calculate `pnl = (sell_price - entry_price) * qty`, call `record_trade_pnl(pnl)` then `remove_position(symbol)`. Call `check_and_reset_daily()` at start of each cycle for auto daily-loss-limit reset. Update portfolio value from `paper_portfolio.total_value` each cycle.
 - **PaperPortfolio**: Optional `paper_portfolio` param in `ExecutionEngine.__init__` — defaults to `None` for backward compat; when provided, `_paper_execute` checks balance via `buy()`/`sell()` and returns `None` if rejected
 - **Config for paper trading**: `paper_initial_balance` (default 10000.0) and `paper_fee_pct` (default 0.1) in Settings
@@ -135,4 +137,28 @@ Started: 2026년 2월 22일 일요일 00시 13분 50초 KST
   - `check_and_reset_daily()` checks `_daily_pnl_reset_date` and calls `reset_daily()` if date changed, which clears halt when `halt_reason == "daily_loss_limit"`
   - For PnL calculation: `pnl = (sell_price - entry_price) * qty` — fees are tracked separately by PaperPortfolio
   - When selling without a prior position in RiskManager (edge case), skip PnL recording gracefully
+---
+
+## 2026-02-22 - V2-006: Fix strategy bugs: arbitrage same-exchange, DCA state mutation, backtest PnL formula
+- **Implemented:**
+  - ArbitrageStrategy: added `best_bid_exchange == best_ask_exchange` check — returns HOLD with `reason: "same_exchange"` when both from same exchange
+  - DCAStrategy: removed state mutation from `analyze()` — `_last_buy_time`, `_total_invested`, `_total_quantity` no longer updated in analyze
+  - DCAStrategy: added `confirm_buy(buy_time, amount, quantity)` method to be called after successful execution
+  - DCAStrategy: `analyze()` now computes projected values (projected_invested, projected_quantity) without side effects
+  - BacktestEngine: added `entry_cost` variable to track total cash spent on buy (including fee)
+  - BacktestEngine: PnL formula changed from `cash - (position_qty * position_entry)` to `cash - entry_cost` — correctly accounts for both buy and sell fees
+  - BacktestEngine: removed unused `position_entry` variable (dead code after PnL fix)
+- **Files modified:**
+  - `src/bot/strategies/arbitrage/arbitrage_strategy.py` — added same-exchange check
+  - `src/bot/strategies/dca/dca_strategy.py` — idempotent analyze + confirm_buy
+  - `src/bot/backtest/engine.py` — fixed PnL formula with entry_cost
+  - `tests/strategies/test_dca.py` — updated existing tests to call confirm_buy()
+- **Files created:**
+  - `tests/strategies/test_v2_006_bug_fixes.py` — 10 new tests (2 arbitrage, 5 DCA idempotency, 3 backtest PnL)
+- **Tests:** 357 tests passing (347 previous + 10 new), ruff check passes
+- **Learnings for future iterations:**
+  - Making analyze() idempotent requires updating existing tests that relied on side effects — use confirm_buy() after analyze returns BUY
+  - BacktestEngine PnL bug: `cash - (qty * entry_price)` ignores buy fee. Correct formula: track total cash spent as `entry_cost` and compute `cash_after_sell - entry_cost`
+  - When removing variables (position_entry), ruff F841 catches unused assignments — clean up completely
+  - Projected metadata (total_invested, total_quantity) shows what WOULD happen if buy succeeds, without committing to it
 ---

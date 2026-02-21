@@ -97,13 +97,11 @@ class DCAStrategy(BaseStrategy):
                 amount *= self._rsi_bonus
                 confidence = 0.8
 
-        # Update tracking
-        self._last_buy_time = current_time
+        # Calculate projected values WITHOUT mutating state (idempotent)
         quantity = amount / current_price if current_price > 0 else 0
-        self._total_invested += amount
-        self._total_quantity += quantity
-
-        avg_price = self._total_invested / self._total_quantity if self._total_quantity > 0 else 0
+        projected_invested = self._total_invested + amount
+        projected_quantity = self._total_quantity + quantity
+        avg_price = projected_invested / projected_quantity if projected_quantity > 0 else 0
 
         return TradingSignal(
             strategy_name=self.name,
@@ -113,13 +111,23 @@ class DCAStrategy(BaseStrategy):
             metadata={
                 "buy_amount": amount,
                 "quantity": quantity,
-                "total_invested": self._total_invested,
-                "total_quantity": self._total_quantity,
+                "total_invested": projected_invested,
+                "total_quantity": projected_quantity,
                 "average_price": avg_price,
                 "rsi": rsi_value,
                 "interval": self._interval,
             },
         )
+
+    def confirm_buy(self, buy_time: datetime, amount: float, quantity: float) -> None:
+        """Update DCA state after a buy execution succeeds.
+
+        Call this only after the buy order is actually executed, so that
+        analyze() remains idempotent and side-effect-free.
+        """
+        self._last_buy_time = buy_time
+        self._total_invested += amount
+        self._total_quantity += quantity
 
 
 strategy_registry.register(DCAStrategy())

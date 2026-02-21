@@ -59,7 +59,7 @@ class BacktestEngine:
         """Run a backtest with the given strategy and data."""
         cash = self._initial_capital
         position_qty = 0.0
-        position_entry = 0.0
+        entry_cost = 0.0  # Total cash spent on buy (including fee)
         trades: list[TradeLog] = []
         metrics = MetricsCollector(initial_capital=self._initial_capital)
 
@@ -76,10 +76,10 @@ class BacktestEngine:
                 # Apply slippage
                 buy_price = current_price * (1 + self._slippage_pct / 100)
                 # Calculate quantity (use all cash minus fees)
+                entry_cost = cash  # Total cash spent (including buy fee)
                 fee = cash * (self._fee_pct / 100)
                 available = cash - fee
                 position_qty = available / buy_price if buy_price > 0 else 0
-                position_entry = buy_price
                 cash = 0
 
                 trades.append(TradeLog(
@@ -96,7 +96,7 @@ class BacktestEngine:
                 fee = proceeds * (self._fee_pct / 100)
                 cash = proceeds - fee
 
-                pnl = cash - (position_qty * position_entry)
+                pnl = cash - entry_cost
                 metrics.record_trade(pnl)
 
                 trades.append(TradeLog(
@@ -109,7 +109,6 @@ class BacktestEngine:
                 ))
 
                 position_qty = 0
-                position_entry = 0
 
             # Record portfolio value
             portfolio_value = cash + (position_qty * current_price)

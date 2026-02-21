@@ -51,7 +51,13 @@ class TestDCAStrategy:
     @pytest.mark.asyncio
     async def test_second_buy_too_soon(self, strategy):
         candles = make_candles(5)
-        await strategy.analyze(candles, symbol="BTC/USDT")  # first buy
+        signal = await strategy.analyze(candles, symbol="BTC/USDT")  # first buy
+        # Confirm the buy to update state
+        strategy.confirm_buy(
+            candles[-1].timestamp,
+            signal.metadata["buy_amount"],
+            signal.metadata["quantity"],
+        )
 
         # Same time — should hold
         signal = await strategy.analyze(candles, symbol="BTC/USDT")
@@ -60,7 +66,12 @@ class TestDCAStrategy:
     @pytest.mark.asyncio
     async def test_second_buy_after_interval(self, strategy):
         candles = make_candles(5)
-        await strategy.analyze(candles, symbol="BTC/USDT")  # first buy
+        signal = await strategy.analyze(candles, symbol="BTC/USDT")  # first buy
+        strategy.confirm_buy(
+            candles[-1].timestamp,
+            signal.metadata["buy_amount"],
+            signal.metadata["quantity"],
+        )
 
         # Create candles 25 hours later
         base = datetime(2024, 1, 2, 1)
