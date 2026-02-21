@@ -1,435 +1,266 @@
 {
-  "project": "CoinTradingBot",
-  "branchName": "ralph/trading-bot",
-  "description": "Python-based cryptocurrency automated trading system with multiple strategies, risk management, backtesting, and monitoring dashboard",
+  "project": "CoinTradingBot-Improvements",
+  "branchName": "ralph/v2-improvements",
+  "description": "Critical bug fixes, security hardening, missing integrations, and quality improvements for the crypto trading bot",
   "userStories": [
     {
-      "id": "US-001",
-      "title": "Project scaffolding",
-      "description": "As a developer, I need the project structure and dependency management set up so all subsequent work has a foundation.",
+      "id": "FIX-001",
+      "title": "Fix pickle deserialization vulnerability in ML strategy",
+      "description": "As a security-conscious developer, I need to replace unsafe pickle.load() with joblib to prevent arbitrary code execution from malicious model files.",
       "acceptanceCriteria": [
-        "pyproject.toml created with project metadata and all dependencies (ccxt, ta, pydantic, pydantic-settings, sqlalchemy, aiosqlite, structlog, fastapi, uvicorn, scikit-learn, python-telegram-bot, httpx, pyyaml)",
-        "requirements.txt generated from pyproject.toml",
-        "Directory structure created: src/bot/{models,exchanges,data,strategies/{technical,arbitrage,dca,ml},risk,execution,backtest,monitoring,dashboard}",
-        "Empty __init__.py files in all packages",
-        "src/bot/main.py with placeholder entry point",
-        "pytest runs successfully (even with 0 tests)",
-        "ruff check passes"
+        "Replace pickle with joblib for model save/load in src/bot/strategies/ml/prediction.py",
+        "Add joblib to dependencies in pyproject.toml and requirements.txt",
+        "save_model() uses joblib.dump()",
+        "_load_model() uses joblib.load()",
+        "Existing test_save_and_load_model test still passes",
+        "Remove pickle import entirely",
+        "pytest passes, ruff check passes"
       ],
       "priority": 1,
-      "passes": true,
-      "notes": ""
+      "passes": false,
+      "notes": "CWE-502: Deserialization of Untrusted Data. pickle.load() can execute arbitrary code."
     },
     {
-      "id": "US-002",
-      "title": "Core data models",
-      "description": "As a developer, I need Pydantic data models for all core entities so the system has a consistent type-safe data layer.",
+      "id": "FIX-002",
+      "title": "Fix Dashboard XSS and add CORS protection",
+      "description": "As a security-conscious operator, I need the dashboard to properly escape HTML output and restrict cross-origin requests.",
       "acceptanceCriteria": [
-        "OHLCV model with timestamp, open, high, low, close, volume fields",
-        "Order model with id, exchange, symbol, side (BUY/SELL), type (MARKET/LIMIT), price, quantity, status, timestamps",
-        "TradingSignal model with strategy_name, symbol, action (BUY/SELL/HOLD), confidence, metadata",
-        "Portfolio model with balances, positions, total_value, unrealized_pnl",
-        "All models use Pydantic v2 with proper validators",
-        "Unit tests for all models pass",
-        "ruff check passes"
+        "All user/trade data in HTML dashboard is escaped with html.escape()",
+        "Add CORSMiddleware to FastAPI app with configurable allowed_origins (default: localhost only)",
+        "Add allowed_origins setting to config.py (default: ['http://localhost:8000'])",
+        "Dashboard still renders correctly with escaped data",
+        "Unit tests for dashboard endpoints still pass",
+        "Add test verifying HTML escaping works",
+        "pytest passes, ruff check passes"
       ],
       "priority": 2,
-      "passes": true,
-      "notes": ""
+      "passes": false,
+      "notes": "XSS via f-string HTML in dashboard/app.py lines 77-82"
     },
     {
-      "id": "US-003",
-      "title": "Configuration system",
-      "description": "As a developer, I need a centralized configuration system that loads from .env and YAML files so the bot is easily configurable.",
+      "id": "FIX-003",
+      "title": "Wire Dashboard to TradingBot orchestrator",
+      "description": "As an operator, I need the dashboard to show real-time bot status, trades, metrics, and portfolio data instead of empty defaults.",
       "acceptanceCriteria": [
-        "Settings class using pydantic-settings with .env support",
-        "Support for exchange credentials, trading mode (paper/live), risk parameters, logging level",
-        "Optional YAML config file override (config.yaml)",
-        "Validation: trading mode must be 'paper' or 'live', percentages 0-100",
-        "Default to paper trading mode",
-        "Unit tests for config loading and validation pass",
-        "ruff check passes"
+        "TradingBot.initialize() imports and calls dashboard.update_state(status='running')",
+        "After each trading cycle, update dashboard state with: latest trades from DataStore, portfolio value, bot status",
+        "TradingBot.shutdown() updates dashboard state to status='stopped'",
+        "Dashboard /trades endpoint returns actual recent trades",
+        "Dashboard /metrics endpoint returns calculated metrics from MetricsCollector",
+        "Dashboard /portfolio endpoint returns current portfolio snapshot",
+        "Start dashboard server in background (uvicorn) during bot.initialize() on configured port",
+        "Unit tests verify dashboard state updates during bot lifecycle",
+        "pytest passes, ruff check passes"
       ],
       "priority": 3,
-      "passes": true,
-      "notes": ""
+      "passes": false,
+      "notes": "Currently dashboard _bot_state is never updated from main.py"
     },
     {
-      "id": "US-004",
-      "title": "Exchange abstract interface",
-      "description": "As a developer, I need an abstract exchange adapter interface so different exchanges can be swapped in without changing business logic.",
+      "id": "FIX-004",
+      "title": "Integrate Telegram notifications into orchestrator",
+      "description": "As an operator, I need the bot to actually send Telegram alerts for trade executions, daily summaries, and errors.",
       "acceptanceCriteria": [
-        "ExchangeAdapter ABC with methods: get_ticker, get_ohlcv, get_balance, create_order, cancel_order, get_order_status, get_order_book",
-        "ExchangeFactory that creates adapters by name",
-        "All methods are async",
-        "Proper type hints using the core data models",
-        "Unit tests for factory pattern pass",
-        "ruff check passes"
+        "TradingBot.initialize() creates TelegramNotifier if bot_token and chat_id are configured",
+        "After successful order execution, call notifier.notify_trade()",
+        "On trading_cycle_error, call notifier.notify_error()",
+        "Send startup and shutdown notifications",
+        "Gracefully skip notifications if Telegram is not configured (no crash)",
+        "Unit tests with mocked Telegram verify notifications are triggered",
+        "pytest passes, ruff check passes"
       ],
       "priority": 4,
-      "passes": true,
-      "notes": ""
+      "passes": false,
+      "notes": "TelegramNotifier exists but is never instantiated or called from main.py"
     },
     {
-      "id": "US-005",
-      "title": "Binance adapter",
-      "description": "As a trader, I need to connect to Binance so I can trade on the world's largest crypto exchange.",
+      "id": "FIX-005",
+      "title": "Use ResilientExchange wrapper in orchestrator",
+      "description": "As an operator, I need exchange API calls to use the circuit breaker and auto-retry logic that was already built.",
       "acceptanceCriteria": [
-        "BinanceAdapter implementing ExchangeAdapter using ccxt.binance",
-        "Support for testnet via configuration",
-        "Proper error handling: network errors, rate limits, invalid symbols",
-        "Convert ccxt responses to our Pydantic models",
-        "Unit tests with mocked ccxt calls pass",
-        "ruff check passes"
+        "TradingBot._init_exchanges() wraps each ExchangeAdapter in ResilientExchange",
+        "Circuit breaker protects all exchange calls (get_ticker, get_ohlcv, create_order)",
+        "When circuit breaker trips, log warning and skip that exchange gracefully",
+        "ResilientExchange implements full ExchangeAdapter interface (get_balance, cancel_order, get_order_status, get_order_book) via _call_with_breaker",
+        "Existing exchange and execution tests still pass",
+        "Add test for circuit breaker integration in orchestrator",
+        "pytest passes, ruff check passes"
       ],
       "priority": 5,
-      "passes": true,
-      "notes": "Tests MUST mock ccxt - never call real APIs"
+      "passes": false,
+      "notes": "ResilientExchange exists in execution/resilient.py but main.py creates raw adapters"
     },
     {
-      "id": "US-006",
-      "title": "Upbit adapter",
-      "description": "As a Korean trader, I need to connect to Upbit so I can trade with KRW pairs.",
+      "id": "FIX-006",
+      "title": "Add paper trading portfolio balance tracking",
+      "description": "As a paper trader, I need the simulated portfolio to track balances so I can see realistic results instead of having infinite capital.",
       "acceptanceCriteria": [
-        "UpbitAdapter implementing ExchangeAdapter using ccxt.upbit",
-        "Handle KRW-prefixed trading pairs (e.g., KRW-BTC)",
-        "Proper error handling: network errors, rate limits, invalid symbols",
-        "Convert ccxt responses to our Pydantic models",
-        "Unit tests with mocked ccxt calls pass",
-        "ruff check passes"
+        "ExecutionEngine in paper mode tracks a simulated cash balance (configurable initial capital, default 10000)",
+        "Paper BUY orders deduct from cash balance: cost = quantity * price + fee",
+        "Paper SELL orders add to cash balance: proceeds = quantity * price - fee",
+        "Reject paper orders if insufficient balance",
+        "Track positions: add on BUY, remove on SELL",
+        "Expose current balance and positions as properties",
+        "Paper fee configurable (default 0.1%)",
+        "Unit tests verify balance tracking across buy/sell cycles",
+        "pytest passes, ruff check passes"
       ],
       "priority": 6,
-      "passes": true,
-      "notes": "Tests MUST mock ccxt - never call real APIs"
+      "passes": false,
+      "notes": "Currently paper_execute() always succeeds with no balance check"
     },
     {
-      "id": "US-007",
-      "title": "Data storage layer",
-      "description": "As a developer, I need persistent storage for OHLCV data, trades, and portfolio snapshots so the bot has historical data access.",
+      "id": "FIX-007",
+      "title": "Fix backtest P&L calculation and add buy fee accounting",
+      "description": "As a trader, I need the backtesting engine to accurately calculate P&L including both buy and sell fees.",
       "acceptanceCriteria": [
-        "SQLAlchemy async models for OHLCV candles, trades, portfolio snapshots",
-        "DataStore class with async CRUD operations",
-        "Use aiosqlite as the async SQLite driver",
-        "Auto-create tables on startup",
-        "Query methods: get candles by symbol/timeframe/range, get trades by date range",
-        "Unit tests with in-memory SQLite pass",
-        "ruff check passes"
+        "Track the total cost of entering a position (buy_price * quantity + buy_fee)",
+        "P&L = sell_proceeds - sell_fee - total_entry_cost",
+        "Change pnl formula from `cash - (position_qty * position_entry)` to correct calculation",
+        "Add test that verifies fee accounting: buy at $100, sell at $110 with 0.1% fee each way, verify exact P&L",
+        "Existing backtest tests still pass (may need updating for correct math)",
+        "pytest passes, ruff check passes"
       ],
       "priority": 7,
-      "passes": true,
-      "notes": ""
+      "passes": false,
+      "notes": "Line 99: pnl = cash - (position_qty * position_entry) doesn't account for buy fee"
     },
     {
-      "id": "US-008",
-      "title": "Data collection service",
-      "description": "As a trader, I need the bot to automatically collect market data so strategies have up-to-date information.",
+      "id": "FIX-008",
+      "title": "Add duplicate candle prevention and database indexes",
+      "description": "As a developer, I need the data store to prevent duplicate candles and have proper indexes for query performance.",
       "acceptanceCriteria": [
-        "DataCollector class that fetches OHLCV data from configured exchanges",
-        "Support for multiple symbols and timeframes",
-        "Store fetched data via DataStore",
-        "Handle gaps: detect missing candles and backfill",
-        "Async operation with configurable collection interval",
-        "Unit tests with mocked exchange pass",
-        "ruff check passes"
+        "Add UNIQUE constraint on (symbol, timeframe, timestamp) in OHLCVRecord model",
+        "save_candles() uses INSERT OR IGNORE (or merge/upsert) to skip duplicates",
+        "Add database indexes: (symbol, timeframe, timestamp) on OHLCVRecord, (symbol, created_at) on TradeRecord",
+        "Existing data store tests pass with the new constraints",
+        "Add test: saving the same candle twice doesn't create duplicates",
+        "Add test: querying with indexes is functionally correct",
+        "pytest passes, ruff check passes"
       ],
       "priority": 8,
-      "passes": true,
-      "notes": ""
+      "passes": false,
+      "notes": "Currently save_candles() blindly inserts, causing data bloat"
     },
     {
-      "id": "US-009",
-      "title": "Strategy interface and registry",
-      "description": "As a developer, I need a plugin-based strategy system so new strategies can be added without modifying core code.",
+      "id": "FIX-009",
+      "title": "Fix arbitrage same-exchange validation and DCA state mutation",
+      "description": "As a trader, I need the arbitrage strategy to verify buy/sell are on different exchanges, and DCA to not mutate state during analysis.",
       "acceptanceCriteria": [
-        "BaseStrategy ABC with methods: analyze(ohlcv_data) -> TradingSignal, name property, required_history_length property",
-        "StrategyRegistry singleton that discovers and manages strategies",
-        "Register strategies by decorator or explicit registration",
-        "Get active strategies, enable/disable strategies at runtime",
-        "Unit tests for registry and base class pass",
-        "ruff check passes"
+        "ArbitrageStrategy: after finding best_bid_exchange and best_ask_exchange, verify they are different; return HOLD if same",
+        "Add test: when best bid and ask are from the same exchange, return HOLD signal",
+        "DCAStrategy: only update _last_buy_time, _total_invested, _total_quantity AFTER returning the signal (or use a separate method)",
+        "DCAStrategy: make analyze() idempotent - calling it twice with same data doesn't double-count",
+        "Add test: calling DCA analyze() twice with same timestamp doesn't double the invested amount",
+        "pytest passes, ruff check passes"
       ],
       "priority": 9,
-      "passes": true,
-      "notes": ""
+      "passes": false,
+      "notes": "Arbitrage: no check at line 65-67. DCA: mutates state at lines 101-104"
     },
     {
-      "id": "US-010",
-      "title": "MA Crossover strategy",
-      "description": "As a trader, I want a Moving Average Crossover strategy so I can trade based on trend changes.",
+      "id": "FIX-010",
+      "title": "Connect RiskManager to execution pipeline properly",
+      "description": "As a trader, I need the risk manager to track open positions and P&L from actual executions, not just validate signals in isolation.",
       "acceptanceCriteria": [
-        "MACrossoverStrategy implementing BaseStrategy",
-        "Configurable short and long MA periods (default: 20, 50)",
-        "BUY signal when short MA crosses above long MA",
-        "SELL signal when short MA crosses below long MA",
-        "HOLD when no crossover detected",
-        "Confidence based on distance between MAs",
-        "Uses 'ta' library for MA calculation",
-        "Unit tests with sample OHLCV data pass",
-        "ruff check passes"
+        "After successful BUY execution, call risk_manager.add_position(symbol, qty, price)",
+        "After successful SELL execution, call risk_manager.remove_position(symbol) and risk_manager.record_trade_pnl(pnl)",
+        "Periodically call risk_manager.update_portfolio_value() with current total value",
+        "Reset daily P&L at midnight (or on first cycle of new day)",
+        "Add test: after a buy, risk manager blocks duplicate position for same symbol",
+        "Add test: after hitting daily loss limit, subsequent signals are rejected",
+        "pytest passes, ruff check passes"
       ],
       "priority": 10,
-      "passes": true,
-      "notes": ""
+      "passes": false,
+      "notes": "main.py calls validate_signal but never add_position/remove_position/record_trade_pnl"
     },
     {
-      "id": "US-011",
-      "title": "RSI strategy",
-      "description": "As a trader, I want an RSI strategy so I can trade overbought/oversold conditions.",
+      "id": "FIX-011",
+      "title": "Add trading cycle overlap prevention and proper error logging",
+      "description": "As an operator, I need the trading loop to prevent overlapping cycles and log errors with full tracebacks.",
       "acceptanceCriteria": [
-        "RSIStrategy implementing BaseStrategy",
-        "Configurable RSI period (default: 14), overbought (default: 70), oversold (default: 30) thresholds",
-        "BUY signal when RSI crosses below oversold threshold",
-        "SELL signal when RSI crosses above overbought threshold",
-        "Confidence based on RSI distance from thresholds",
-        "Uses 'ta' library for RSI calculation",
-        "Unit tests with sample data pass",
-        "ruff check passes"
+        "Add asyncio.Lock to prevent concurrent _trading_cycle() calls",
+        "If a cycle is still running when the next interval fires, skip (log warning) instead of overlapping",
+        "Change logger.error('trading_cycle_error', error=str(e)) to include exc_info=True for full traceback",
+        "Add structured error context (cycle_number, elapsed_time) to error logs",
+        "Add test: verify lock prevents overlapping cycles",
+        "pytest passes, ruff check passes"
       ],
       "priority": 11,
-      "passes": true,
-      "notes": ""
+      "passes": false,
+      "notes": "main.py:127-133 has no overlap protection and swallows tracebacks"
     },
     {
-      "id": "US-012",
-      "title": "MACD and Bollinger Bands strategy",
-      "description": "As a trader, I want MACD and Bollinger Bands strategies for additional signal confirmation.",
+      "id": "FIX-012",
+      "title": "Fix Docker multi-stage build and add resource limits",
+      "description": "As a devops engineer, I need the Docker build to not install dependencies twice and to have proper resource limits.",
       "acceptanceCriteria": [
-        "MACDStrategy: BUY when MACD crosses above signal line, SELL when below",
-        "BollingerStrategy: BUY when price touches lower band, SELL when touches upper band",
-        "Both implementing BaseStrategy",
-        "Both configurable with standard parameters",
-        "Uses 'ta' library for calculations",
-        "Unit tests for both strategies pass",
+        "Dockerfile: remove redundant `pip install -e .` in runtime stage (already copied from builder)",
+        "Runtime stage only copies installed packages from builder, not reinstalls",
+        "docker-compose.yml: add deploy.resources.limits (memory: 512M, cpus: '1.0')",
+        "docker-compose.yml: add deploy.resources.reservations (memory: 256M)",
+        "Verify `docker build .` succeeds (if Docker is available, otherwise just verify file correctness)",
         "ruff check passes"
       ],
       "priority": 12,
-      "passes": true,
-      "notes": ""
+      "passes": false,
+      "notes": "Dockerfile lines 7 and 23 both install. Compose has no resource limits."
     },
     {
-      "id": "US-013",
-      "title": "DCA strategy",
-      "description": "As a long-term investor, I want a Dollar Cost Averaging strategy so I can accumulate crypto at regular intervals.",
+      "id": "FIX-013",
+      "title": "Add backtest integration with RiskManager and result export",
+      "description": "As a trader, I need backtests to apply risk rules (stop-loss, position limits) and export results to JSON/CSV.",
       "acceptanceCriteria": [
-        "DCAStrategy implementing BaseStrategy",
-        "Configurable: buy interval (daily/weekly/monthly), fixed buy amount",
-        "Always generates BUY signal at configured intervals",
-        "Optional: buy more when RSI indicates oversold (enhanced DCA)",
-        "Track total invested and average buy price",
-        "Unit tests pass",
-        "ruff check passes"
+        "BacktestEngine accepts optional RiskManager parameter",
+        "When RiskManager is provided, signals pass through validate_signal() before execution",
+        "Stop-loss: if position is open and price drops below stop-loss level, auto-sell",
+        "BacktestResult.to_json() serializes results to JSON string",
+        "BacktestResult.to_csv() exports trade log to CSV string",
+        "Add CLI entry point: python -m bot.backtest --strategy ma_crossover --symbol BTC/USDT",
+        "Unit tests for risk-integrated backtest pass",
+        "pytest passes, ruff check passes"
       ],
       "priority": 13,
-      "passes": true,
+      "passes": false,
       "notes": ""
     },
     {
-      "id": "US-014",
-      "title": "Cross-exchange arbitrage strategy",
-      "description": "As a trader, I want to detect price differences across exchanges for arbitrage opportunities.",
+      "id": "FIX-014",
+      "title": "Add per-strategy performance tracking and portfolio snapshots",
+      "description": "As an operator, I need to see how each strategy is performing individually and have periodic portfolio snapshots saved.",
       "acceptanceCriteria": [
-        "ArbitrageStrategy that compares prices across multiple exchange adapters",
-        "Configurable minimum spread threshold (default: 0.5%)",
-        "Generate paired BUY/SELL signals (buy on cheaper exchange, sell on expensive)",
-        "Account for trading fees in profitability calculation",
-        "Unit tests with mocked multi-exchange data pass",
-        "ruff check passes"
+        "MetricsCollector tracks per-strategy metrics: trades, win_rate, total_pnl per strategy name",
+        "record_trade() accepts strategy_name parameter",
+        "calculate() returns both overall and per_strategy metrics",
+        "TradingBot saves portfolio snapshot to DataStore every N cycles (configurable, default: every 10 cycles)",
+        "Dashboard /metrics endpoint includes per-strategy breakdown",
+        "Unit tests for per-strategy tracking pass",
+        "pytest passes, ruff check passes"
       ],
       "priority": 14,
-      "passes": true,
+      "passes": false,
       "notes": ""
     },
     {
-      "id": "US-015",
-      "title": "Risk management engine",
-      "description": "As a trader, I need risk controls to prevent catastrophic losses.",
+      "id": "FIX-015",
+      "title": "Comprehensive integration test for the improved pipeline",
+      "description": "As a developer, I need an end-to-end test that verifies the full improved pipeline: data collection → strategy → risk check (with position tracking) → execution (with balance tracking) → dashboard update → notification.",
       "acceptanceCriteria": [
-        "RiskManager class that validates all signals before execution",
-        "Position sizing: Kelly criterion or fixed percentage (configurable)",
-        "Per-trade max loss (stop-loss percentage)",
-        "Daily loss limit: halt trading when daily loss exceeds threshold",
-        "Max drawdown protection: halt when portfolio drops below threshold from peak",
-        "Max concurrent positions limit",
-        "All limits configurable via Settings",
-        "Unit tests for each risk rule pass",
-        "ruff check passes"
+        "Integration test creates TradingBot with mocked exchanges returning a known price sequence",
+        "Test runs 3+ trading cycles with a strategy that generates BUY then SELL signals",
+        "Verify: paper portfolio balance decreases after BUY, increases after SELL",
+        "Verify: risk manager tracks the open position after BUY",
+        "Verify: risk manager removes position after SELL",
+        "Verify: dashboard state is updated with trade data after each cycle",
+        "Verify: Telegram notifier is called (mocked) on trade execution",
+        "Verify: metrics show correct win/loss after completed trade",
+        "All existing integration tests still pass",
+        "pytest passes, ruff check passes"
       ],
       "priority": 15,
-      "passes": true,
-      "notes": ""
-    },
-    {
-      "id": "US-016",
-      "title": "Order execution engine",
-      "description": "As a trader, I need reliable order execution with tracking and retry logic.",
-      "acceptanceCriteria": [
-        "ExecutionEngine class that creates and tracks orders via ExchangeAdapter",
-        "Support for market and limit orders",
-        "Order lifecycle tracking: PENDING -> SUBMITTED -> FILLED/CANCELLED/FAILED",
-        "Retry logic for transient failures (network errors, rate limits)",
-        "Paper trading mode: simulate order fills using current market price",
-        "Store all trades via DataStore",
-        "Unit tests with mocked exchange pass",
-        "ruff check passes"
-      ],
-      "priority": 16,
-      "passes": true,
-      "notes": ""
-    },
-    {
-      "id": "US-017",
-      "title": "Logging, metrics, and Telegram alerts",
-      "description": "As an operator, I need structured logging, performance metrics, and real-time alerts.",
-      "acceptanceCriteria": [
-        "Structured logging with structlog (JSON format)",
-        "Performance metrics: total return, Sharpe ratio, win rate, max drawdown",
-        "MetricsCollector class that calculates and stores metrics",
-        "Telegram notification service: trade executed, daily summary, error alerts",
-        "Telegram bot token and chat ID from config",
-        "Unit tests for metrics calculation pass",
-        "ruff check passes"
-      ],
-      "priority": 17,
-      "passes": true,
-      "notes": "Telegram tests must mock the API - never send real messages"
-    },
-    {
-      "id": "US-018",
-      "title": "Backtesting engine",
-      "description": "As a trader, I want to test strategies against historical data before risking real money.",
-      "acceptanceCriteria": [
-        "BacktestEngine that replays historical OHLCV data through any strategy",
-        "Simulated execution with configurable fees and slippage",
-        "Result metrics: total return, Sharpe ratio, max drawdown, win/loss ratio, number of trades",
-        "Support for multiple timeframes",
-        "Generate trade log with entry/exit points",
-        "Unit tests with synthetic data pass",
-        "ruff check passes"
-      ],
-      "priority": 18,
-      "passes": true,
-      "notes": ""
-    },
-    {
-      "id": "US-019",
-      "title": "Main orchestrator",
-      "description": "As a user, I need a main entry point that ties all components together into a running trading bot.",
-      "acceptanceCriteria": [
-        "TradingBot orchestrator class in main.py",
-        "Initialization: load config, create exchanges, init data store, register strategies, init risk manager, init execution engine",
-        "Trading loop: collect data -> run strategies -> filter through risk manager -> execute orders",
-        "Graceful shutdown on SIGINT/SIGTERM",
-        "Configurable loop interval",
-        "CLI entry point: python -m bot.main",
-        "Unit tests for orchestrator lifecycle pass",
-        "ruff check passes"
-      ],
-      "priority": 19,
-      "passes": true,
-      "notes": ""
-    },
-    {
-      "id": "US-020",
-      "title": "ML price prediction strategy",
-      "description": "As a trader, I want an ML-based strategy that predicts short-term price movements.",
-      "acceptanceCriteria": [
-        "MLPredictionStrategy implementing BaseStrategy",
-        "Feature engineering: RSI, MACD, Bollinger Band width, volume change, price momentum",
-        "scikit-learn Random Forest classifier: predicts UP/DOWN/NEUTRAL",
-        "Auto-train on available historical data (configurable lookback period)",
-        "Minimum training data requirement (e.g., 500 candles) before generating signals",
-        "Model persistence: save/load trained models",
-        "Unit tests with synthetic data pass",
-        "ruff check passes"
-      ],
-      "priority": 20,
-      "passes": true,
-      "notes": ""
-    },
-    {
-      "id": "US-021",
-      "title": "Monitoring dashboard",
-      "description": "As an operator, I want a web dashboard to monitor the bot's status, trades, and performance.",
-      "acceptanceCriteria": [
-        "FastAPI app with HTML dashboard (Jinja2 templates or simple HTML)",
-        "Endpoints: GET /status, GET /trades, GET /metrics, GET /portfolio",
-        "Dashboard page showing: bot status (running/stopped), recent trades, key metrics, portfolio allocation",
-        "Auto-refresh or simple polling for live updates",
-        "Serve on configurable port (default: 8000)",
-        "Unit tests for API endpoints pass",
-        "ruff check passes"
-      ],
-      "priority": 21,
-      "passes": true,
-      "notes": ""
-    },
-    {
-      "id": "US-022",
-      "title": "Error handling and recovery",
-      "description": "As an operator, I need the bot to handle errors gracefully and recover automatically.",
-      "acceptanceCriteria": [
-        "Circuit breaker pattern for exchange API calls (trip after N failures, reset after timeout)",
-        "Automatic reconnection for exchange websocket/REST failures",
-        "Graceful degradation: continue with available exchanges if one fails",
-        "Error notification via Telegram",
-        "State persistence: save bot state periodically, recover on restart",
-        "Unit tests for circuit breaker and recovery logic pass",
-        "ruff check passes"
-      ],
-      "priority": 22,
-      "passes": true,
-      "notes": ""
-    },
-    {
-      "id": "US-023",
-      "title": "Docker support",
-      "description": "As a devops engineer, I want to deploy the bot using Docker for consistent environments.",
-      "acceptanceCriteria": [
-        "Dockerfile with Python 3.11 slim base, multi-stage build",
-        "docker-compose.yml with bot service and volume mounts for data/ and config",
-        "Environment variables passed via docker-compose",
-        ".dockerignore to exclude unnecessary files",
-        "Health check endpoint used by Docker",
-        "Documentation for Docker deployment in README",
-        "ruff check passes"
-      ],
-      "priority": 23,
-      "passes": true,
-      "notes": ""
-    },
-    {
-      "id": "US-024",
-      "title": "Integration tests",
-      "description": "As a developer, I need end-to-end tests to verify the full trading pipeline works correctly.",
-      "acceptanceCriteria": [
-        "E2E test: data collection -> strategy signal -> risk check -> order execution (paper mode)",
-        "Test with mocked exchange returning realistic data sequences",
-        "Verify the full pipeline produces expected trades for known data patterns",
-        "Test graceful shutdown during active trading",
-        "Test configuration validation edge cases",
-        "All integration tests pass with pytest",
-        "ruff check passes"
-      ],
-      "priority": 24,
-      "passes": true,
-      "notes": "All tests must use mocked exchanges - no real API calls"
-    },
-    {
-      "id": "US-025",
-      "title": "Documentation",
-      "description": "As a user, I need comprehensive documentation to set up, configure, and extend the trading bot.",
-      "acceptanceCriteria": [
-        "README.md with project overview, features, quick start, architecture diagram",
-        "Configuration guide: .env variables, config.yaml options, exchange setup",
-        "Strategy development guide: how to create a custom strategy",
-        "Backtesting guide: how to run backtests and interpret results",
-        "Deployment guide: Docker, manual setup, monitoring",
-        "API reference for dashboard endpoints",
-        "ruff check passes"
-      ],
-      "priority": 25,
-      "passes": true,
-      "notes": ""
+      "passes": false,
+      "notes": "This validates that all FIX-001 through FIX-014 work together correctly"
     }
   ]
 }
