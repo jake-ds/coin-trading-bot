@@ -1,9 +1,9 @@
 """ML-based price prediction strategy using scikit-learn."""
 
-import pickle
 from pathlib import Path
 from typing import Any
 
+import joblib
 import numpy as np
 import structlog
 from sklearn.ensemble import RandomForestClassifier
@@ -227,15 +227,13 @@ class MLPredictionStrategy(BaseStrategy):
     def save_model(self, path: str) -> None:
         """Save trained model to disk."""
         if self._model is not None:
-            with open(path, "wb") as f:
-                pickle.dump(self._model, f)
+            joblib.dump(self._model, path)
             logger.info("ml_model_saved", path=path)
 
     def _load_model(self, path: str) -> None:
         """Load a trained model from disk."""
         p = Path(path)
         if p.exists():
-            with open(p, "rb") as f:
-                self._model = pickle.load(f)  # noqa: S301
+            self._model = joblib.load(p)
             self._is_trained = True
             logger.info("ml_model_loaded", path=path)

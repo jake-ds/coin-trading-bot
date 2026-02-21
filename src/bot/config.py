@@ -59,6 +59,9 @@ class Settings(BaseSettings):
 
     # Dashboard
     dashboard_port: int = Field(default=8000, ge=1, le=65535)
+    allowed_origins: list[str] = Field(
+        default_factory=lambda: ["http://localhost", "http://localhost:8000"]
+    )
 
     # Symbols to trade
     symbols: list[str] = Field(default_factory=lambda: ["BTC/USDT"])

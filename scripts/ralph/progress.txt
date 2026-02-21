@@ -1,38 +1,33 @@
-# Ralph Progress Log - v2 Production
-Started: 2026-02-22
-Previous run: 25/25 stories completed, 267 tests passing
----
+# Ralph Progress Log
+Started: 2026년 2월 22일 일요일 00시 13분 50초 KST
 
 ## Codebase Patterns
-- Python 3.10 is available (not 3.11+); pyproject.toml requires-python set to >=3.10
-- Use `asdf local python 3.10.0` to ensure correct Python version
-- ruff enforces import sorting (isort rules) — stdlib imports before third-party before local
-- FrozenModel (frozen=True) used as base for immutable data models
-- Enums in models/base.py: OrderSide, OrderType, OrderStatus, SignalAction
-- Import from `bot.models` for all model types and enums
-- Settings loads from .env and optional YAML config file; use `config_file="nonexistent.yaml"` in tests
-- `register_adapter(name, cls)` registers exchange adapters; `ExchangeFactory.create(name, **kwargs)` instantiates
-- Registry is case-insensitive (stored as lowercase)
-- Use `_adapter_registry` fixture cleanup in tests to avoid leaking between tests
-- `load_settings(**overrides)` convenience function for creating Settings
-- Strategy registry is a global singleton: `strategy_registry` from `bot.strategies.base`
-- Strategies auto-register on module import via `strategy_registry.register(Instance())`
-- Tests use `clean_registry` fixture to reset singleton state
-- DataStore uses async sessions; always use `async with self._session_factory() as session:`
-- In-memory SQLite for tests: `sqlite+aiosqlite://` (no file path) or `sqlite+aiosqlite:///:memory:`
-- CircuitBreaker states: CLOSED -> OPEN -> HALF_OPEN
-- Paper trading Orders get id prefix `paper-`
-- greenlet is required for SQLAlchemy async
-- Use `ccxt.async_support` for async adapters; patch `bot.exchanges.binance.ccxt.binance` in tests
-- structlog: use logging.DEBUG/INFO/etc. instead of get_level_from_name
-- httpx AsyncClient with ASGI transport for FastAPI test client
-- asyncio.create_task for delayed stop in trading loop tests
-- .gitignore `data/` must be `/data/` (root only) to avoid ignoring src/bot/data/
-- When adding new parameters to existing classes, ALWAYS use default values matching old behavior
-- ResilientExchange exists in execution/resilient.py but is NOT used by main.py yet
-- TelegramNotifier exists in monitoring/telegram.py but is NOT used by main.py yet
-- Dashboard app.py _bot_state is never updated from main.py
-- ExecutionEngine paper mode has infinite capital — no balance tracking
-- RiskManager.validate_signal() works but add_position/remove_position/record_trade_pnl are never called from main.py
-- BacktestEngine doesn't enforce stop-loss — only checks strategy signals
+- **Dependency management**: Always update both `pyproject.toml` and `requirements.txt`
+- **HTML escaping**: Use `html.escape(str(value))` for all dynamic data in dashboard templates
+- **CORS**: Use `CORSMiddleware` from `fastapi.middleware.cors` with configurable origins
+- **Model serialization**: Use `joblib.dump()`/`joblib.load()` instead of pickle for sklearn models
+- **Config pattern**: Add new settings to `Settings` class with defaults that maintain backward compat
+- **Test count baseline**: 267 tests passing as of V2-001
+
+---
+
+## 2026-02-22 - V2-001: Security fixes: pickle, XSS, CORS
+- **Implemented:**
+  - Replaced `pickle` with `joblib` for model save/load in `src/bot/strategies/ml/prediction.py`
+  - Removed `pickle` import entirely
+  - HTML-escaped all dynamic data in `src/bot/dashboard/app.py` using `html.escape()`
+  - Added `CORSMiddleware` to FastAPI app with configurable `allowed_origins` (default localhost)
+  - Added `allowed_origins` field to `Settings` in `src/bot/config.py`
+  - Added `joblib>=1.3.0` to `pyproject.toml` and `requirements.txt`
+- **Files modified:**
+  - `src/bot/strategies/ml/prediction.py`
+  - `src/bot/dashboard/app.py`
+  - `src/bot/config.py`
+  - `pyproject.toml`
+  - `requirements.txt`
+- **Tests:** All 267 existing tests pass, ruff check passes
+- **Learnings for future iterations:**
+  - `joblib` is already a dependency of `scikit-learn`, so it's always available
+  - Dashboard HTML uses f-strings — all interpolated values need `html.escape(str(...))`
+  - CORS middleware must be added before routes are defined (on import is fine)
 ---

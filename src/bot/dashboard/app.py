@@ -1,14 +1,35 @@
 """FastAPI monitoring dashboard."""
 
+import html
 from datetime import datetime, timezone
 
 import structlog
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 
 logger = structlog.get_logger()
 
 app = FastAPI(title="Coin Trading Bot Dashboard")
+
+# CORS configuration — allowed_origins can be overridden via configure_cors()
+_default_origins = ["http://localhost", "http://localhost:8000"]
+
+
+def configure_cors(allowed_origins: list[str] | None = None) -> None:
+    """Configure CORS middleware with the given origins."""
+    origins = allowed_origins or _default_origins
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+
+# Apply default CORS on import
+configure_cors()
 
 # Shared state (set by the TradingBot orchestrator)
 _bot_state = {
@@ -66,7 +87,7 @@ async def health_check():
 @app.get("/", response_class=HTMLResponse)
 async def dashboard():
     """Render HTML dashboard page."""
-    status = _bot_state["status"]
+    status = html.escape(str(_bot_state["status"]))
     metrics = _bot_state["metrics"]
     trades = _bot_state["trades"][-10:]
     portfolio = _bot_state["portfolio"]
@@ -75,13 +96,19 @@ async def dashboard():
     trades_html = ""
     for trade in reversed(trades):
         trades_html += (
-            f"<tr><td>{trade.get('timestamp', '')}</td>"
-            f"<td>{trade.get('symbol', '')}</td>"
-            f"<td>{trade.get('side', '')}</td>"
-            f"<td>{trade.get('quantity', '')}</td>"
-            f"<td>{trade.get('price', '')}</td></tr>"
+            f"<tr><td>{html.escape(str(trade.get('timestamp', '')))}</td>"
+            f"<td>{html.escape(str(trade.get('symbol', '')))}</td>"
+            f"<td>{html.escape(str(trade.get('side', '')))}</td>"
+            f"<td>{html.escape(str(trade.get('quantity', '')))}</td>"
+            f"<td>{html.escape(str(trade.get('price', '')))}</td></tr>"
         )
     tbody_content = trades_html if trades_html else no_trades
+
+    total_return = html.escape(str(metrics.get('total_return_pct', 0)))
+    win_rate = html.escape(str(metrics.get('win_rate', 0)))
+    total_trades = html.escape(str(metrics.get('total_trades', 0)))
+    max_drawdown = html.escape(str(metrics.get('max_drawdown_pct', 0)))
+    total_value = html.escape(f"{portfolio.get('total_value', 0):,.2f}")
 
     return f"""<!DOCTYPE html>
 <html>
@@ -111,25 +138,25 @@ async def dashboard():
     <div class="card">
         <h2>Key Metrics</h2>
         <div class="metric">
-            <div class="metric-value">{metrics.get('total_return_pct', 0)}%</div>
+            <div class="metric-value">{total_return}%</div>
             <div class="metric-label">Total Return</div>
         </div>
         <div class="metric">
-            <div class="metric-value">{metrics.get('win_rate', 0)}%</div>
+            <div class="metric-value">{win_rate}%</div>
             <div class="metric-label">Win Rate</div>
         </div>
         <div class="metric">
-            <div class="metric-value">{metrics.get('total_trades', 0)}</div>
+            <div class="metric-value">{total_trades}</div>
             <div class="metric-label">Total Trades</div>
         </div>
         <div class="metric">
-            <div class="metric-value">{metrics.get('max_drawdown_pct', 0)}%</div>
+            <div class="metric-value">{max_drawdown}%</div>
             <div class="metric-label">Max Drawdown</div>
         </div>
     </div>
     <div class="card">
         <h2>Portfolio</h2>
-        <p>Total Value: <strong>${portfolio.get('total_value', 0):,.2f}</strong></p>
+        <p>Total Value: <strong>${total_value}</strong></p>
     </div>
     <div class="card">
         <h2>Recent Trades</h2>
