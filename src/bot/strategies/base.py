@@ -1,9 +1,14 @@
 """Base strategy interface and strategy registry."""
 
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from bot.models import OHLCV, TradingSignal
+
+if TYPE_CHECKING:
+    from bot.strategies.regime import MarketRegime
 
 
 class BaseStrategy(ABC):
@@ -29,6 +34,15 @@ class BaseStrategy(ABC):
 
         Returns:
             TradingSignal with the recommended action
+        """
+
+    def adapt_to_regime(self, regime: MarketRegime) -> None:
+        """Adjust strategy parameters based on detected market regime.
+
+        Override in subclasses to adapt behavior. Default is a no-op.
+
+        Args:
+            regime: The detected market regime.
         """
 
 

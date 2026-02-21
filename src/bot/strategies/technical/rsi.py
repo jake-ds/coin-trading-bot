@@ -1,12 +1,17 @@
 """RSI (Relative Strength Index) strategy."""
 
-from typing import Any
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 import ta
 
 from bot.models import OHLCV, SignalAction, TradingSignal
 from bot.strategies.base import BaseStrategy, strategy_registry
+
+if TYPE_CHECKING:
+    from bot.strategies.regime import MarketRegime
 
 
 class RSIStrategy(BaseStrategy):
@@ -21,6 +26,28 @@ class RSIStrategy(BaseStrategy):
         self._period = period
         self._overbought = overbought
         self._oversold = oversold
+        self._original_overbought = overbought
+        self._original_oversold = oversold
+
+    def adapt_to_regime(self, regime: MarketRegime) -> None:
+        """Adapt RSI thresholds based on market regime.
+
+        - RANGING: Use tighter bounds (35/65) for more sensitive signals.
+        - TRENDING_UP/TRENDING_DOWN: Use standard bounds (30/70).
+        - HIGH_VOLATILITY: Restore original bounds.
+        """
+        from bot.strategies.regime import MarketRegime
+
+        if regime == MarketRegime.RANGING:
+            self._oversold = 35.0
+            self._overbought = 65.0
+        elif regime in (MarketRegime.TRENDING_UP, MarketRegime.TRENDING_DOWN):
+            self._oversold = 30.0
+            self._overbought = 70.0
+        else:
+            # HIGH_VOLATILITY or unknown: restore originals
+            self._overbought = self._original_overbought
+            self._oversold = self._original_oversold
 
     @property
     def name(self) -> str:

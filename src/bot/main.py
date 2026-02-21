@@ -22,6 +22,7 @@ from bot.monitoring.telegram import TelegramNotifier
 from bot.risk.manager import RiskManager
 from bot.strategies.base import strategy_registry
 from bot.strategies.ensemble import SignalEnsemble
+from bot.strategies.regime import MarketRegimeDetector
 from bot.strategies.trend_filter import TrendFilter
 
 logger = structlog.get_logger()
@@ -44,6 +45,7 @@ class TradingBot:
         self._position_manager: PositionManager | None = None
         self._signal_ensemble: SignalEnsemble | None = None
         self._trend_filter: TrendFilter | None = None
+        self._regime_detector: MarketRegimeDetector | None = None
         self._cycle_lock: asyncio.Lock = asyncio.Lock()
         self._cycle_count: int = 0
         self._total_cycle_duration: float = 0.0
@@ -87,6 +89,9 @@ class TradingBot:
 
         # Initialize trend filter for higher-timeframe confirmation
         self._trend_filter = TrendFilter()
+
+        # Initialize market regime detector
+        self._regime_detector = MarketRegimeDetector()
 
         # Initialize position manager (stop-loss, take-profit, trailing stop)
         self._position_manager = PositionManager(
@@ -314,6 +319,28 @@ class TradingBot:
             candles = await self._store.get_candles(symbol, limit=200)
             if not candles:
                 continue
+
+            # Detect market regime and adapt strategies
+            if self._regime_detector and candles:
+                try:
+                    if (
+                        len(candles)
+                        >= self._regime_detector.required_history_length
+                    ):
+                        regime = self._regime_detector.detect(candles)
+                        for strategy in active_strategies:
+                            strategy.adapt_to_regime(regime)
+                        logger.debug(
+                            "regime_applied",
+                            symbol=symbol,
+                            regime=regime.value,
+                        )
+                except Exception:
+                    logger.warning(
+                        "regime_detection_error",
+                        symbol=symbol,
+                        exc_info=True,
+                    )
 
             # Determine trend from higher-timeframe candles
             trend_direction = None

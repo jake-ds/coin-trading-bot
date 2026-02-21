@@ -1,12 +1,17 @@
 """Moving Average Crossover strategy."""
 
-from typing import Any
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 import ta
 
 from bot.models import OHLCV, SignalAction, TradingSignal
 from bot.strategies.base import BaseStrategy, strategy_registry
+
+if TYPE_CHECKING:
+    from bot.strategies.regime import MarketRegime
 
 
 class MACrossoverStrategy(BaseStrategy):
@@ -15,6 +20,9 @@ class MACrossoverStrategy(BaseStrategy):
     def __init__(self, short_period: int = 20, long_period: int = 50):
         self._short_period = short_period
         self._long_period = long_period
+        self._original_short_period = short_period
+        self._original_long_period = long_period
+        self._regime_disabled = False
 
     @property
     def name(self) -> str:
@@ -24,8 +32,38 @@ class MACrossoverStrategy(BaseStrategy):
     def required_history_length(self) -> int:
         return self._long_period + 1
 
+    def adapt_to_regime(self, regime: MarketRegime) -> None:
+        """Adapt MA periods based on market regime.
+
+        - TRENDING_UP/TRENDING_DOWN: Use shorter periods (10/30) for faster signals.
+        - RANGING: Disable (crossovers whipsaw in ranges).
+        - HIGH_VOLATILITY: Restore defaults.
+        """
+        from bot.strategies.regime import MarketRegime
+
+        if regime in (MarketRegime.TRENDING_UP, MarketRegime.TRENDING_DOWN):
+            self._short_period = 10
+            self._long_period = 30
+            self._regime_disabled = False
+        elif regime == MarketRegime.RANGING:
+            self._regime_disabled = True
+        else:
+            # HIGH_VOLATILITY or unknown: restore original parameters
+            self._short_period = self._original_short_period
+            self._long_period = self._original_long_period
+            self._regime_disabled = False
+
     async def analyze(self, ohlcv_data: list[OHLCV], **kwargs: Any) -> TradingSignal:
         symbol = kwargs.get("symbol", ohlcv_data[-1].symbol if ohlcv_data else "UNKNOWN")
+
+        if self._regime_disabled:
+            return TradingSignal(
+                strategy_name=self.name,
+                symbol=symbol,
+                action=SignalAction.HOLD,
+                confidence=0.0,
+                metadata={"reason": "disabled_by_regime", "regime": "RANGING"},
+            )
 
         if len(ohlcv_data) < self.required_history_length:
             return TradingSignal(

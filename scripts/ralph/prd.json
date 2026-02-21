@@ -211,7 +211,7 @@
         "All existing tests pass, ruff check passes"
       ],
       "priority": 11,
-      "passes": false,
+      "passes": true,
       "notes": "Using the wrong strategy in the wrong regime is guaranteed loss"
     },
     {

@@ -17,7 +17,9 @@ Started: 2026년 2월 22일 일요일 00시 13분 50초 KST
 - **Telegram error notifications**: Now send full `traceback.format_exc()` instead of just `str(e)` — tests should check `"Traceback" in error_msg` and `"error text" in error_msg`
 - **TrendFilter pattern**: Create `TrendFilter` in `initialize()`. In `_trading_cycle()`, fetch candles for `trend_timeframe` (default "4h"), call `get_trend(symbol, candles)` → pass `trend_direction` to `ensemble.vote()`. Trend errors are caught gracefully (trend_direction stays None). Tests that use MagicMock candles won't trigger trend filter because `ta.trend.ADXIndicator` fails on mocks — caught by try/except.
 - **Ensemble trend filtering**: `vote()` accepts optional `trend_direction` param. BUY rejected if BEARISH, SELL rejected if BULLISH. Conflict detection runs BEFORE trend filter. NEUTRAL and None allow all signals through.
-- **Test count baseline**: 475 tests passing as of V2-010
+- **Test count baseline**: 517 tests passing as of V2-011
+- **MarketRegimeDetector pattern**: Create `MarketRegimeDetector` in `initialize()`. In `_trading_cycle()`, detect regime from primary candles (needs `required_history_length` candles). Call `strategy.adapt_to_regime(regime)` on each active strategy BEFORE `collect_signals()`. Regime detection errors caught gracefully (strategies use default params). Tests using MagicMock candles skip regime detection because `ta` library fails on mocks.
+- **adapt_to_regime pattern**: Optional method on `BaseStrategy` (default no-op). Strategies store `_original_*` params in `__init__` and `_regime_disabled` flag (default False). `adapt_to_regime()` sets params/flags based on regime; `analyze()` checks `_regime_disabled` first and returns HOLD if True. Each call to `adapt_to_regime()` sets state from scratch (not incrementally).
 - **OHLCV validators**: Model enforces `high >= max(open, close)` and `low <= min(open, close)`. Test candle generators must satisfy these constraints.
 - **DCA confirm_buy pattern**: After DCAStrategy.analyze() returns BUY, call `strategy.confirm_buy(buy_time, amount, quantity)` to commit state. analyze() is idempotent and side-effect-free.
 - **BacktestEngine entry_cost**: Track `entry_cost = cash` (total cash before buy, including fee) and compute PnL as `cash_after_sell - entry_cost`
@@ -296,4 +298,38 @@ Started: 2026년 2월 22일 일요일 00시 13분 50초 KST
   - `__future__` annotations + TYPE_CHECKING guard avoids circular imports between ensemble.py and trend_filter.py
   - The `ta` library's ADX needs proper high/low/close series — it can't work with mocked data
   - Trend filter is optional (None trend_direction) — backward compatible with all existing tests
+---
+
+## 2026-02-22 - V2-011: Market regime detector with strategy adaptation
+- **Implemented:**
+  - New `MarketRegimeDetector` class in `src/bot/strategies/regime.py`
+  - `MarketRegime` enum: TRENDING_UP, TRENDING_DOWN, RANGING, HIGH_VOLATILITY
+  - Detection uses ADX + DI (trend strength/direction), ATR ratio (volatility), BB width (ranging)
+  - Classification order: HIGH_VOLATILITY (ATR > 2x avg) > TRENDING (ADX > 25) > RANGING (ADX < 20)
+  - `detect()` and `detect_with_details()` methods for regime analysis
+  - Added `adapt_to_regime(regime)` method to `BaseStrategy` (default no-op)
+  - MACrossover: TRENDING → shorter periods (10/30); RANGING → disabled (return HOLD); HIGH_VOLATILITY → restore defaults
+  - RSI: RANGING → tighter bounds (35/65); TRENDING → standard (30/70); HIGH_VOLATILITY → restore originals
+  - Bollinger: TRENDING → disabled (return HOLD); RANGING/HIGH_VOLATILITY → enabled
+  - Wired into `main.py`: regime detected before running strategies each cycle, `adapt_to_regime()` called on each active strategy
+  - Regime detection errors caught gracefully (strategies use default parameters)
+  - Exported `MarketRegime`, `MarketRegimeDetector` from `strategies/__init__.py`
+- **Files created:**
+  - `src/bot/strategies/regime.py` — MarketRegimeDetector, MarketRegime
+  - `tests/strategies/test_regime.py` — 37 unit tests (detector, strategy adaptation)
+  - `tests/test_v2_011_regime.py` — 5 integration tests (wiring in main.py)
+- **Files modified:**
+  - `src/bot/strategies/base.py` — added `adapt_to_regime()` default method
+  - `src/bot/strategies/technical/ma_crossover.py` — added `adapt_to_regime()`, `_regime_disabled`, `_original_*` params
+  - `src/bot/strategies/technical/rsi.py` — added `adapt_to_regime()`, `_original_*` params
+  - `src/bot/strategies/technical/bollinger.py` — added `adapt_to_regime()`, `_regime_disabled`
+  - `src/bot/strategies/__init__.py` — exported MarketRegime, MarketRegimeDetector
+  - `src/bot/main.py` — import MarketRegimeDetector, create in initialize(), detect regime and adapt strategies in _trading_cycle()
+- **Tests:** 517 tests passing (475 previous + 42 new), ruff check passes
+- **Learnings for future iterations:**
+  - OHLCV model enforces `close > 0`, so volatile candle generators must floor prices (e.g., `max(p, 20.0)`)
+  - `adapt_to_regime()` must be called before `collect_signals()` so that strategy parameters are set before `analyze()` runs
+  - Classification priority matters: ATR volatility check runs before ADX trending check, so a volatile trending market is classified as HIGH_VOLATILITY
+  - Using `__future__` annotations + TYPE_CHECKING for `MarketRegime` in strategy files avoids circular imports
+  - Strategies store original constructor params (`_original_short_period`, etc.) so `adapt_to_regime()` can restore them
 ---
