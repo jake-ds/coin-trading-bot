@@ -19,6 +19,7 @@ def make_settings(**kwargs):
         "upbit_api_key": "",
         "symbols": ["BTC/USDT"],
         "loop_interval_seconds": 1,
+        "signal_min_agreement": 1,
     }
     defaults.update(kwargs)
     return Settings(**defaults)

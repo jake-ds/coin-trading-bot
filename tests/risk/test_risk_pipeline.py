@@ -29,6 +29,7 @@ def make_settings(**kwargs):
         "loop_interval_seconds": 1,
         "paper_initial_balance": 10000.0,
         "paper_fee_pct": 0.1,
+        "signal_min_agreement": 1,
     }
     defaults.update(kwargs)
     return Settings(**defaults)

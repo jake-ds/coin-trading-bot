@@ -21,6 +21,7 @@ from bot.monitoring.logger import setup_logging
 from bot.monitoring.telegram import TelegramNotifier
 from bot.risk.manager import RiskManager
 from bot.strategies.base import strategy_registry
+from bot.strategies.ensemble import SignalEnsemble
 
 logger = structlog.get_logger()
 
@@ -40,6 +41,7 @@ class TradingBot:
         self._dashboard_task: asyncio.Task | None = None
         self._paper_portfolio: PaperPortfolio | None = None
         self._position_manager: PositionManager | None = None
+        self._signal_ensemble: SignalEnsemble | None = None
         self._cycle_lock: asyncio.Lock = asyncio.Lock()
         self._cycle_count: int = 0
         self._total_cycle_duration: float = 0.0
@@ -72,6 +74,12 @@ class TradingBot:
             daily_loss_limit_pct=self._settings.daily_loss_limit_pct,
             max_drawdown_pct=self._settings.max_drawdown_pct,
             max_concurrent_positions=self._settings.max_concurrent_positions,
+        )
+
+        # Initialize signal ensemble voting system
+        self._signal_ensemble = SignalEnsemble(
+            min_agreement=self._settings.signal_min_agreement,
+            strategy_weights=self._settings.strategy_weights,
         )
 
         # Initialize position manager (stop-loss, take-profit, trailing stop)
@@ -290,7 +298,9 @@ class TradingBot:
                         exit_signal, recent_trades
                     )
 
-        # Run strategies on each symbol
+        # Run strategies on each symbol using ensemble voting
+        active_strategies = strategy_registry.get_active()
+
         for symbol in self._settings.symbols:
             if not self._store:
                 continue
@@ -299,91 +309,94 @@ class TradingBot:
             if not candles:
                 continue
 
-            for strategy in strategy_registry.get_active():
-                if len(candles) < strategy.required_history_length:
-                    continue
+            # Collect signals from all strategies and vote
+            if self._signal_ensemble:
+                signals = await self._signal_ensemble.collect_signals(
+                    symbol, active_strategies, candles
+                )
+                signal = self._signal_ensemble.vote(signals, symbol)
+            else:
+                continue
 
-                signal = await strategy.analyze(candles, symbol=symbol)
+            # Risk check
+            if self._risk_manager:
+                signal = self._risk_manager.validate_signal(signal)
 
-                # Risk check
-                if self._risk_manager:
-                    signal = self._risk_manager.validate_signal(signal)
+            if signal.action != signal.action.HOLD:
+                # Execute on first available exchange
+                for name, engine in self._execution_engines.items():
+                    if self._risk_manager:
+                        qty = self._risk_manager.calculate_position_size(
+                            self._risk_manager._current_portfolio_value or 10000,
+                            candles[-1].close,
+                        )
+                    else:
+                        qty = 0.01
 
-                if signal.action != signal.action.HOLD:
-                    # Execute on first available exchange
-                    for name, engine in self._execution_engines.items():
-                        if self._risk_manager:
-                            qty = self._risk_manager.calculate_position_size(
-                                self._risk_manager._current_portfolio_value or 10000,
-                                candles[-1].close,
-                            )
-                        else:
-                            qty = 0.01
+                    if qty > 0:
+                        order = await engine.execute_signal(signal, quantity=qty)
+                        if order:
+                            fill_price = order.filled_price or 0
 
-                        if qty > 0:
-                            order = await engine.execute_signal(signal, quantity=qty)
-                            if order:
-                                fill_price = order.filled_price or 0
-
-                                # Track position in RiskManager
-                                if self._risk_manager and fill_price > 0:
-                                    if order.side == OrderSide.BUY:
-                                        self._risk_manager.add_position(
+                            # Track position in RiskManager
+                            if self._risk_manager and fill_price > 0:
+                                if order.side == OrderSide.BUY:
+                                    self._risk_manager.add_position(
+                                        order.symbol,
+                                        order.quantity,
+                                        fill_price,
+                                    )
+                                    # Register with PositionManager
+                                    if self._position_manager:
+                                        self._position_manager.add_position(
                                             order.symbol,
-                                            order.quantity,
                                             fill_price,
+                                            order.quantity,
                                         )
-                                        # Register with PositionManager
-                                        if self._position_manager:
-                                            self._position_manager.add_position(
-                                                order.symbol,
-                                                fill_price,
-                                                order.quantity,
-                                            )
-                                    elif order.side == OrderSide.SELL:
-                                        position = (
-                                            self._risk_manager.get_position(
-                                                order.symbol
-                                            )
-                                        )
-                                        if position:
-                                            pnl = (
-                                                fill_price
-                                                - position["entry_price"]
-                                            ) * order.quantity
-                                            self._risk_manager.record_trade_pnl(
-                                                pnl
-                                            )
-                                        self._risk_manager.remove_position(
+                                elif order.side == OrderSide.SELL:
+                                    position = (
+                                        self._risk_manager.get_position(
                                             order.symbol
                                         )
-                                        # Remove from PositionManager
-                                        if self._position_manager:
-                                            self._position_manager.remove_position(
-                                                order.symbol
-                                            )
-
-                                trade_info = {
-                                    "timestamp": (
-                                        order.created_at.isoformat()
-                                        if order.created_at
-                                        else ""
-                                    ),
-                                    "symbol": order.symbol,
-                                    "side": order.side.value,
-                                    "quantity": order.quantity,
-                                    "price": fill_price,
-                                }
-                                recent_trades.append(trade_info)
-                                # Notify via Telegram
-                                if self._telegram:
-                                    await self._telegram.notify_trade(
-                                        symbol=order.symbol,
-                                        side=order.side.value,
-                                        quantity=order.quantity,
-                                        price=fill_price,
                                     )
-                        break
+                                    if position:
+                                        pnl = (
+                                            fill_price
+                                            - position["entry_price"]
+                                        ) * order.quantity
+                                        self._risk_manager.record_trade_pnl(
+                                            pnl
+                                        )
+                                    self._risk_manager.remove_position(
+                                        order.symbol
+                                    )
+                                    # Remove from PositionManager
+                                    if self._position_manager:
+                                        self._position_manager.remove_position(
+                                            order.symbol
+                                        )
+
+                            trade_info = {
+                                "timestamp": (
+                                    order.created_at.isoformat()
+                                    if order.created_at
+                                    else ""
+                                ),
+                                "symbol": order.symbol,
+                                "side": order.side.value,
+                                "quantity": order.quantity,
+                                "price": fill_price,
+                            }
+                            recent_trades.append(trade_info)
+                            # Notify via Telegram
+                            if self._telegram:
+                                await self._telegram.notify_trade(
+                                    symbol=order.symbol,
+                                    side=order.side.value,
+                                    quantity=order.quantity,
+                                    price=fill_price,
+                                )
+                    break
 
         # Update dashboard state after each cycle
         dashboard_module.update_state(

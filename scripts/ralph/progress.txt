@@ -7,7 +7,9 @@ Started: 2026년 2월 22일 일요일 00시 13분 50초 KST
 - **CORS**: Use `CORSMiddleware` from `fastapi.middleware.cors` with configurable origins
 - **Model serialization**: Use `joblib.dump()`/`joblib.load()` instead of pickle for sklearn models
 - **Config pattern**: Add new settings to `Settings` class with defaults that maintain backward compat
-- **Test count baseline**: 419 tests passing as of V2-008
+- **Test count baseline**: 449 tests passing as of V2-009
+- **SignalEnsemble pattern**: Create `SignalEnsemble` in `initialize()` from config `signal_min_agreement` and `strategy_weights`. In `_trading_cycle()`, get `active_strategies = strategy_registry.get_active()`, then `collect_signals(symbol, active_strategies, candles)` → `vote(signals, symbol)` → single signal per symbol. Existing tests that use single strategies must set `signal_min_agreement=1` in their `make_settings` defaults.
+- **Ensemble voting**: BUY/SELL both present = HOLD (conflict). BUY count >= min_agreement = BUY. SELL count >= min_agreement = SELL. Otherwise HOLD. Confidence = weighted average of agreeing strategies.
 - **PositionManager pattern**: Create PositionManager in `initialize()` from config settings; in `_trading_cycle()` check exits BEFORE strategy loop; after BUY register with `position_manager.add_position()`; after strategy SELL remove from position_manager; partial exits (TP1) update RiskManager position with remaining qty
 - **Trailing stop activation**: Only apply trailing stop after price moves above entry_price — prevents trailing_stop_pct overriding stop_loss_pct when trailing_stop_pct < stop_loss_pct
 - **ExitType handling**: TP1 = partial exit (sell 50%), keep position in both managers with reduced qty; TP2/SL/trailing = full exit, remove from both PositionManager and RiskManager
@@ -229,4 +231,34 @@ Started: 2026년 2월 22일 일요일 00시 13분 50초 KST
   - When testing exit-before-strategy ordering, use tracked functions with a call_order list, but make sure async mocks return values directly (not coroutines returning coroutines)
   - Partial exits need special handling in RiskManager: call `add_position()` with reduced quantity (overwrites) rather than `remove_position()`
   - TP1 check fires before TP2 check (TP1 price < TP2 price), so if price gaps past both, TP1 triggers first; TP2 triggers on next cycle
+---
+
+## 2026-02-22 - V2-009: Signal ensemble voting system
+- **Implemented:**
+  - New `SignalEnsemble` class in `src/bot/strategies/ensemble.py` with full voting system
+  - `collect_signals(symbol, strategies, candles)` runs all strategies and collects their signals
+  - `vote(signals, symbol)` combines signals into single decision via weighted voting
+  - Voting logic: BUY/SELL both present = HOLD (conflict); BUY count >= min_agreement = BUY; SELL count >= min_agreement = SELL; otherwise HOLD
+  - Weighted confidence: `sum(confidence * weight) / sum(weight)` with default weight 1.0 per strategy
+  - Strategy error handling: if a strategy raises during `collect_signals`, it's logged and skipped
+  - Added `signal_min_agreement` (int, default 2) and `strategy_weights` (dict, default empty) to Settings in config.py
+  - Created `SignalEnsemble` in `TradingBot.initialize()` from config settings
+  - Replaced per-strategy execution loop in `_trading_cycle()` with ensemble collect+vote → single signal per symbol
+  - Exported `SignalEnsemble` from `strategies/__init__.py`
+- **Files created:**
+  - `src/bot/strategies/ensemble.py` — SignalEnsemble class
+  - `tests/strategies/test_ensemble.py` — 30 new tests
+- **Files modified:**
+  - `src/bot/main.py` — import SignalEnsemble, create in initialize(), use in _trading_cycle()
+  - `src/bot/config.py` — added signal_min_agreement, strategy_weights settings
+  - `src/bot/strategies/__init__.py` — exported SignalEnsemble
+  - `tests/test_main.py` — added signal_min_agreement=1 to make_settings defaults
+  - `tests/test_v2_008_position_manager.py` — added signal_min_agreement=1 to make_settings defaults
+  - `tests/risk/test_risk_pipeline.py` — added signal_min_agreement=1 to make_settings defaults
+- **Tests:** 449 tests passing (419 previous + 30 new), ruff check passes
+- **Learnings for future iterations:**
+  - Replacing the per-strategy loop with ensemble voting changes behavior for all tests that use `_trading_cycle()` with single strategies — they need `signal_min_agreement=1` in settings
+  - Ensemble must get strategies via `strategy_registry.get_active()` BEFORE the symbol loop, then pass them to `collect_signals()` — this ensures tests that patch `bot.main.strategy_registry` still work
+  - Keep ensemble's `vote()` synchronous (no I/O) — only `collect_signals()` is async (calls strategy.analyze)
+  - The ensemble's `strategy_name` field is always "ensemble" for voted signals — downstream code that checks strategy_name needs to be aware
 ---

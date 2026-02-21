@@ -168,7 +168,7 @@
         "All existing tests pass, ruff check passes"
       ],
       "priority": 9,
-      "passes": false,
+      "passes": true,
       "notes": "Critical for avoiding the current bug where 3 strategies BUYing causes 3x position"
     },
     {

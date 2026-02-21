@@ -58,6 +58,10 @@ class Settings(BaseSettings):
     paper_initial_balance: float = Field(default=10000.0, gt=0)
     paper_fee_pct: float = Field(default=0.1, ge=0, le=100)
 
+    # Signal ensemble
+    signal_min_agreement: int = Field(default=2, ge=1)
+    strategy_weights: dict[str, float] = Field(default_factory=dict)
+
     # Trading loop
     loop_interval_seconds: int = Field(default=60, ge=1)
 
