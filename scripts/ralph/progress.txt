@@ -7,7 +7,10 @@ Started: 2026년 2월 22일 일요일 00시 13분 50초 KST
 - **CORS**: Use `CORSMiddleware` from `fastapi.middleware.cors` with configurable origins
 - **Model serialization**: Use `joblib.dump()`/`joblib.load()` instead of pickle for sklearn models
 - **Config pattern**: Add new settings to `Settings` class with defaults that maintain backward compat
-- **Test count baseline**: 371 tests passing as of V2-007
+- **Test count baseline**: 419 tests passing as of V2-008
+- **PositionManager pattern**: Create PositionManager in `initialize()` from config settings; in `_trading_cycle()` check exits BEFORE strategy loop; after BUY register with `position_manager.add_position()`; after strategy SELL remove from position_manager; partial exits (TP1) update RiskManager position with remaining qty
+- **Trailing stop activation**: Only apply trailing stop after price moves above entry_price — prevents trailing_stop_pct overriding stop_loss_pct when trailing_stop_pct < stop_loss_pct
+- **ExitType handling**: TP1 = partial exit (sell 50%), keep position in both managers with reduced qty; TP2/SL/trailing = full exit, remove from both PositionManager and RiskManager
 - **Cycle metrics**: `cycle_metrics` dict added to dashboard `_bot_state` — must be reset in test fixtures via `update_state(cycle_metrics={"cycle_count": 0, "average_cycle_duration": 0.0, "last_cycle_time": None})`
 - **Telegram error notifications**: Now send full `traceback.format_exc()` instead of just `str(e)` — tests should check `"Traceback" in error_msg` and `"error text" in error_msg`
 - **DCA confirm_buy pattern**: After DCAStrategy.analyze() returns BUY, call `strategy.confirm_buy(buy_time, amount, quantity)` to commit state. analyze() is idempotent and side-effect-free.
@@ -192,4 +195,38 @@ Started: 2026년 2월 22일 일요일 00시 13분 50초 KST
   - Dashboard cycle_metrics must be updated AFTER incrementing counters in `run_trading_loop`, not inside `_trading_cycle` (which runs before the increment)
   - `loop_interval_seconds` has `ge=1` validator — tests must use at least 1, not 0
   - Existing tests that checked `notify_error("error msg")` needed updating to match new traceback format
+---
+
+## 2026-02-22 - V2-008: Stop-loss and take-profit order manager
+- **Implemented:**
+  - New `PositionManager` class in `src/bot/execution/position_manager.py` with full exit management
+  - `ExitType` enum: STOP_LOSS, TAKE_PROFIT_1, TAKE_PROFIT_2, TRAILING_STOP
+  - `ExitSignal` dataclass: symbol, exit_type, quantity, exit_price
+  - `ManagedPosition` class: tracks entry_price, stop_loss_price, tp1_price, tp2_price, highest_price_since_entry, tp1_hit
+  - Stop-loss: configurable % below entry (default 3%)
+  - Take-profit: TP1 at +3% (sell 50%), TP2 at +5% (sell remaining 50%)
+  - Trailing stop: moves stop-loss up as price rises above entry; only activates after price moves above entry_price
+  - `_execute_exit()` helper in main.py for clean exit order execution
+  - `_trading_cycle()` checks all managed positions for exit conditions BEFORE running strategies
+  - After BUY execution, position registered with PositionManager
+  - After strategy SELL, position removed from PositionManager
+  - Partial exit (TP1): updates RiskManager position with remaining quantity
+  - Full exit (SL, TP2, trailing): removes from both PositionManager and RiskManager
+  - Added `take_profit_pct`, `trailing_stop_enabled`, `trailing_stop_pct` to Settings in config.py
+  - Exported `PositionManager` and `ExitType` from `execution/__init__.py`
+- **Files created:**
+  - `src/bot/execution/position_manager.py` — PositionManager, ManagedPosition, ExitSignal, ExitType
+  - `tests/execution/test_position_manager.py` — 32 unit tests
+  - `tests/test_v2_008_position_manager.py` — 16 integration tests (wiring, config)
+- **Files modified:**
+  - `src/bot/main.py` — import PositionManager/ExitType, create in initialize(), check exits in _trading_cycle(), register on BUY, _execute_exit() helper
+  - `src/bot/config.py` — added take_profit_pct, trailing_stop_enabled, trailing_stop_pct settings
+  - `src/bot/execution/__init__.py` — exported PositionManager, ExitType
+- **Tests:** 419 tests passing (371 previous + 48 new), ruff check passes
+- **Learnings for future iterations:**
+  - Trailing stop with trailing_stop_pct < stop_loss_pct would override the original SL from entry; fix: only apply trailing after price moves above entry_price
+  - Float precision: use `pytest.approx()` for price calculations like `3000 * 1.10`
+  - When testing exit-before-strategy ordering, use tracked functions with a call_order list, but make sure async mocks return values directly (not coroutines returning coroutines)
+  - Partial exits need special handling in RiskManager: call `add_position()` with reduced quantity (overwrites) rather than `remove_position()`
+  - TP1 check fires before TP2 check (TP1 price < TP2 price), so if price gaps past both, TP1 triggers first; TP2 triggers on next cycle
 ---

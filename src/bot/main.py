@@ -14,8 +14,9 @@ from bot.data.store import DataStore
 from bot.exchanges.factory import ExchangeFactory
 from bot.execution.engine import ExecutionEngine
 from bot.execution.paper_portfolio import PaperPortfolio
+from bot.execution.position_manager import ExitType, PositionManager
 from bot.execution.resilient import ResilientExchange
-from bot.models import OrderSide
+from bot.models import OrderSide, SignalAction, TradingSignal
 from bot.monitoring.logger import setup_logging
 from bot.monitoring.telegram import TelegramNotifier
 from bot.risk.manager import RiskManager
@@ -38,6 +39,7 @@ class TradingBot:
         self._telegram: TelegramNotifier | None = None
         self._dashboard_task: asyncio.Task | None = None
         self._paper_portfolio: PaperPortfolio | None = None
+        self._position_manager: PositionManager | None = None
         self._cycle_lock: asyncio.Lock = asyncio.Lock()
         self._cycle_count: int = 0
         self._total_cycle_duration: float = 0.0
@@ -70,6 +72,14 @@ class TradingBot:
             daily_loss_limit_pct=self._settings.daily_loss_limit_pct,
             max_drawdown_pct=self._settings.max_drawdown_pct,
             max_concurrent_positions=self._settings.max_concurrent_positions,
+        )
+
+        # Initialize position manager (stop-loss, take-profit, trailing stop)
+        self._position_manager = PositionManager(
+            stop_loss_pct=self._settings.stop_loss_pct,
+            take_profit_pct=self._settings.take_profit_pct,
+            trailing_stop_enabled=self._settings.trailing_stop_enabled,
+            trailing_stop_pct=self._settings.trailing_stop_pct,
         )
 
         # Initialize execution engines (one per exchange)
@@ -245,7 +255,7 @@ class TradingBot:
             await asyncio.sleep(self._settings.loop_interval_seconds)
 
     async def _trading_cycle(self) -> None:
-        """Execute one trading cycle: collect -> analyze -> risk check -> execute."""
+        """Execute one trading cycle: check exits -> collect -> analyze -> risk check -> execute."""
         # Auto-reset daily PnL at start of each new day
         if self._risk_manager:
             self._risk_manager.check_and_reset_daily()
@@ -264,6 +274,21 @@ class TradingBot:
             await self._collector.collect_once()
 
         recent_trades = []
+
+        # BEFORE running strategies, check exit conditions on all managed positions
+        if self._position_manager and self._store:
+            for symbol in list(self._position_manager.managed_symbols):
+                candles = await self._store.get_candles(symbol, limit=1)
+                if not candles:
+                    continue
+                current_price = candles[-1].close
+                exit_signal = self._position_manager.check_exits(
+                    symbol, current_price
+                )
+                if exit_signal:
+                    await self._execute_exit(
+                        exit_signal, recent_trades
+                    )
 
         # Run strategies on each symbol
         for symbol in self._settings.symbols:
@@ -308,6 +333,13 @@ class TradingBot:
                                             order.quantity,
                                             fill_price,
                                         )
+                                        # Register with PositionManager
+                                        if self._position_manager:
+                                            self._position_manager.add_position(
+                                                order.symbol,
+                                                fill_price,
+                                                order.quantity,
+                                            )
                                     elif order.side == OrderSide.SELL:
                                         position = (
                                             self._risk_manager.get_position(
@@ -325,6 +357,11 @@ class TradingBot:
                                         self._risk_manager.remove_position(
                                             order.symbol
                                         )
+                                        # Remove from PositionManager
+                                        if self._position_manager:
+                                            self._position_manager.remove_position(
+                                                order.symbol
+                                            )
 
                                 trade_info = {
                                     "timestamp": (
@@ -355,6 +392,87 @@ class TradingBot:
             metrics=dashboard_module.get_state()["metrics"],
             portfolio=dashboard_module.get_state()["portfolio"],
         )
+
+    async def _execute_exit(
+        self,
+        exit_signal,
+        recent_trades: list[dict],
+    ) -> None:
+        """Execute a position exit triggered by PositionManager."""
+        sell_signal = TradingSignal(
+            strategy_name="position_manager",
+            symbol=exit_signal.symbol,
+            action=SignalAction.SELL,
+            confidence=1.0,
+            metadata={
+                "exit_type": exit_signal.exit_type.value,
+                "exit_price": exit_signal.exit_price,
+            },
+        )
+        for name, engine in self._execution_engines.items():
+            order = await engine.execute_signal(
+                sell_signal, quantity=exit_signal.quantity
+            )
+            if order:
+                fill_price = order.filled_price or 0
+
+                if self._risk_manager and fill_price > 0:
+                    position = self._risk_manager.get_position(
+                        exit_signal.symbol
+                    )
+                    if position:
+                        pnl = (
+                            fill_price - position["entry_price"]
+                        ) * order.quantity
+                        self._risk_manager.record_trade_pnl(pnl)
+
+                    # For partial exits (TP1), update RiskManager position
+                    # For full exits (SL, TP2, trailing), remove entirely
+                    if exit_signal.exit_type == ExitType.TAKE_PROFIT_1:
+                        if position:
+                            remaining = (
+                                position["quantity"] - order.quantity
+                            )
+                            if remaining > 1e-10:
+                                self._risk_manager.add_position(
+                                    exit_signal.symbol,
+                                    remaining,
+                                    position["entry_price"],
+                                )
+                            else:
+                                self._risk_manager.remove_position(
+                                    exit_signal.symbol
+                                )
+                    else:
+                        self._risk_manager.remove_position(
+                            exit_signal.symbol
+                        )
+                        # Remove from PositionManager on full exit
+                        if self._position_manager:
+                            self._position_manager.remove_position(
+                                exit_signal.symbol
+                            )
+
+                trade_info = {
+                    "timestamp": (
+                        order.created_at.isoformat()
+                        if order.created_at
+                        else ""
+                    ),
+                    "symbol": order.symbol,
+                    "side": order.side.value,
+                    "quantity": order.quantity,
+                    "price": fill_price,
+                }
+                recent_trades.append(trade_info)
+                if self._telegram:
+                    await self._telegram.notify_trade(
+                        symbol=order.symbol,
+                        side=order.side.value,
+                        quantity=order.quantity,
+                        price=fill_price,
+                    )
+            break
 
     async def shutdown(self) -> None:
         """Graceful shutdown."""

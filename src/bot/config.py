@@ -50,6 +50,9 @@ class Settings(BaseSettings):
     max_drawdown_pct: float = Field(default=15.0, ge=0, le=100)
     max_concurrent_positions: int = Field(default=5, ge=1)
     stop_loss_pct: float = Field(default=3.0, ge=0, le=100)
+    take_profit_pct: float = Field(default=5.0, ge=0, le=100)
+    trailing_stop_enabled: bool = False
+    trailing_stop_pct: float = Field(default=2.0, ge=0, le=100)
 
     # Paper trading
     paper_initial_balance: float = Field(default=10000.0, gt=0)

@@ -146,7 +146,7 @@
         "All existing tests pass, ruff check passes"
       ],
       "priority": 8,
-      "passes": false,
+      "passes": true,
       "notes": "THIS IS THE MOST IMPORTANT FEATURE. Without exits, the bot holds losers forever."
     },
     {
