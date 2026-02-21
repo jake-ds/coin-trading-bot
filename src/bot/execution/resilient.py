@@ -86,8 +86,20 @@ class ResilientExchange:
             "get_ohlcv", symbol, timeframe, limit
         )
 
+    async def get_balance(self) -> dict[str, float]:
+        return await self._call_with_breaker("get_balance")
+
     async def create_order(self, **kwargs: Any) -> Any:
         return await self._call_with_breaker("create_order", **kwargs)
+
+    async def cancel_order(self, order_id: str, symbol: str) -> bool:
+        return await self._call_with_breaker("cancel_order", order_id, symbol)
+
+    async def get_order_status(self, order_id: str, symbol: str) -> Any:
+        return await self._call_with_breaker("get_order_status", order_id, symbol)
+
+    async def get_order_book(self, symbol: str, limit: int = 20) -> dict:
+        return await self._call_with_breaker("get_order_book", symbol, limit)
 
     async def close(self) -> None:
         await self._exchange.close()

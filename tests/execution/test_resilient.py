@@ -80,6 +80,48 @@ class TestResilientExchange:
             await re.get_ticker("INVALID")
 
     @pytest.mark.asyncio
+    async def test_get_balance(self, mock_exchange):
+        mock_exchange.get_balance = AsyncMock(return_value={"USDT": 10000.0})
+        re = ResilientExchange(mock_exchange)
+        result = await re.get_balance()
+        assert result == {"USDT": 10000.0}
+        mock_exchange.get_balance.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_cancel_order(self, mock_exchange):
+        mock_exchange.cancel_order = AsyncMock(return_value=True)
+        re = ResilientExchange(mock_exchange)
+        result = await re.cancel_order("order-123", "BTC/USDT")
+        assert result is True
+        mock_exchange.cancel_order.assert_called_once_with("order-123", "BTC/USDT")
+
+    @pytest.mark.asyncio
+    async def test_get_order_status(self, mock_exchange):
+        mock_order = {"id": "order-123", "status": "filled"}
+        mock_exchange.get_order_status = AsyncMock(return_value=mock_order)
+        re = ResilientExchange(mock_exchange)
+        result = await re.get_order_status("order-123", "BTC/USDT")
+        assert result["status"] == "filled"
+        mock_exchange.get_order_status.assert_called_once_with("order-123", "BTC/USDT")
+
+    @pytest.mark.asyncio
+    async def test_get_order_book(self, mock_exchange):
+        book = {"bids": [[50000, 1.0]], "asks": [[50001, 0.5]]}
+        mock_exchange.get_order_book = AsyncMock(return_value=book)
+        re = ResilientExchange(mock_exchange)
+        result = await re.get_order_book("BTC/USDT")
+        assert result["bids"][0][0] == 50000
+        mock_exchange.get_order_book.assert_called_once_with("BTC/USDT", 20)
+
+    @pytest.mark.asyncio
+    async def test_get_order_book_custom_limit(self, mock_exchange):
+        book = {"bids": [], "asks": []}
+        mock_exchange.get_order_book = AsyncMock(return_value=book)
+        re = ResilientExchange(mock_exchange)
+        await re.get_order_book("BTC/USDT", limit=10)
+        mock_exchange.get_order_book.assert_called_once_with("BTC/USDT", 10)
+
+    @pytest.mark.asyncio
     async def test_close(self, mock_exchange):
         re = ResilientExchange(mock_exchange)
         await re.close()

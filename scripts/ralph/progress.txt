@@ -7,7 +7,11 @@ Started: 2026년 2월 22일 일요일 00시 13분 50초 KST
 - **CORS**: Use `CORSMiddleware` from `fastapi.middleware.cors` with configurable origins
 - **Model serialization**: Use `joblib.dump()`/`joblib.load()` instead of pickle for sklearn models
 - **Config pattern**: Add new settings to `Settings` class with defaults that maintain backward compat
-- **Test count baseline**: 267 tests passing as of V2-001
+- **Test count baseline**: 285 tests passing as of V2-002
+- **ResilientExchange wrapping**: In `_init_exchanges()`, wrap each adapter with `ResilientExchange(adapter)` after creation
+- **Telegram wiring**: Check both `telegram_bot_token` and `telegram_chat_id` are non-empty; send on startup, shutdown, trade execution, and errors
+- **Dashboard wiring**: Import `bot.dashboard.app` as `dashboard_module`; call `dashboard_module.update_state()` after each cycle; start uvicorn via `asyncio.ensure_future()` with `_serve_safe` wrapper to catch `SystemExit`
+- **TradingSignal**: Requires `strategy_name` field — always include in test signal construction
 
 ---
 
@@ -30,4 +34,26 @@ Started: 2026년 2월 22일 일요일 00시 13분 50초 KST
   - `joblib` is already a dependency of `scikit-learn`, so it's always available
   - Dashboard HTML uses f-strings — all interpolated values need `html.escape(str(...))`
   - CORS middleware must be added before routes are defined (on import is fine)
+---
+
+## 2026-02-22 - V2-002: Wire Dashboard, Telegram, and ResilientExchange into orchestrator
+- **Implemented:**
+  - ResilientExchange: added `get_balance`, `cancel_order`, `get_order_status`, `get_order_book` methods via `_call_with_breaker`
+  - main.py: exchange adapters wrapped in `ResilientExchange` after creation in `_init_exchanges()`
+  - main.py: `TelegramNotifier` created if both `telegram_bot_token` and `telegram_chat_id` are configured; gracefully skipped otherwise
+  - main.py: Telegram notifications on startup, shutdown, trade execution, and cycle errors
+  - main.py: `dashboard.update_state()` called after each trading cycle with status, recent trades, portfolio, metrics
+  - main.py: uvicorn dashboard started as background asyncio task during `initialize()` with `_serve_safe` wrapper to catch `SystemExit` from port conflicts
+  - main.py: dashboard task cancelled on shutdown; dashboard status set to "stopped"
+- **Files modified:**
+  - `src/bot/execution/resilient.py` — added 4 missing ExchangeAdapter methods
+  - `src/bot/main.py` — rewired to use ResilientExchange, TelegramNotifier, dashboard
+  - `tests/execution/test_resilient.py` — added 5 tests for new methods
+  - `tests/test_main.py` — added 13 new tests for wiring (Telegram, ResilientExchange, Dashboard)
+- **Tests:** 285 tests passing (267 original + 18 new), ruff check passes
+- **Learnings for future iterations:**
+  - uvicorn `server.serve()` calls `sys.exit(1)` on port bind failure — must wrap in async wrapper that catches `SystemExit`
+  - `TradingSignal` requires `strategy_name` — always include it when constructing test signals
+  - Dashboard state is a module-level dict in `bot.dashboard.app` — import as `dashboard_module` and use `update_state()` / `get_state()`
+  - Tests that call `bot.initialize()` will attempt to start uvicorn — the `_serve_safe` wrapper prevents test crashes
 ---

@@ -7,11 +7,14 @@ import sys
 import structlog
 
 from bot.config import Settings, TradingMode, load_settings
+from bot.dashboard import app as dashboard_module
 from bot.data.collector import DataCollector
 from bot.data.store import DataStore
 from bot.exchanges.factory import ExchangeFactory
 from bot.execution.engine import ExecutionEngine
+from bot.execution.resilient import ResilientExchange
 from bot.monitoring.logger import setup_logging
+from bot.monitoring.telegram import TelegramNotifier
 from bot.risk.manager import RiskManager
 from bot.strategies.base import strategy_registry
 
@@ -29,6 +32,8 @@ class TradingBot:
         self._collector: DataCollector | None = None
         self._risk_manager: RiskManager | None = None
         self._execution_engines: dict[str, ExecutionEngine] = {}
+        self._telegram: TelegramNotifier | None = None
+        self._dashboard_task: asyncio.Task | None = None
 
     async def initialize(self) -> None:
         """Initialize all bot components."""
@@ -39,7 +44,7 @@ class TradingBot:
         self._store = DataStore(database_url=self._settings.database_url)
         await self._store.initialize()
 
-        # Create exchange adapters
+        # Create exchange adapters (wrapped in ResilientExchange)
         self._init_exchanges()
 
         # Initialize data collector
@@ -68,6 +73,12 @@ class TradingBot:
                 paper_trading=is_paper,
             )
 
+        # Initialize Telegram notifier (gracefully skip if not configured)
+        self._init_telegram()
+
+        # Start dashboard server as background task
+        self._start_dashboard()
+
         # Import strategies to trigger registration
         self._load_strategies()
 
@@ -78,8 +89,15 @@ class TradingBot:
             symbols=self._settings.symbols,
         )
 
+        # Notify startup via Telegram
+        if self._telegram:
+            await self._telegram.send_message(
+                f"Bot started in {self._settings.trading_mode.value} mode. "
+                f"Symbols: {', '.join(self._settings.symbols)}"
+            )
+
     def _init_exchanges(self) -> None:
-        """Create exchange adapters from configuration."""
+        """Create exchange adapters from configuration, wrapped in ResilientExchange."""
         # Import to trigger registration
         import bot.exchanges.binance  # noqa: F401
         import bot.exchanges.upbit  # noqa: F401
@@ -92,7 +110,7 @@ class TradingBot:
                     secret_key=self._settings.binance_secret_key,
                     testnet=self._settings.binance_testnet,
                 )
-                self._exchanges.append(adapter)
+                self._exchanges.append(ResilientExchange(adapter))
             except ValueError:
                 logger.warning("binance_adapter_not_available")
 
@@ -103,9 +121,49 @@ class TradingBot:
                     api_key=self._settings.upbit_api_key,
                     secret_key=self._settings.upbit_secret_key,
                 )
-                self._exchanges.append(adapter)
+                self._exchanges.append(ResilientExchange(adapter))
             except ValueError:
                 logger.warning("upbit_adapter_not_available")
+
+    def _init_telegram(self) -> None:
+        """Initialize Telegram notifier if bot_token and chat_id are configured."""
+        if self._settings.telegram_bot_token and self._settings.telegram_chat_id:
+            self._telegram = TelegramNotifier(
+                bot_token=self._settings.telegram_bot_token,
+                chat_id=self._settings.telegram_chat_id,
+            )
+            logger.info("telegram_notifier_initialized")
+        else:
+            logger.debug("telegram_not_configured_skipping")
+
+    def _start_dashboard(self) -> None:
+        """Start the dashboard uvicorn server as a background asyncio task."""
+        try:
+            import uvicorn
+
+            config = uvicorn.Config(
+                app=dashboard_module.app,
+                host="0.0.0.0",
+                port=self._settings.dashboard_port,
+                log_level="warning",
+            )
+            server = uvicorn.Server(config)
+
+            async def _serve_safe() -> None:
+                try:
+                    await server.serve()
+                except SystemExit:
+                    logger.warning("dashboard_server_exited")
+                except Exception as e:
+                    logger.warning("dashboard_server_error", error=str(e))
+
+            self._dashboard_task = asyncio.ensure_future(_serve_safe())
+            dashboard_module.update_state(status="running")
+            logger.info("dashboard_started", port=self._settings.dashboard_port)
+        except ImportError:
+            logger.warning("uvicorn_not_installed_dashboard_disabled")
+        except Exception as e:
+            logger.warning("dashboard_start_failed", error=str(e))
 
     def _load_strategies(self) -> None:
         """Import strategy modules to trigger auto-registration."""
@@ -129,6 +187,8 @@ class TradingBot:
                 await self._trading_cycle()
             except Exception as e:
                 logger.error("trading_cycle_error", error=str(e))
+                if self._telegram:
+                    await self._telegram.notify_error(str(e))
 
             await asyncio.sleep(self._settings.loop_interval_seconds)
 
@@ -137,6 +197,8 @@ class TradingBot:
         # Collect data
         if self._collector:
             await self._collector.collect_once()
+
+        recent_trades = []
 
         # Run strategies on each symbol
         for symbol in self._settings.symbols:
@@ -169,13 +231,54 @@ class TradingBot:
                             qty = 0.01
 
                         if qty > 0:
-                            await engine.execute_signal(signal, quantity=qty)
+                            order = await engine.execute_signal(signal, quantity=qty)
+                            if order:
+                                trade_info = {
+                                    "timestamp": (
+                                        order.created_at.isoformat()
+                                        if order.created_at
+                                        else ""
+                                    ),
+                                    "symbol": order.symbol,
+                                    "side": order.side.value,
+                                    "quantity": order.quantity,
+                                    "price": order.filled_price or 0,
+                                }
+                                recent_trades.append(trade_info)
+                                # Notify via Telegram
+                                if self._telegram:
+                                    await self._telegram.notify_trade(
+                                        symbol=order.symbol,
+                                        side=order.side.value,
+                                        quantity=order.quantity,
+                                        price=order.filled_price or 0,
+                                    )
                         break
+
+        # Update dashboard state after each cycle
+        dashboard_module.update_state(
+            status="running",
+            trades=dashboard_module.get_state()["trades"] + recent_trades,
+            metrics=dashboard_module.get_state()["metrics"],
+            portfolio=dashboard_module.get_state()["portfolio"],
+        )
 
     async def shutdown(self) -> None:
         """Graceful shutdown."""
         logger.info("bot_shutting_down")
         self._running = False
+
+        # Notify shutdown via Telegram
+        if self._telegram:
+            await self._telegram.send_message("Bot shutting down.")
+
+        # Cancel dashboard background task
+        if self._dashboard_task and not self._dashboard_task.done():
+            self._dashboard_task.cancel()
+            try:
+                await self._dashboard_task
+            except asyncio.CancelledError:
+                pass
 
         for exchange in self._exchanges:
             await exchange.close()
@@ -183,6 +286,7 @@ class TradingBot:
         if self._store:
             await self._store.close()
 
+        dashboard_module.update_state(status="stopped")
         logger.info("bot_shutdown_complete")
 
     def stop(self) -> None:
