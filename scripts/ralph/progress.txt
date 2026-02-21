@@ -537,4 +537,40 @@ Started: 2026년 2월 22일 일요일 00시 13분 50초 KST
   - `websocket_enabled` defaults to False for backward compatibility — all existing tests unaffected
   - Zero prices from ticker should be ignored (could indicate exchange error)
   - Test count baseline: 733 tests passing as of V2-018
+- **SmartExecutor pattern**: `SmartExecutor` in `execution/smart_executor.py` wraps exchange for intelligent order execution. Created in `initialize()` for live mode only (not paper). Passed as optional `smart_executor` param to `ExecutionEngine.__init__()` (defaults to `None` for backward compat). In `_live_execute()`, delegates to `smart_executor.execute_smart()` when available; falls back to direct exchange calls on error. TWAP returns list of orders — engine returns last one and tracks all in `pending_orders`.
+- **SmartExecutor limit flow**: `execute_limit_with_fallback()` places limit order → polls `get_order_status()` until filled or timeout → cancels + falls back to market order. Timeout defaults to 30s, configurable via `limit_order_timeout_seconds`.
+- **TWAP**: `should_use_twap()` checks if order value > `twap_volume_threshold_pct` (default 5%) of avg_daily_volume. `create_twap_plan()` splits quantity into equal chunks. `execute_twap()` executes each chunk with fresh ticker prices and interval sleeps.
+- **FillMetrics**: Tracks maker vs taker fills, volumes, fees. `maker_ratio` = maker_fills / total_fills. `to_dict()` for serialization.
+- **Order model constraint**: Market orders must have `price=0` per Pydantic validator. Test helpers must set `order_price = 0 if order_type == OrderType.MARKET else price`.
+- **Test count baseline**: 779 tests passing as of V2-019
+---
+
+## 2026-02-22 - V2-019: Smart order execution: limit orders, TWAP, and fee optimization
+- **Implemented:**
+  - New `SmartExecutor` class in `src/bot/execution/smart_executor.py` with limit order preference, timeout fallback, TWAP splitting, and fee tracking
+  - `FillMetrics` dataclass tracks maker vs taker fills, volumes, and fees
+  - `TWAPPlan` dataclass defines order splitting strategy (chunk sizes, intervals)
+  - Limit order with fallback: places limit at best bid/ask, polls for fill, cancels after timeout and falls back to market order
+  - TWAP execution: splits large orders into chunks, fetches fresh prices per chunk, sleeps between chunks
+  - `execute_smart()` orchestrates: checks TWAP threshold → tries limit with fallback → or market order
+  - Added `prefer_limit_orders` (default True), `limit_order_timeout_seconds` (default 30), `twap_chunk_count` (default 5) to Settings
+  - Integrated with `ExecutionEngine` via optional `smart_executor` parameter — backward compatible
+  - `_live_execute()` delegates to SmartExecutor when available, falls back to direct exchange on error
+  - Wired into `main.py`: SmartExecutor created for live mode exchanges only (not paper)
+  - Exported `SmartExecutor`, `FillMetrics`, `TWAPPlan` from `execution/__init__.py`
+- **Files created:**
+  - `src/bot/execution/smart_executor.py` — SmartExecutor, FillMetrics, TWAPPlan
+  - `tests/execution/test_smart_executor.py` — 46 new tests
+- **Files modified:**
+  - `src/bot/execution/engine.py` — added `smart_executor` param, delegation in `_live_execute()`
+  - `src/bot/execution/__init__.py` — exported SmartExecutor, FillMetrics, TWAPPlan
+  - `src/bot/config.py` — added `prefer_limit_orders`, `limit_order_timeout_seconds`, `twap_chunk_count` settings
+  - `src/bot/main.py` — import SmartExecutor, create for live mode exchanges in `initialize()`
+- **Tests:** 779 tests passing (733 previous + 46 new), ruff check passes
+- **Learnings for future iterations:**
+  - Order Pydantic model validates `price=0` for MARKET orders — test helpers must set price accordingly
+  - SmartExecutor only used in live mode to avoid interfering with paper trading's PaperPortfolio balance tracking
+  - TWAP returns list[Order], but ExecutionEngine returns single Order (the last chunk) while tracking all in pending_orders
+  - When SmartExecutor fails (any exception), engine falls back to direct exchange call — no data loss
+  - Limit order polling interval is `min(2.0, timeout/3)` to avoid excessive status checks
 ---

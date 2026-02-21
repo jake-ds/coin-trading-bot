@@ -367,7 +367,7 @@
         "All existing tests pass, ruff check passes"
       ],
       "priority": 19,
-      "passes": false,
+      "passes": true,
       "notes": "Maker fees are typically 0.02% vs taker 0.1% — 5x cheaper"
     },
     {
