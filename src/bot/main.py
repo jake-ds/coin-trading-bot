@@ -1,13 +1,209 @@
 """Main entry point for the Coin Trading Bot."""
 
 import asyncio
+import signal
 import sys
+
+import structlog
+
+from bot.config import Settings, TradingMode, load_settings
+from bot.data.collector import DataCollector
+from bot.data.store import DataStore
+from bot.exchanges.factory import ExchangeFactory
+from bot.execution.engine import ExecutionEngine
+from bot.monitoring.logger import setup_logging
+from bot.risk.manager import RiskManager
+from bot.strategies.base import strategy_registry
+
+logger = structlog.get_logger()
+
+
+class TradingBot:
+    """Main orchestrator that ties all components together."""
+
+    def __init__(self, settings: Settings | None = None):
+        self._settings = settings or load_settings()
+        self._running = False
+        self._exchanges = []
+        self._store: DataStore | None = None
+        self._collector: DataCollector | None = None
+        self._risk_manager: RiskManager | None = None
+        self._execution_engines: dict[str, ExecutionEngine] = {}
+
+    async def initialize(self) -> None:
+        """Initialize all bot components."""
+        setup_logging(self._settings.log_level)
+        logger.info("bot_initializing", mode=self._settings.trading_mode.value)
+
+        # Initialize data store
+        self._store = DataStore(database_url=self._settings.database_url)
+        await self._store.initialize()
+
+        # Create exchange adapters
+        self._init_exchanges()
+
+        # Initialize data collector
+        self._collector = DataCollector(
+            exchanges=self._exchanges,
+            store=self._store,
+            symbols=self._settings.symbols,
+            collection_interval=self._settings.loop_interval_seconds,
+        )
+
+        # Initialize risk manager
+        self._risk_manager = RiskManager(
+            max_position_size_pct=self._settings.max_position_size_pct,
+            stop_loss_pct=self._settings.stop_loss_pct,
+            daily_loss_limit_pct=self._settings.daily_loss_limit_pct,
+            max_drawdown_pct=self._settings.max_drawdown_pct,
+            max_concurrent_positions=self._settings.max_concurrent_positions,
+        )
+
+        # Initialize execution engines (one per exchange)
+        is_paper = self._settings.trading_mode == TradingMode.PAPER
+        for exchange in self._exchanges:
+            self._execution_engines[exchange.name] = ExecutionEngine(
+                exchange=exchange,
+                store=self._store,
+                paper_trading=is_paper,
+            )
+
+        # Import strategies to trigger registration
+        self._load_strategies()
+
+        logger.info(
+            "bot_initialized",
+            exchanges=[e.name for e in self._exchanges],
+            strategies=[s.name for s in strategy_registry.get_active()],
+            symbols=self._settings.symbols,
+        )
+
+    def _init_exchanges(self) -> None:
+        """Create exchange adapters from configuration."""
+        # Import to trigger registration
+        import bot.exchanges.binance  # noqa: F401
+        import bot.exchanges.upbit  # noqa: F401
+
+        if self._settings.binance_api_key:
+            try:
+                adapter = ExchangeFactory.create(
+                    "binance",
+                    api_key=self._settings.binance_api_key,
+                    secret_key=self._settings.binance_secret_key,
+                    testnet=self._settings.binance_testnet,
+                )
+                self._exchanges.append(adapter)
+            except ValueError:
+                logger.warning("binance_adapter_not_available")
+
+        if self._settings.upbit_api_key:
+            try:
+                adapter = ExchangeFactory.create(
+                    "upbit",
+                    api_key=self._settings.upbit_api_key,
+                    secret_key=self._settings.upbit_secret_key,
+                )
+                self._exchanges.append(adapter)
+            except ValueError:
+                logger.warning("upbit_adapter_not_available")
+
+    def _load_strategies(self) -> None:
+        """Import strategy modules to trigger auto-registration."""
+        try:
+            import bot.strategies.arbitrage.arbitrage_strategy  # noqa: F401
+            import bot.strategies.dca.dca_strategy  # noqa: F401
+            import bot.strategies.technical.bollinger  # noqa: F401
+            import bot.strategies.technical.ma_crossover  # noqa: F401
+            import bot.strategies.technical.macd  # noqa: F401
+            import bot.strategies.technical.rsi  # noqa: F401
+        except ImportError as e:
+            logger.warning("strategy_import_error", error=str(e))
+
+    async def run_trading_loop(self) -> None:
+        """Run the main trading loop."""
+        self._running = True
+        logger.info("trading_loop_started")
+
+        while self._running:
+            try:
+                await self._trading_cycle()
+            except Exception as e:
+                logger.error("trading_cycle_error", error=str(e))
+
+            await asyncio.sleep(self._settings.loop_interval_seconds)
+
+    async def _trading_cycle(self) -> None:
+        """Execute one trading cycle: collect -> analyze -> risk check -> execute."""
+        # Collect data
+        if self._collector:
+            await self._collector.collect_once()
+
+        # Run strategies on each symbol
+        for symbol in self._settings.symbols:
+            if not self._store:
+                continue
+
+            candles = await self._store.get_candles(symbol, limit=200)
+            if not candles:
+                continue
+
+            for strategy in strategy_registry.get_active():
+                if len(candles) < strategy.required_history_length:
+                    continue
+
+                signal = await strategy.analyze(candles, symbol=symbol)
+
+                # Risk check
+                if self._risk_manager:
+                    signal = self._risk_manager.validate_signal(signal)
+
+                if signal.action != signal.action.HOLD:
+                    # Execute on first available exchange
+                    for name, engine in self._execution_engines.items():
+                        if self._risk_manager:
+                            qty = self._risk_manager.calculate_position_size(
+                                self._risk_manager._current_portfolio_value or 10000,
+                                candles[-1].close,
+                            )
+                        else:
+                            qty = 0.01
+
+                        if qty > 0:
+                            await engine.execute_signal(signal, quantity=qty)
+                        break
+
+    async def shutdown(self) -> None:
+        """Graceful shutdown."""
+        logger.info("bot_shutting_down")
+        self._running = False
+
+        for exchange in self._exchanges:
+            await exchange.close()
+
+        if self._store:
+            await self._store.close()
+
+        logger.info("bot_shutdown_complete")
+
+    def stop(self) -> None:
+        """Signal the bot to stop."""
+        self._running = False
 
 
 async def main() -> None:
     """Run the trading bot."""
-    print("Coin Trading Bot - starting...")
-    print("No strategies configured yet. Exiting.")
+    bot = TradingBot()
+
+    # Setup signal handlers
+    loop = asyncio.get_event_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sig, bot.stop)
+
+    try:
+        await bot.initialize()
+        await bot.run_trading_loop()
+    finally:
+        await bot.shutdown()
 
 
 if __name__ == "__main__":
