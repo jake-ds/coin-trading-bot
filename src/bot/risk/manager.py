@@ -56,6 +56,10 @@ class RiskManager:
             "entry_price": entry_price,
         }
 
+    def get_position(self, symbol: str) -> dict | None:
+        """Get position data for a symbol, or None if no position."""
+        return self._open_positions.get(symbol)
+
     def remove_position(self, symbol: str) -> None:
         """Remove a closed position."""
         self._open_positions.pop(symbol, None)
@@ -145,6 +149,18 @@ class RiskManager:
         if self._halt_reason == "daily_loss_limit":
             self._trading_halted = False
             self._halt_reason = ""
+
+    def check_and_reset_daily(self) -> bool:
+        """Check if date has changed and auto-reset daily PnL if so.
+
+        Returns True if a reset was performed.
+        """
+        today = datetime.utcnow().date()
+        if self._daily_pnl_reset_date is not None and self._daily_pnl_reset_date == today:
+            return False
+        logger.info("daily_pnl_reset", new_date=str(today))
+        self.reset_daily()
+        return True
 
     def resume_trading(self) -> None:
         """Resume trading after a halt."""

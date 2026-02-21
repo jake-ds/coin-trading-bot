@@ -14,6 +14,7 @@ from bot.exchanges.factory import ExchangeFactory
 from bot.execution.engine import ExecutionEngine
 from bot.execution.paper_portfolio import PaperPortfolio
 from bot.execution.resilient import ResilientExchange
+from bot.models import OrderSide
 from bot.monitoring.logger import setup_logging
 from bot.monitoring.telegram import TelegramNotifier
 from bot.risk.manager import RiskManager
@@ -202,6 +203,19 @@ class TradingBot:
 
     async def _trading_cycle(self) -> None:
         """Execute one trading cycle: collect -> analyze -> risk check -> execute."""
+        # Auto-reset daily PnL at start of each new day
+        if self._risk_manager:
+            self._risk_manager.check_and_reset_daily()
+
+        # Update portfolio value from paper portfolio or default
+        if self._risk_manager:
+            if self._paper_portfolio:
+                self._risk_manager.update_portfolio_value(
+                    self._paper_portfolio.total_value
+                )
+            elif self._risk_manager._current_portfolio_value == 0:
+                self._risk_manager.update_portfolio_value(10000.0)
+
         # Collect data
         if self._collector:
             await self._collector.collect_once()
@@ -241,6 +255,34 @@ class TradingBot:
                         if qty > 0:
                             order = await engine.execute_signal(signal, quantity=qty)
                             if order:
+                                fill_price = order.filled_price or 0
+
+                                # Track position in RiskManager
+                                if self._risk_manager and fill_price > 0:
+                                    if order.side == OrderSide.BUY:
+                                        self._risk_manager.add_position(
+                                            order.symbol,
+                                            order.quantity,
+                                            fill_price,
+                                        )
+                                    elif order.side == OrderSide.SELL:
+                                        position = (
+                                            self._risk_manager.get_position(
+                                                order.symbol
+                                            )
+                                        )
+                                        if position:
+                                            pnl = (
+                                                fill_price
+                                                - position["entry_price"]
+                                            ) * order.quantity
+                                            self._risk_manager.record_trade_pnl(
+                                                pnl
+                                            )
+                                        self._risk_manager.remove_position(
+                                            order.symbol
+                                        )
+
                                 trade_info = {
                                     "timestamp": (
                                         order.created_at.isoformat()
@@ -250,7 +292,7 @@ class TradingBot:
                                     "symbol": order.symbol,
                                     "side": order.side.value,
                                     "quantity": order.quantity,
-                                    "price": order.filled_price or 0,
+                                    "price": fill_price,
                                 }
                                 recent_trades.append(trade_info)
                                 # Notify via Telegram
@@ -259,7 +301,7 @@ class TradingBot:
                                         symbol=order.symbol,
                                         side=order.side.value,
                                         quantity=order.quantity,
-                                        price=order.filled_price or 0,
+                                        price=fill_price,
                                     )
                         break
 

@@ -7,7 +7,8 @@ Started: 2026년 2월 22일 일요일 00시 13분 50초 KST
 - **CORS**: Use `CORSMiddleware` from `fastapi.middleware.cors` with configurable origins
 - **Model serialization**: Use `joblib.dump()`/`joblib.load()` instead of pickle for sklearn models
 - **Config pattern**: Add new settings to `Settings` class with defaults that maintain backward compat
-- **Test count baseline**: 332 tests passing as of V2-004
+- **Test count baseline**: 347 tests passing as of V2-005
+- **RiskManager pipeline**: After BUY, call `risk_manager.add_position(symbol, qty, price)`. After SELL, get position entry price via `risk_manager.get_position(symbol)`, calculate `pnl = (sell_price - entry_price) * qty`, call `record_trade_pnl(pnl)` then `remove_position(symbol)`. Call `check_and_reset_daily()` at start of each cycle for auto daily-loss-limit reset. Update portfolio value from `paper_portfolio.total_value` each cycle.
 - **PaperPortfolio**: Optional `paper_portfolio` param in `ExecutionEngine.__init__` — defaults to `None` for backward compat; when provided, `_paper_execute` checks balance via `buy()`/`sell()` and returns `None` if rejected
 - **Config for paper trading**: `paper_initial_balance` (default 10000.0) and `paper_fee_pct` (default 0.1) in Settings
 - **ResilientExchange wrapping**: In `_init_exchanges()`, wrap each adapter with `ResilientExchange(adapter)` after creation
@@ -111,4 +112,27 @@ Started: 2026년 2월 22일 일요일 00시 13분 50초 KST
   - `UniqueConstraint` and `Index` go in `__table_args__` tuple on the model class
   - OHLCV Pydantic model already validates `high >= low`, `high >= close`, `low <= close` — `validate_candle()` is defense-in-depth for data from untrusted exchange APIs
   - Staleness check must handle naive timestamps by assuming UTC
+---
+
+## 2026-02-22 - V2-005: Fix RiskManager pipeline: position tracking, PnL recording, daily reset
+- **Implemented:**
+  - Added `get_position(symbol)` method to RiskManager for clean position data access
+  - Added `check_and_reset_daily()` method to RiskManager for auto date-change detection and daily PnL reset
+  - Wired `_trading_cycle()` to call `check_and_reset_daily()` at start of each cycle
+  - Wired `_trading_cycle()` to update `risk_manager.update_portfolio_value()` from `paper_portfolio.total_value` each cycle
+  - After BUY execution: calls `risk_manager.add_position(symbol, qty, price)` — enables duplicate-BUY blocking
+  - After SELL execution: calculates realized PnL from entry_price, calls `record_trade_pnl(pnl)` and `remove_position(symbol)`
+  - Daily loss limit halt now auto-clears at start of next day via `check_and_reset_daily()`
+- **Files modified:**
+  - `src/bot/risk/manager.py` — added `get_position()`, `check_and_reset_daily()` methods
+  - `src/bot/main.py` — wired position tracking, PnL recording, daily reset, portfolio value updates into `_trading_cycle()`
+- **Files created:**
+  - `tests/risk/test_risk_pipeline.py` — 15 new tests
+- **Tests:** 347 tests passing (332 previous + 15 new), ruff check passes
+- **Learnings for future iterations:**
+  - Import ordering matters for ruff: `bot.models` must come after `bot.execution.*` alphabetically
+  - RiskManager already had `add_position`, `remove_position`, `record_trade_pnl`, `update_portfolio_value`, `reset_daily` — the issue was that `_trading_cycle()` never called them
+  - `check_and_reset_daily()` checks `_daily_pnl_reset_date` and calls `reset_daily()` if date changed, which clears halt when `halt_reason == "daily_loss_limit"`
+  - For PnL calculation: `pnl = (sell_price - entry_price) * qty` — fees are tracked separately by PaperPortfolio
+  - When selling without a prior position in RiskManager (edge case), skip PnL recording gracefully
 ---
