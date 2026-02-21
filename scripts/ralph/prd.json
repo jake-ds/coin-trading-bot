@@ -326,7 +326,7 @@
         "All existing tests pass, ruff check passes"
       ],
       "priority": 17,
-      "passes": false,
+      "passes": true,
       "notes": "Fixed % sizing means you risk MORE in volatile markets — exactly backwards"
     },
     {

@@ -22,6 +22,7 @@ from bot.monitoring.telegram import TelegramNotifier
 from bot.risk.manager import RiskManager
 from bot.strategies.base import strategy_registry
 from bot.strategies.ensemble import SignalEnsemble
+from bot.strategies.indicators import calculate_atr
 from bot.strategies.regime import MarketRegimeDetector
 from bot.strategies.trend_filter import TrendFilter
 
@@ -384,10 +385,40 @@ class TradingBot:
                 # Execute on first available exchange
                 for name, engine in self._execution_engines.items():
                     if self._risk_manager:
-                        qty = self._risk_manager.calculate_position_size(
-                            self._risk_manager._current_portfolio_value or 10000,
-                            candles[-1].close,
-                        )
+                        # Try ATR-based dynamic sizing first
+                        try:
+                            atr = calculate_atr(
+                                candles,
+                                period=self._settings.atr_period,
+                            )
+                        except Exception:
+                            atr = None
+                        if atr is not None and atr > 0:
+                            qty = (
+                                self._risk_manager
+                                .calculate_dynamic_position_size(
+                                    self._risk_manager
+                                    ._current_portfolio_value
+                                    or 10000,
+                                    candles[-1].close,
+                                    atr,
+                                    risk_per_trade_pct=self._settings
+                                    .risk_per_trade_pct,
+                                    atr_multiplier=self._settings
+                                    .atr_multiplier,
+                                )
+                            )
+                        else:
+                            # Fallback to fixed % sizing
+                            qty = (
+                                self._risk_manager
+                                .calculate_position_size(
+                                    self._risk_manager
+                                    ._current_portfolio_value
+                                    or 10000,
+                                    candles[-1].close,
+                                )
+                            )
                     else:
                         qty = 0.01
 

@@ -54,6 +54,11 @@ class Settings(BaseSettings):
     trailing_stop_enabled: bool = False
     trailing_stop_pct: float = Field(default=2.0, ge=0, le=100)
 
+    # Dynamic position sizing (ATR-based)
+    risk_per_trade_pct: float = Field(default=1.0, ge=0, le=100)
+    atr_multiplier: float = Field(default=2.0, gt=0)
+    atr_period: int = Field(default=14, ge=1)
+
     # Paper trading
     paper_initial_balance: float = Field(default=10000.0, gt=0)
     paper_fee_pct: float = Field(default=0.1, ge=0, le=100)

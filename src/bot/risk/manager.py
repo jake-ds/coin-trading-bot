@@ -136,6 +136,47 @@ class RiskManager:
         max_value = portfolio_value * (self._max_position_size_pct / 100)
         return max_value / price
 
+    def calculate_dynamic_position_size(
+        self,
+        portfolio_value: float,
+        price: float,
+        atr: float,
+        risk_per_trade_pct: float = 1.0,
+        atr_multiplier: float = 2.0,
+    ) -> float:
+        """Calculate volatility-adjusted position size using ATR.
+
+        Risks the same dollar amount per trade regardless of volatility:
+        - In volatile markets (high ATR), take smaller positions.
+        - In quiet markets (low ATR), take larger positions.
+
+        Formula:
+            risk_amount = portfolio_value * risk_per_trade_pct / 100
+            position_size = risk_amount / (atr * atr_multiplier)
+
+        The result is capped at max_position_size_pct of portfolio.
+
+        Args:
+            portfolio_value: Total portfolio value in quote currency.
+            price: Current asset price.
+            atr: Average True Range value.
+            risk_per_trade_pct: Percentage of portfolio to risk per trade (default 1.0%).
+            atr_multiplier: Multiplier for ATR to set risk distance (default 2.0).
+
+        Returns:
+            Position size in base currency (quantity), or 0.0 if inputs are invalid.
+        """
+        if price <= 0 or portfolio_value <= 0 or atr <= 0 or atr_multiplier <= 0:
+            return 0.0
+
+        risk_amount = portfolio_value * risk_per_trade_pct / 100
+        position_size = risk_amount / (atr * atr_multiplier)
+
+        # Cap at max_position_size_pct
+        max_value = portfolio_value * (self._max_position_size_pct / 100)
+        max_qty = max_value / price
+        return min(position_size, max_qty)
+
     def calculate_stop_loss(self, entry_price: float, side: str = "BUY") -> float:
         """Calculate stop-loss price."""
         if side == "BUY":

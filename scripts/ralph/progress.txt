@@ -26,6 +26,8 @@ Started: 2026년 2월 22일 일요일 00시 13분 50초 KST
 - **MarketRegimeDetector pattern**: Create `MarketRegimeDetector` in `initialize()`. In `_trading_cycle()`, detect regime from primary candles (needs `required_history_length` candles). Call `strategy.adapt_to_regime(regime)` on each active strategy BEFORE `collect_signals()`. Regime detection errors caught gracefully (strategies use default params). Tests using MagicMock candles skip regime detection because `ta` library fails on mocks.
 - **adapt_to_regime pattern**: Optional method on `BaseStrategy` (default no-op). Strategies store `_original_*` params in `__init__` and `_regime_disabled` flag (default False). `adapt_to_regime()` sets params/flags based on regime; `analyze()` checks `_regime_disabled` first and returns HOLD if True. Each call to `adapt_to_regime()` sets state from scratch (not incrementally).
 - **OHLCV validators**: Model enforces `high >= max(open, close)` and `low <= min(open, close)`. Test candle generators must satisfy these constraints.
+- **ATR pattern**: `calculate_atr(candles, period)` in `strategies/indicators.py`. Needs `period + 1` candles. Returns `None` if insufficient data. In main.py, wrap in try/except for graceful fallback when MagicMock candles are used by tests. Use `timedelta(hours=idx)` for test candle timestamps to avoid hour overflow.
+- **Dynamic position sizing**: `risk_manager.calculate_dynamic_position_size(portfolio_value, price, atr, risk_per_trade_pct, atr_multiplier)` — capped at `max_position_size_pct`. Falls back to `calculate_position_size()` when ATR unavailable.
 - **DCA confirm_buy pattern**: After DCAStrategy.analyze() returns BUY, call `strategy.confirm_buy(buy_time, amount, quantity)` to commit state. analyze() is idempotent and side-effect-free.
 - **BacktestEngine entry_cost**: Track `entry_cost = cash` (total cash before buy, including fee) and compute PnL as `cash_after_sell - entry_cost`
 - **RiskManager pipeline**: After BUY, call `risk_manager.add_position(symbol, qty, price)`. After SELL, get position entry price via `risk_manager.get_position(symbol)`, calculate `pnl = (sell_price - entry_price) * qty`, call `record_trade_pnl(pnl)` then `remove_position(symbol)`. Call `check_and_reset_daily()` at start of each cycle for auto daily-loss-limit reset. Update portfolio value from `paper_portfolio.total_value` each cycle.
@@ -467,4 +469,34 @@ Started: 2026년 2월 22일 일요일 00시 13분 50초 KST
   - Partial signals require the opposite direction to have 0 confirmations — prevents conflicting partial signals
   - `bool()` cast on all boolean metadata values to avoid numpy bool issues (consistent with other strategies)
   - Test count baseline: 666 tests passing as of V2-016
+---
+
+## 2026-02-22 - V2-017: Dynamic position sizing with ATR-based volatility adjustment
+- **Implemented:**
+  - New `calculate_atr()` and `calculate_atr_series()` functions in `src/bot/strategies/indicators.py` — shared ATR calculation utility
+  - ATR uses true range: `max(high - low, |high - prev_close|, |low - prev_close|)` averaged over configurable period
+  - New `calculate_dynamic_position_size()` method on `RiskManager` — volatility-adjusted sizing
+  - Formula: `risk_amount = portfolio_value * risk_per_trade_pct / 100; position_size = risk_amount / (atr * atr_multiplier)`
+  - Result capped at `max_position_size_pct` regardless of ATR value
+  - In volatile markets (high ATR), takes smaller positions; in quiet markets (low ATR), takes larger positions
+  - Added `risk_per_trade_pct` (default 1.0%), `atr_multiplier` (default 2.0), `atr_period` (default 14) to Settings in config.py
+  - Wired into `_trading_cycle()`: calculates ATR from recent candles, uses dynamic sizing when ATR available, falls back to fixed % sizing when insufficient candle data
+  - ATR calculation wrapped in try/except for graceful fallback when candle data is MagicMock (existing test pattern)
+  - Exported `calculate_atr` and `calculate_atr_series` from `strategies/__init__.py`
+- **Files created:**
+  - `src/bot/strategies/indicators.py` — ATR calculation utility
+  - `tests/strategies/test_v2_017_dynamic_sizing.py` — 32 new tests
+- **Files modified:**
+  - `src/bot/risk/manager.py` — added `calculate_dynamic_position_size()` method
+  - `src/bot/config.py` — added `risk_per_trade_pct`, `atr_multiplier`, `atr_period` settings
+  - `src/bot/main.py` — import calculate_atr, use dynamic sizing in _trading_cycle() with fallback
+  - `src/bot/strategies/__init__.py` — exported calculate_atr, calculate_atr_series
+- **Tests:** 698 tests passing (666 previous + 32 new), ruff check passes
+- **Learnings for future iterations:**
+  - `calculate_atr` must be wrapped in try/except in main.py because existing integration tests use MagicMock candles where `c.high` returns a MagicMock — numpy can't do arithmetic on MagicMocks
+  - For position sizing unit tests, use `max_position_size_pct=100.0` in fixture to avoid cap interference; use dedicated tests for cap behavior with lower max
+  - The cap `min(atr_size, max_qty)` where `max_qty = max_value / price` means even at 100% max, total position value can't exceed portfolio value
+  - Use `timedelta(hours=idx)` instead of `datetime(year, month, day, hour=idx)` for candle timestamps in tests — avoids hour overflow when `idx >= 24`
+  - ATR requires `period + 1` candles minimum (need one previous close for true range calculation)
+  - Test count baseline: 698 tests passing as of V2-017
 ---
