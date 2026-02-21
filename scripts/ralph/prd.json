@@ -17,7 +17,7 @@
         "ruff check passes"
       ],
       "priority": 1,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
@@ -34,7 +34,7 @@
         "ruff check passes"
       ],
       "priority": 2,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
@@ -51,7 +51,7 @@
         "ruff check passes"
       ],
       "priority": 3,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
@@ -67,7 +67,7 @@
         "ruff check passes"
       ],
       "priority": 4,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
@@ -83,7 +83,7 @@
         "ruff check passes"
       ],
       "priority": 5,
-      "passes": false,
+      "passes": true,
       "notes": "Tests MUST mock ccxt - never call real APIs"
     },
     {
@@ -99,7 +99,7 @@
         "ruff check passes"
       ],
       "priority": 6,
-      "passes": false,
+      "passes": true,
       "notes": "Tests MUST mock ccxt - never call real APIs"
     },
     {
@@ -116,7 +116,7 @@
         "ruff check passes"
       ],
       "priority": 7,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
@@ -133,7 +133,7 @@
         "ruff check passes"
       ],
       "priority": 8,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
@@ -149,7 +149,7 @@
         "ruff check passes"
       ],
       "priority": 9,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
@@ -168,7 +168,7 @@
         "ruff check passes"
       ],
       "priority": 10,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
@@ -186,7 +186,7 @@
         "ruff check passes"
       ],
       "priority": 11,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
@@ -203,7 +203,7 @@
         "ruff check passes"
       ],
       "priority": 12,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
@@ -220,7 +220,7 @@
         "ruff check passes"
       ],
       "priority": 13,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
@@ -236,7 +236,7 @@
         "ruff check passes"
       ],
       "priority": 14,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
@@ -255,7 +255,7 @@
         "ruff check passes"
       ],
       "priority": 15,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
@@ -273,7 +273,7 @@
         "ruff check passes"
       ],
       "priority": 16,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
@@ -290,7 +290,7 @@
         "ruff check passes"
       ],
       "priority": 17,
-      "passes": false,
+      "passes": true,
       "notes": "Telegram tests must mock the API - never send real messages"
     },
     {
@@ -307,7 +307,7 @@
         "ruff check passes"
       ],
       "priority": 18,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
@@ -325,7 +325,7 @@
         "ruff check passes"
       ],
       "priority": 19,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
@@ -343,7 +343,7 @@
         "ruff check passes"
       ],
       "priority": 20,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
@@ -360,7 +360,7 @@
         "ruff check passes"
       ],
       "priority": 21,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
@@ -377,7 +377,7 @@
         "ruff check passes"
       ],
       "priority": 22,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
@@ -394,7 +394,7 @@
         "ruff check passes"
       ],
       "priority": 23,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
@@ -411,7 +411,7 @@
         "ruff check passes"
       ],
       "priority": 24,
-      "passes": false,
+      "passes": true,
       "notes": "All tests must use mocked exchanges - no real API calls"
     },
     {
@@ -428,7 +428,7 @@
         "ruff check passes"
       ],
       "priority": 25,
-      "passes": false,
+      "passes": true,
       "notes": ""
     }
   ]

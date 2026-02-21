@@ -1,3 +1,145 @@
 # Ralph Progress Log
 Started: 2026-02-21
 ---
+
+## Codebase Patterns
+- Python 3.10 is available (not 3.11+); pyproject.toml requires-python set to >=3.10
+- Use `asdf local python 3.10.0` to ensure correct Python version
+- pytest exit code 5 (no tests collected) is expected in early stages
+- ruff enforces import sorting (isort rules) — stdlib imports before third-party before local
+---
+
+## 2026-02-21 - US-001
+- Implemented project scaffolding
+- Files created: pyproject.toml, requirements.txt, src/bot/ directory tree with all __init__.py files, src/bot/main.py, src/bot/__main__.py, tests/__init__.py
+- Updated .gitignore to exclude .tool-versions
+- **Learnings for future iterations:**
+  - Python 3.10.0 available via asdf, not 3.11 — adjusted requires-python accordingly
+  - pip needed upgrading (21.2.3 → 26.0.1) for editable installs with pyproject.toml
+  - setuptools build-backend is `setuptools.build_meta` (not `setuptools.backends._legacy:_Backend`)
+  - All dependencies installed successfully: ccxt, ta, pydantic, sqlalchemy, etc.
+---
+
+## 2026-02-21 - US-002
+- Implemented core data models: OHLCV, Order, TradingSignal, Portfolio, Position
+- Files created: src/bot/models/{base.py, ohlcv.py, order.py, signal.py, portfolio.py}, tests/models/{test_ohlcv.py, test_order.py, test_signal.py, test_portfolio.py}
+- Updated src/bot/models/__init__.py with re-exports
+- 32 unit tests all passing
+- **Learnings for future iterations:**
+  - FrozenModel (frozen=True) used as base for immutable data models
+  - Enums in base.py: OrderSide, OrderType, OrderStatus, SignalAction
+  - Position auto-calculates unrealized_pnl via model_validator; uses object.__setattr__ for frozen models
+  - Import from `bot.models` for all model types and enums
+---
+
+## 2026-02-21 - US-003
+- Implemented configuration system with pydantic-settings
+- Files created: src/bot/config.py, tests/test_config.py
+- 19 unit tests all passing
+- **Learnings for future iterations:**
+  - Settings loads from .env and optional YAML config file
+  - Use `config_file="nonexistent.yaml"` in tests to avoid YAML side effects
+  - TradingMode enum: PAPER/LIVE, case-insensitive validation
+  - `load_settings(**overrides)` convenience function for creating Settings
+---
+
+## 2026-02-21 - US-004
+- Implemented ExchangeAdapter ABC + ExchangeFactory with registry pattern
+- Files created: src/bot/exchanges/{base.py, factory.py}, tests/exchanges/test_factory.py
+- 10 unit tests all passing (61 total)
+- **Learnings for future iterations:**
+  - `register_adapter(name, cls)` registers adapters; `ExchangeFactory.create(name, **kwargs)` instantiates
+  - Registry is case-insensitive (stored as lowercase)
+  - Use `_adapter_registry` fixture cleanup in tests to avoid leaking between tests
+---
+
+## 2026-02-21 - US-005
+- Implemented BinanceAdapter with ccxt.async_support
+- Files created: src/bot/exchanges/binance.py, tests/exchanges/test_binance.py
+- 14 unit tests all passing (75 total)
+- **Learnings for future iterations:**
+  - Use `ccxt.async_support` for async adapters, patch `bot.exchanges.binance.ccxt.binance` in tests
+  - `_parse_order()` static method maps ccxt order status to our OrderStatus enum
+  - ccxt errors mapped: BadSymbol→ValueError, NetworkError→ConnectionError, InsufficientFunds→ValueError
+  - `register_adapter("binance", BinanceAdapter)` at module level auto-registers on import
+---
+
+## 2026-02-21 - US-006
+- Implemented UpbitAdapter with ccxt.async_support for KRW pairs
+- Files created: src/bot/exchanges/upbit.py, tests/exchanges/test_upbit.py
+- 13 unit tests all passing (88 total)
+- **Learnings for future iterations:**
+  - Upbit adapter follows same pattern as Binance; ccxt handles KRW-BTC format internally
+  - Test fixture pattern: patch `bot.exchanges.upbit.ccxt.upbit` and yield (adapter, mock_exchange)
+---
+
+## 2026-02-21 - US-007
+- Implemented data storage layer with SQLAlchemy async + aiosqlite
+- Files created: src/bot/data/{models.py, store.py}, tests/data/test_store.py
+- 13 unit tests all passing (101 total)
+- **Learnings for future iterations:**
+  - greenlet is required for SQLAlchemy async — added to dependencies
+  - .gitignore `data/` pattern must be `/data/` (root only) to avoid ignoring src/bot/data/
+  - Use `sqlite+aiosqlite:///:memory:` for in-memory SQLite in tests
+  - DataStore.initialize() creates all tables; use async fixtures for test setup
+---
+
+## 2026-02-21 - US-008 through US-015
+- Implemented DataCollector, strategy system (BaseStrategy+Registry), all technical strategies (MA Crossover, RSI, MACD, Bollinger), DCA, Arbitrage, and RiskManager
+- 180 total tests passing
+---
+
+## 2026-02-21 - US-016
+- Implemented ExecutionEngine with paper trading simulation and live execution retry logic
+- 8 tests for order lifecycle, paper/live modes, retry, and cancel
+---
+
+## 2026-02-21 - US-017
+- Implemented structured logging (structlog), MetricsCollector, and TelegramNotifier
+- Fixed structlog API: use logging.DEBUG/INFO/etc. instead of missing get_level_from_name
+- 18 tests (metrics, logger, telegram with mocked API)
+---
+
+## 2026-02-21 - US-018
+- Implemented BacktestEngine with fees/slippage simulation and trade logging
+- 8 tests with synthetic data and various strategy behaviors
+---
+
+## 2026-02-21 - US-019
+- Implemented TradingBot orchestrator in main.py
+- Used asyncio.create_task for delayed stop in trading loop tests
+- 7 tests for lifecycle, shutdown, and trading cycle
+---
+
+## 2026-02-21 - US-020
+- Implemented MLPredictionStrategy with scikit-learn RandomForestClassifier
+- Features: RSI, momentum, volume change, Bollinger width, MACD histogram
+- Model persistence via pickle save/load
+- 10 tests with synthetic trending data
+---
+
+## 2026-02-21 - US-021
+- Implemented FastAPI monitoring dashboard with HTML page and REST endpoints
+- Endpoints: /status, /trades, /metrics, /portfolio, /health, / (HTML)
+- 12 tests using httpx AsyncClient with ASGI transport
+---
+
+## 2026-02-21 - US-022
+- Implemented CircuitBreaker pattern (CLOSED/OPEN/HALF_OPEN states)
+- Implemented ResilientExchange wrapper with retry and circuit breaker
+- 17 tests for state transitions, timeouts, and resilient calls
+---
+
+## 2026-02-21 - US-023
+- Created Dockerfile (multi-stage, Python 3.11 slim), docker-compose.yml, .dockerignore
+---
+
+## 2026-02-21 - US-024
+- Created integration tests: full pipeline E2E, risk blocking, sell flow, graceful shutdown, config validation
+- 7 integration tests
+---
+
+## 2026-02-21 - US-025
+- Created comprehensive README.md with all required documentation sections
+- **Total: 267 tests passing, all 25 user stories complete**
+---
