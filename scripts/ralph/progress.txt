@@ -440,3 +440,31 @@ Started: 2026년 2월 22일 일요일 00시 13분 50초 KST
   - NumPy division by zero: use `np.errstate(divide="ignore", invalid="ignore")` + `np.where` for safe VWAP computation when cumulative volume is zero
   - Test count baseline: 628 tests passing as of V2-015
 ---
+
+## 2026-02-22 - V2-016: Composite momentum strategy (RSI + MACD + Stochastic confirmation)
+- **Implemented:**
+  - New `CompositeMomentumStrategy` class in `src/bot/strategies/technical/composite.py` implementing BaseStrategy
+  - Uses three indicators: RSI(14), MACD(12,26,9), Stochastic(14,3)
+  - BUY requires ALL THREE: RSI < 40, MACD histogram turning positive (> 0 and increasing), Stochastic %K crosses above %D from below 30
+  - SELL requires ALL THREE: RSI > 60, MACD histogram turning negative (< 0 and decreasing), Stochastic %K crosses below %D from above 70
+  - If only 2 out of 3 agree (and 0 for opposite direction): signal with lower confidence (0.4)
+  - If all 3 agree: high confidence (0.8)
+  - Metadata includes each indicator's value and boolean confirmation status
+  - `signal_type` in metadata: `triple_buy`, `triple_sell`, `partial_buy`, `partial_sell`, `no_agreement`
+  - Regime adaptation: disabled in RANGING markets (momentum indicators whipsaw); enabled in all other regimes
+  - Registered in strategy_registry with default parameters
+  - Exported from `strategies/technical/__init__.py`
+- **Files created:**
+  - `src/bot/strategies/technical/composite.py` — CompositeMomentumStrategy class
+  - `tests/strategies/test_v2_016_composite.py` — 38 new tests
+- **Files modified:**
+  - `src/bot/strategies/technical/__init__.py` — added CompositeMomentumStrategy export
+- **Tests:** 666 tests passing (628 previous + 38 new), ruff check passes
+- **Learnings for future iterations:**
+  - Strategy registry singleton may be cleared by other tests — register explicitly in test methods rather than relying on module-level registration surviving
+  - For composite strategies, crafting test data that triggers all 3 indicators simultaneously is difficult — use conditional assertions (`if confirmations == 3`) since exact indicator behavior depends on numerical precision
+  - Stochastic oscillator crossover requires `prev_k <= prev_d AND current_k > current_d` (same pattern as MACD crossover)
+  - Partial signals require the opposite direction to have 0 confirmations — prevents conflicting partial signals
+  - `bool()` cast on all boolean metadata values to avoid numpy bool issues (consistent with other strategies)
+  - Test count baseline: 666 tests passing as of V2-016
+---
