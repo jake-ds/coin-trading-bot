@@ -28,7 +28,7 @@ ENV/
 .env.*.local
 
 # Data & databases
-data/
+/data/
 *.db
 *.sqlite3
 
