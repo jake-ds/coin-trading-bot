@@ -7,7 +7,9 @@ Started: 2026년 2월 22일 일요일 00시 13분 50초 KST
 - **CORS**: Use `CORSMiddleware` from `fastapi.middleware.cors` with configurable origins
 - **Model serialization**: Use `joblib.dump()`/`joblib.load()` instead of pickle for sklearn models
 - **Config pattern**: Add new settings to `Settings` class with defaults that maintain backward compat
-- **Test count baseline**: 285 tests passing as of V2-002
+- **Test count baseline**: 313 tests passing as of V2-003
+- **PaperPortfolio**: Optional `paper_portfolio` param in `ExecutionEngine.__init__` — defaults to `None` for backward compat; when provided, `_paper_execute` checks balance via `buy()`/`sell()` and returns `None` if rejected
+- **Config for paper trading**: `paper_initial_balance` (default 10000.0) and `paper_fee_pct` (default 0.1) in Settings
 - **ResilientExchange wrapping**: In `_init_exchanges()`, wrap each adapter with `ResilientExchange(adapter)` after creation
 - **Telegram wiring**: Check both `telegram_bot_token` and `telegram_chat_id` are non-empty; send on startup, shutdown, trade execution, and errors
 - **Dashboard wiring**: Import `bot.dashboard.app` as `dashboard_module`; call `dashboard_module.update_state()` after each cycle; start uvicorn via `asyncio.ensure_future()` with `_serve_safe` wrapper to catch `SystemExit`
@@ -56,4 +58,33 @@ Started: 2026년 2월 22일 일요일 00시 13분 50초 KST
   - `TradingSignal` requires `strategy_name` — always include it when constructing test signals
   - Dashboard state is a module-level dict in `bot.dashboard.app` — import as `dashboard_module` and use `update_state()` / `get_state()`
   - Tests that call `bot.initialize()` will attempt to start uvicorn — the `_serve_safe` wrapper prevents test crashes
+---
+
+## 2026-02-22 - V2-003: Paper trading portfolio simulator with balance tracking
+- **Implemented:**
+  - New `PaperPortfolio` class in `src/bot/execution/paper_portfolio.py` with full balance tracking
+  - Tracks: cash balance, open positions (qty, entry_price, entry_time), trade history with fees
+  - `buy()` deducts cost + fee, returns False on insufficient balance; averages entry price on additional buys
+  - `sell()` adds proceeds - fee, returns False on no position/insufficient qty; supports partial sells
+  - Properties: `total_value`, `unrealized_pnl`, `cash`, `positions`, `trade_history`, `fee_pct`
+  - `update_price()` for marking positions to market
+  - Integrated into `ExecutionEngine` via optional `paper_portfolio` parameter (backward compatible)
+  - When portfolio provided, `_paper_execute` checks balance and calculates real fees
+  - Wired into `main.py`: `PaperPortfolio` created in paper mode with configurable initial balance and fee
+  - Added `paper_initial_balance` and `paper_fee_pct` to `Settings` in config.py
+  - Exported `PaperPortfolio` from `execution/__init__.py`
+- **Files created:**
+  - `src/bot/execution/paper_portfolio.py`
+  - `tests/execution/test_paper_portfolio.py`
+- **Files modified:**
+  - `src/bot/execution/engine.py` — added `paper_portfolio` param, balance checking in `_paper_execute`
+  - `src/bot/execution/__init__.py` — exported `PaperPortfolio`
+  - `src/bot/main.py` — creates and wires `PaperPortfolio` in paper mode
+  - `src/bot/config.py` — added `paper_initial_balance`, `paper_fee_pct` settings
+- **Tests:** 313 tests passing (285 previous + 28 new), ruff check passes
+- **Learnings for future iterations:**
+  - ExecutionEngine backward compat: add new params with `None` default so existing tests don't break
+  - Use `TYPE_CHECKING` guard for imports that could cause circular dependencies
+  - Float comparison for positions: use epsilon (1e-10) when checking if remaining qty is zero
+  - Test data must account for fees: 0.2 BTC at 50000 with 0.1% fee costs 10010, not 10000
 ---
