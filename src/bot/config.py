@@ -71,6 +71,11 @@ class Settings(BaseSettings):
     timeframes: list[str] = Field(default_factory=lambda: ["15m", "1h", "4h", "1d"])
     trend_timeframe: str = "4h"
 
+    # Smart execution
+    prefer_limit_orders: bool = True
+    limit_order_timeout_seconds: float = Field(default=30.0, gt=0)
+    twap_chunk_count: int = Field(default=5, ge=1)
+
     # WebSocket feed
     websocket_enabled: bool = False
     websocket_poll_interval: float = Field(default=5.0, gt=0)

@@ -17,6 +17,7 @@ from bot.execution.engine import ExecutionEngine
 from bot.execution.paper_portfolio import PaperPortfolio
 from bot.execution.position_manager import ExitType, PositionManager
 from bot.execution.resilient import ResilientExchange
+from bot.execution.smart_executor import SmartExecutor
 from bot.models import OrderSide, SignalAction, TradingSignal
 from bot.monitoring.logger import setup_logging
 from bot.monitoring.telegram import TelegramNotifier
@@ -112,11 +113,21 @@ class TradingBot:
                 fee_pct=self._settings.paper_fee_pct,
             )
         for exchange in self._exchanges:
+            # Create SmartExecutor for live trading with limit order optimization
+            smart_exec = None
+            if not is_paper:
+                smart_exec = SmartExecutor(
+                    exchange=exchange,
+                    prefer_limit_orders=self._settings.prefer_limit_orders,
+                    limit_order_timeout_seconds=self._settings.limit_order_timeout_seconds,
+                    twap_chunk_count=self._settings.twap_chunk_count,
+                )
             self._execution_engines[exchange.name] = ExecutionEngine(
                 exchange=exchange,
                 store=self._store,
                 paper_trading=is_paper,
                 paper_portfolio=self._paper_portfolio,
+                smart_executor=smart_exec,
             )
 
         # Initialize WebSocket feed (if enabled and exchanges available)

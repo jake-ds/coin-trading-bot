@@ -15,6 +15,7 @@ from bot.models import Order, OrderSide, OrderStatus, OrderType, TradingSignal
 
 if TYPE_CHECKING:
     from bot.execution.paper_portfolio import PaperPortfolio
+    from bot.execution.smart_executor import SmartExecutor
 
 logger = structlog.get_logger()
 
@@ -30,6 +31,7 @@ class ExecutionEngine:
         max_retries: int = 3,
         retry_delay: float = 1.0,
         paper_portfolio: PaperPortfolio | None = None,
+        smart_executor: SmartExecutor | None = None,
     ):
         self._exchange = exchange
         self._store = store
@@ -38,6 +40,7 @@ class ExecutionEngine:
         self._retry_delay = retry_delay
         self._pending_orders: dict[str, Order] = {}
         self._paper_portfolio = paper_portfolio
+        self._smart_executor = smart_executor
 
     async def execute_signal(
         self,
@@ -139,7 +142,37 @@ class ExecutionEngine:
         quantity: float,
         price: float | None,
     ) -> Order | None:
-        """Execute order on real exchange with retry logic."""
+        """Execute order on real exchange with retry logic.
+
+        If SmartExecutor is configured, delegates to it for intelligent
+        order execution (limit orders with fallback, TWAP for large orders).
+        """
+        # Use SmartExecutor when available
+        if self._smart_executor is not None and price is not None:
+            try:
+                result = await self._smart_executor.execute_smart(
+                    symbol=symbol,
+                    side=side,
+                    quantity=quantity,
+                    price=price,
+                )
+                if isinstance(result, list):
+                    # TWAP returns multiple orders — return the last one
+                    # (all are saved individually)
+                    for twap_order in result:
+                        self._pending_orders[twap_order.id] = twap_order
+                    return result[-1] if result else None
+                if result:
+                    self._pending_orders[result.id] = result
+                return result
+            except Exception as e:
+                logger.warning(
+                    "smart_executor_failed_falling_back",
+                    symbol=symbol,
+                    error=str(e),
+                )
+                # Fall through to direct execution
+
         for attempt in range(self._max_retries):
             try:
                 order = await self._exchange.create_order(

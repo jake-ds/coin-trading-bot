@@ -5,13 +5,17 @@ from bot.execution.engine import ExecutionEngine
 from bot.execution.paper_portfolio import PaperPortfolio
 from bot.execution.position_manager import ExitType, PositionManager
 from bot.execution.resilient import ResilientExchange
+from bot.execution.smart_executor import FillMetrics, SmartExecutor, TWAPPlan
 
 __all__ = [
     "CircuitBreaker",
     "CircuitState",
     "ExecutionEngine",
     "ExitType",
+    "FillMetrics",
     "PaperPortfolio",
     "PositionManager",
     "ResilientExchange",
+    "SmartExecutor",
+    "TWAPPlan",
 ]
