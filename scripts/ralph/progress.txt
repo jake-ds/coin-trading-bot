@@ -413,3 +413,30 @@ Started: 2026년 2월 22일 일요일 00시 13분 50초 KST
   - Strategy registry singleton may be cleared by other tests — don't rely on registry state in tests; test constructor defaults instead
   - `make_squeeze_candles` helper: stable phase uses meaningful variation (±3 points) while squeeze phase uses tiny variation (±0.001) to create clear BB width differential
 ---
+
+## 2026-02-22 - V2-015: VWAP strategy and volume profile analysis
+- **Implemented:**
+  - New `VWAPStrategy` class in `src/bot/strategies/technical/vwap.py` implementing BaseStrategy
+  - VWAP calculation: cumulative(typical_price × volume) / cumulative(volume), where typical_price = (high + low + close) / 3
+  - BUY signal: price crosses above VWAP from below with volume > multiplier × rolling average (institutional accumulation)
+  - SELL signal: price crosses below VWAP from above with volume > multiplier × rolling average (institutional distribution)
+  - VWAP bands: ±1 and ±2 standard deviations from VWAP (variance weighted by volume)
+  - Confidence calculation: weighted combination of volume strength (60%) and VWAP proximity (40%)
+  - Volume analysis: rolling average volume with configurable period and multiplier threshold
+  - Metadata includes: vwap, vwap_distance_pct, upper/lower bands (1 & 2 std), volume_ratio, volume_increasing, std_dev, crossover direction
+  - Regime adaptation: disabled in HIGH_VOLATILITY (price whips through VWAP), enabled in all other regimes
+  - Registered in strategy_registry with default parameters
+  - Exported from `strategies/technical/__init__.py`
+- **Files created:**
+  - `src/bot/strategies/technical/vwap.py` — VWAPStrategy class
+  - `tests/strategies/test_v2_015_vwap.py` — 28 new tests
+- **Files modified:**
+  - `src/bot/strategies/technical/__init__.py` — added VWAPStrategy export
+- **Tests:** 628 tests passing (600 previous + 28 new), ruff check passes
+- **Learnings for future iterations:**
+  - VWAP crossover needs careful test data design: prev_close relative to prev_vwap must be on opposite side of current_close relative to current_vwap
+  - Rolling volume average includes the current candle, so volume_ratio = current_vol / rolling_mean (which includes current_vol in the window)
+  - Strategy registry singleton may be cleared by other tests — re-register in test if needed rather than relying on module-level registration surviving
+  - NumPy division by zero: use `np.errstate(divide="ignore", invalid="ignore")` + `np.where` for safe VWAP computation when cumulative volume is zero
+  - Test count baseline: 628 tests passing as of V2-015
+---
