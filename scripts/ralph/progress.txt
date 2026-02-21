@@ -1,4 +1,4 @@
-# Ralph Progress Log - v2 Improvements
+# Ralph Progress Log - v2 Production
 Started: 2026-02-22
 Previous run: 25/25 stories completed, 267 tests passing
 ---
@@ -28,4 +28,11 @@ Previous run: 25/25 stories completed, 267 tests passing
 - httpx AsyncClient with ASGI transport for FastAPI test client
 - asyncio.create_task for delayed stop in trading loop tests
 - .gitignore `data/` must be `/data/` (root only) to avoid ignoring src/bot/data/
+- When adding new parameters to existing classes, ALWAYS use default values matching old behavior
+- ResilientExchange exists in execution/resilient.py but is NOT used by main.py yet
+- TelegramNotifier exists in monitoring/telegram.py but is NOT used by main.py yet
+- Dashboard app.py _bot_state is never updated from main.py
+- ExecutionEngine paper mode has infinite capital — no balance tracking
+- RiskManager.validate_signal() works but add_position/remove_position/record_trade_pnl are never called from main.py
+- BacktestEngine doesn't enforce stop-loss — only checks strategy signals
 ---

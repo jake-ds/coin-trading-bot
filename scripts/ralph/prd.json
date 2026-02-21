@@ -1,266 +1,598 @@
 {
-  "project": "CoinTradingBot-Improvements",
-  "branchName": "ralph/v2-improvements",
-  "description": "Critical bug fixes, security hardening, missing integrations, and quality improvements for the crypto trading bot",
+  "project": "CoinTradingBot-Production",
+  "branchName": "ralph/v2-production",
+  "description": "Transform the toy trading bot into a production-grade system that can actually generate profit. Fix critical bugs, add proper exit logic, signal ensemble, multi-timeframe analysis, position management, realistic backtesting, and production hardening.",
   "userStories": [
     {
-      "id": "FIX-001",
-      "title": "Fix pickle deserialization vulnerability in ML strategy",
-      "description": "As a security-conscious developer, I need to replace unsafe pickle.load() with joblib to prevent arbitrary code execution from malicious model files.",
+      "id": "V2-001",
+      "title": "Security fixes: pickle, XSS, CORS",
+      "description": "Fix all critical security vulnerabilities in one pass.",
       "acceptanceCriteria": [
-        "Replace pickle with joblib for model save/load in src/bot/strategies/ml/prediction.py",
-        "Add joblib to dependencies in pyproject.toml and requirements.txt",
-        "save_model() uses joblib.dump()",
-        "_load_model() uses joblib.load()",
-        "Existing test_save_and_load_model test still passes",
-        "Remove pickle import entirely",
-        "pytest passes, ruff check passes"
+        "Replace pickle with joblib in ml/prediction.py for model save/load",
+        "Add joblib to pyproject.toml and requirements.txt",
+        "HTML-escape all dynamic data in dashboard/app.py using html.escape()",
+        "Add CORSMiddleware to FastAPI with configurable allowed_origins (default localhost)",
+        "Add allowed_origins to config.py Settings",
+        "Remove pickle import entirely from prediction.py",
+        "All existing tests pass, ruff check passes"
       ],
       "priority": 1,
-      "passes": false,
-      "notes": "CWE-502: Deserialization of Untrusted Data. pickle.load() can execute arbitrary code."
-    },
-    {
-      "id": "FIX-002",
-      "title": "Fix Dashboard XSS and add CORS protection",
-      "description": "As a security-conscious operator, I need the dashboard to properly escape HTML output and restrict cross-origin requests.",
-      "acceptanceCriteria": [
-        "All user/trade data in HTML dashboard is escaped with html.escape()",
-        "Add CORSMiddleware to FastAPI app with configurable allowed_origins (default: localhost only)",
-        "Add allowed_origins setting to config.py (default: ['http://localhost:8000'])",
-        "Dashboard still renders correctly with escaped data",
-        "Unit tests for dashboard endpoints still pass",
-        "Add test verifying HTML escaping works",
-        "pytest passes, ruff check passes"
-      ],
-      "priority": 2,
-      "passes": false,
-      "notes": "XSS via f-string HTML in dashboard/app.py lines 77-82"
-    },
-    {
-      "id": "FIX-003",
-      "title": "Wire Dashboard to TradingBot orchestrator",
-      "description": "As an operator, I need the dashboard to show real-time bot status, trades, metrics, and portfolio data instead of empty defaults.",
-      "acceptanceCriteria": [
-        "TradingBot.initialize() imports and calls dashboard.update_state(status='running')",
-        "After each trading cycle, update dashboard state with: latest trades from DataStore, portfolio value, bot status",
-        "TradingBot.shutdown() updates dashboard state to status='stopped'",
-        "Dashboard /trades endpoint returns actual recent trades",
-        "Dashboard /metrics endpoint returns calculated metrics from MetricsCollector",
-        "Dashboard /portfolio endpoint returns current portfolio snapshot",
-        "Start dashboard server in background (uvicorn) during bot.initialize() on configured port",
-        "Unit tests verify dashboard state updates during bot lifecycle",
-        "pytest passes, ruff check passes"
-      ],
-      "priority": 3,
-      "passes": false,
-      "notes": "Currently dashboard _bot_state is never updated from main.py"
-    },
-    {
-      "id": "FIX-004",
-      "title": "Integrate Telegram notifications into orchestrator",
-      "description": "As an operator, I need the bot to actually send Telegram alerts for trade executions, daily summaries, and errors.",
-      "acceptanceCriteria": [
-        "TradingBot.initialize() creates TelegramNotifier if bot_token and chat_id are configured",
-        "After successful order execution, call notifier.notify_trade()",
-        "On trading_cycle_error, call notifier.notify_error()",
-        "Send startup and shutdown notifications",
-        "Gracefully skip notifications if Telegram is not configured (no crash)",
-        "Unit tests with mocked Telegram verify notifications are triggered",
-        "pytest passes, ruff check passes"
-      ],
-      "priority": 4,
-      "passes": false,
-      "notes": "TelegramNotifier exists but is never instantiated or called from main.py"
-    },
-    {
-      "id": "FIX-005",
-      "title": "Use ResilientExchange wrapper in orchestrator",
-      "description": "As an operator, I need exchange API calls to use the circuit breaker and auto-retry logic that was already built.",
-      "acceptanceCriteria": [
-        "TradingBot._init_exchanges() wraps each ExchangeAdapter in ResilientExchange",
-        "Circuit breaker protects all exchange calls (get_ticker, get_ohlcv, create_order)",
-        "When circuit breaker trips, log warning and skip that exchange gracefully",
-        "ResilientExchange implements full ExchangeAdapter interface (get_balance, cancel_order, get_order_status, get_order_book) via _call_with_breaker",
-        "Existing exchange and execution tests still pass",
-        "Add test for circuit breaker integration in orchestrator",
-        "pytest passes, ruff check passes"
-      ],
-      "priority": 5,
-      "passes": false,
-      "notes": "ResilientExchange exists in execution/resilient.py but main.py creates raw adapters"
-    },
-    {
-      "id": "FIX-006",
-      "title": "Add paper trading portfolio balance tracking",
-      "description": "As a paper trader, I need the simulated portfolio to track balances so I can see realistic results instead of having infinite capital.",
-      "acceptanceCriteria": [
-        "ExecutionEngine in paper mode tracks a simulated cash balance (configurable initial capital, default 10000)",
-        "Paper BUY orders deduct from cash balance: cost = quantity * price + fee",
-        "Paper SELL orders add to cash balance: proceeds = quantity * price - fee",
-        "Reject paper orders if insufficient balance",
-        "Track positions: add on BUY, remove on SELL",
-        "Expose current balance and positions as properties",
-        "Paper fee configurable (default 0.1%)",
-        "Unit tests verify balance tracking across buy/sell cycles",
-        "pytest passes, ruff check passes"
-      ],
-      "priority": 6,
-      "passes": false,
-      "notes": "Currently paper_execute() always succeeds with no balance check"
-    },
-    {
-      "id": "FIX-007",
-      "title": "Fix backtest P&L calculation and add buy fee accounting",
-      "description": "As a trader, I need the backtesting engine to accurately calculate P&L including both buy and sell fees.",
-      "acceptanceCriteria": [
-        "Track the total cost of entering a position (buy_price * quantity + buy_fee)",
-        "P&L = sell_proceeds - sell_fee - total_entry_cost",
-        "Change pnl formula from `cash - (position_qty * position_entry)` to correct calculation",
-        "Add test that verifies fee accounting: buy at $100, sell at $110 with 0.1% fee each way, verify exact P&L",
-        "Existing backtest tests still pass (may need updating for correct math)",
-        "pytest passes, ruff check passes"
-      ],
-      "priority": 7,
-      "passes": false,
-      "notes": "Line 99: pnl = cash - (position_qty * position_entry) doesn't account for buy fee"
-    },
-    {
-      "id": "FIX-008",
-      "title": "Add duplicate candle prevention and database indexes",
-      "description": "As a developer, I need the data store to prevent duplicate candles and have proper indexes for query performance.",
-      "acceptanceCriteria": [
-        "Add UNIQUE constraint on (symbol, timeframe, timestamp) in OHLCVRecord model",
-        "save_candles() uses INSERT OR IGNORE (or merge/upsert) to skip duplicates",
-        "Add database indexes: (symbol, timeframe, timestamp) on OHLCVRecord, (symbol, created_at) on TradeRecord",
-        "Existing data store tests pass with the new constraints",
-        "Add test: saving the same candle twice doesn't create duplicates",
-        "Add test: querying with indexes is functionally correct",
-        "pytest passes, ruff check passes"
-      ],
-      "priority": 8,
-      "passes": false,
-      "notes": "Currently save_candles() blindly inserts, causing data bloat"
-    },
-    {
-      "id": "FIX-009",
-      "title": "Fix arbitrage same-exchange validation and DCA state mutation",
-      "description": "As a trader, I need the arbitrage strategy to verify buy/sell are on different exchanges, and DCA to not mutate state during analysis.",
-      "acceptanceCriteria": [
-        "ArbitrageStrategy: after finding best_bid_exchange and best_ask_exchange, verify they are different; return HOLD if same",
-        "Add test: when best bid and ask are from the same exchange, return HOLD signal",
-        "DCAStrategy: only update _last_buy_time, _total_invested, _total_quantity AFTER returning the signal (or use a separate method)",
-        "DCAStrategy: make analyze() idempotent - calling it twice with same data doesn't double-count",
-        "Add test: calling DCA analyze() twice with same timestamp doesn't double the invested amount",
-        "pytest passes, ruff check passes"
-      ],
-      "priority": 9,
-      "passes": false,
-      "notes": "Arbitrage: no check at line 65-67. DCA: mutates state at lines 101-104"
-    },
-    {
-      "id": "FIX-010",
-      "title": "Connect RiskManager to execution pipeline properly",
-      "description": "As a trader, I need the risk manager to track open positions and P&L from actual executions, not just validate signals in isolation.",
-      "acceptanceCriteria": [
-        "After successful BUY execution, call risk_manager.add_position(symbol, qty, price)",
-        "After successful SELL execution, call risk_manager.remove_position(symbol) and risk_manager.record_trade_pnl(pnl)",
-        "Periodically call risk_manager.update_portfolio_value() with current total value",
-        "Reset daily P&L at midnight (or on first cycle of new day)",
-        "Add test: after a buy, risk manager blocks duplicate position for same symbol",
-        "Add test: after hitting daily loss limit, subsequent signals are rejected",
-        "pytest passes, ruff check passes"
-      ],
-      "priority": 10,
-      "passes": false,
-      "notes": "main.py calls validate_signal but never add_position/remove_position/record_trade_pnl"
-    },
-    {
-      "id": "FIX-011",
-      "title": "Add trading cycle overlap prevention and proper error logging",
-      "description": "As an operator, I need the trading loop to prevent overlapping cycles and log errors with full tracebacks.",
-      "acceptanceCriteria": [
-        "Add asyncio.Lock to prevent concurrent _trading_cycle() calls",
-        "If a cycle is still running when the next interval fires, skip (log warning) instead of overlapping",
-        "Change logger.error('trading_cycle_error', error=str(e)) to include exc_info=True for full traceback",
-        "Add structured error context (cycle_number, elapsed_time) to error logs",
-        "Add test: verify lock prevents overlapping cycles",
-        "pytest passes, ruff check passes"
-      ],
-      "priority": 11,
-      "passes": false,
-      "notes": "main.py:127-133 has no overlap protection and swallows tracebacks"
-    },
-    {
-      "id": "FIX-012",
-      "title": "Fix Docker multi-stage build and add resource limits",
-      "description": "As a devops engineer, I need the Docker build to not install dependencies twice and to have proper resource limits.",
-      "acceptanceCriteria": [
-        "Dockerfile: remove redundant `pip install -e .` in runtime stage (already copied from builder)",
-        "Runtime stage only copies installed packages from builder, not reinstalls",
-        "docker-compose.yml: add deploy.resources.limits (memory: 512M, cpus: '1.0')",
-        "docker-compose.yml: add deploy.resources.reservations (memory: 256M)",
-        "Verify `docker build .` succeeds (if Docker is available, otherwise just verify file correctness)",
-        "ruff check passes"
-      ],
-      "priority": 12,
-      "passes": false,
-      "notes": "Dockerfile lines 7 and 23 both install. Compose has no resource limits."
-    },
-    {
-      "id": "FIX-013",
-      "title": "Add backtest integration with RiskManager and result export",
-      "description": "As a trader, I need backtests to apply risk rules (stop-loss, position limits) and export results to JSON/CSV.",
-      "acceptanceCriteria": [
-        "BacktestEngine accepts optional RiskManager parameter",
-        "When RiskManager is provided, signals pass through validate_signal() before execution",
-        "Stop-loss: if position is open and price drops below stop-loss level, auto-sell",
-        "BacktestResult.to_json() serializes results to JSON string",
-        "BacktestResult.to_csv() exports trade log to CSV string",
-        "Add CLI entry point: python -m bot.backtest --strategy ma_crossover --symbol BTC/USDT",
-        "Unit tests for risk-integrated backtest pass",
-        "pytest passes, ruff check passes"
-      ],
-      "priority": 13,
       "passes": false,
       "notes": ""
     },
     {
-      "id": "FIX-014",
-      "title": "Add per-strategy performance tracking and portfolio snapshots",
-      "description": "As an operator, I need to see how each strategy is performing individually and have periodic portfolio snapshots saved.",
+      "id": "V2-002",
+      "title": "Wire Dashboard, Telegram, and ResilientExchange into orchestrator",
+      "description": "Connect the three dead-code components to the actual trading pipeline so monitoring works.",
       "acceptanceCriteria": [
-        "MetricsCollector tracks per-strategy metrics: trades, win_rate, total_pnl per strategy name",
-        "record_trade() accepts strategy_name parameter",
-        "calculate() returns both overall and per_strategy metrics",
-        "TradingBot saves portfolio snapshot to DataStore every N cycles (configurable, default: every 10 cycles)",
-        "Dashboard /metrics endpoint includes per-strategy breakdown",
-        "Unit tests for per-strategy tracking pass",
-        "pytest passes, ruff check passes"
+        "main.py: wrap each exchange adapter in ResilientExchange after creation",
+        "ResilientExchange: implement ALL ExchangeAdapter methods (get_balance, cancel_order, get_order_status, get_order_book) via _call_with_breaker",
+        "main.py: create TelegramNotifier if bot_token+chat_id configured; send notification on trade execution, errors, startup/shutdown",
+        "main.py: call dashboard.update_state() after each trading cycle with status, recent trades, portfolio, metrics",
+        "Start uvicorn dashboard server as background asyncio task during initialize()",
+        "Gracefully skip Telegram if not configured",
+        "Add tests for wiring (mocked dependencies), all existing tests pass",
+        "ruff check passes"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "V2-003",
+      "title": "Paper trading portfolio simulator with balance tracking",
+      "description": "Paper trading must simulate a real portfolio with finite capital, fee deduction, and position tracking.",
+      "acceptanceCriteria": [
+        "New class PaperPortfolio in execution/paper_portfolio.py",
+        "Tracks: cash balance (configurable initial, default 10000), open positions dict[symbol -> {qty, entry_price, entry_time}], trade history",
+        "buy(symbol, qty, price) deducts cost + fee from cash, adds position; returns False if insufficient balance",
+        "sell(symbol, qty, price) adds proceeds - fee to cash, removes/reduces position; returns False if no position",
+        "Properties: total_value (cash + sum of position values at current prices), unrealized_pnl, cash, positions",
+        "Fee configurable (default 0.1%)",
+        "ExecutionEngine uses PaperPortfolio in paper mode; rejects orders if insufficient balance",
+        "Tests: buy reduces balance, sell increases, insufficient funds rejected, multiple positions, partial sells",
+        "All existing tests pass (update as needed), ruff check passes"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "V2-004",
+      "title": "Database indexes, duplicate candle prevention, data quality validation",
+      "description": "Ensure data integrity and query performance for production-scale data.",
+      "acceptanceCriteria": [
+        "Add UNIQUE constraint on (symbol, timeframe, timestamp) in OHLCVRecord SQLAlchemy model",
+        "save_candles() uses INSERT OR IGNORE to skip duplicates silently",
+        "Add composite index on (symbol, timeframe, timestamp) for OHLCVRecord",
+        "Add composite index on (symbol, created_at) for TradeRecord",
+        "Add data validation in DataCollector: reject candles where high < low, close > high, close < low, or volume < 0",
+        "Add staleness check: warn if latest candle timestamp is more than 2x the timeframe behind current time",
+        "Tests for duplicate prevention, index existence, data validation rejection",
+        "All existing tests pass, ruff check passes"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "V2-005",
+      "title": "Fix RiskManager pipeline: position tracking, PnL recording, daily reset",
+      "description": "Connect RiskManager to actual execution so it tracks real positions and enforces limits.",
+      "acceptanceCriteria": [
+        "After successful BUY execution in _trading_cycle(), call risk_manager.add_position(symbol, qty, price)",
+        "After successful SELL execution, calculate realized PnL, call risk_manager.remove_position(symbol) and record_trade_pnl(pnl)",
+        "Call risk_manager.update_portfolio_value() with paper portfolio or exchange balance each cycle",
+        "Auto-reset daily PnL at start of each new day (check date in _trading_cycle)",
+        "Prevent duplicate BUY: risk_manager.validate_signal already checks, but ensure it receives accurate position state",
+        "Tests: after buy, duplicate buy for same symbol is blocked; after daily loss limit hit, all signals rejected; resume next day",
+        "All existing tests pass, ruff check passes"
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "V2-006",
+      "title": "Fix strategy bugs: arbitrage same-exchange, DCA state mutation, backtest PnL formula",
+      "description": "Fix the known logic bugs in strategies and backtest engine.",
+      "acceptanceCriteria": [
+        "ArbitrageStrategy: verify best_bid_exchange != best_ask_exchange; return HOLD if same",
+        "DCAStrategy: don't mutate _last_buy_time/_total_invested in analyze(); instead, add a separate confirm_buy() method called after execution succeeds",
+        "DCAStrategy.analyze() becomes idempotent — calling twice with same data returns same result without side effects",
+        "BacktestEngine: track entry_cost = (position_qty * buy_price) + buy_fee; pnl = sell_proceeds - sell_fee - entry_cost",
+        "Add test: arbitrage returns HOLD when best bid/ask from same exchange",
+        "Add test: DCA analyze() called twice returns same signal without doubling invested amount",
+        "Add test: backtest PnL correctly accounts for both buy and sell fees",
+        "All existing tests pass (update if needed for corrected behavior), ruff check passes"
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "V2-007",
+      "title": "Trading cycle safety: overlap lock, error tracebacks, cycle metrics",
+      "description": "Make the main trading loop robust for 24/7 operation.",
+      "acceptanceCriteria": [
+        "Add asyncio.Lock in TradingBot to prevent concurrent _trading_cycle() calls",
+        "If lock is held when next interval fires, skip cycle and log warning with elapsed time",
+        "Log errors with exc_info=True for full traceback instead of just str(e)",
+        "Track cycle_count, average_cycle_duration, last_cycle_time as bot state",
+        "Expose cycle metrics via dashboard /status endpoint",
+        "Docker healthcheck: /health returns unhealthy if last cycle was >5 minutes ago",
+        "Fix Docker multi-stage build: remove redundant pip install in runtime stage",
+        "docker-compose.yml: add deploy.resources.limits (memory: 512M, cpus: 1.0)",
+        "Tests for lock behavior, all existing tests pass, ruff check passes"
+      ],
+      "priority": 7,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "V2-008",
+      "title": "Stop-loss and take-profit order manager",
+      "description": "Implement actual exit logic: stop-loss and take-profit orders that are monitored and executed automatically. This is the single most critical feature for profitability.",
+      "acceptanceCriteria": [
+        "New class PositionManager in execution/position_manager.py",
+        "When a position is opened, PositionManager stores: symbol, entry_price, quantity, stop_loss_price (configurable %, default 3%), take_profit_price (configurable %, default 5%), trailing_stop_enabled (bool), trailing_stop_pct (default 2%)",
+        "check_exits(symbol, current_price) -> ExitSignal | None: returns SELL signal if price <= stop_loss or price >= take_profit",
+        "Trailing stop: after price moves up from entry, move stop_loss up to trail by trailing_stop_pct below highest price seen",
+        "Track highest_price_since_entry for each position",
+        "Multiple take-profit levels: TP1 at +3% (sell 50%), TP2 at +5% (sell remaining 50%)",
+        "main.py _trading_cycle(): BEFORE running strategies, check all open positions against PositionManager exit conditions",
+        "If exit triggered, execute sell immediately (don't wait for strategy signal)",
+        "Unit tests: stop-loss triggers at correct price, take-profit triggers, trailing stop moves up with price, partial TP1 exit",
+        "All existing tests pass, ruff check passes"
+      ],
+      "priority": 8,
+      "passes": false,
+      "notes": "THIS IS THE MOST IMPORTANT FEATURE. Without exits, the bot holds losers forever."
+    },
+    {
+      "id": "V2-009",
+      "title": "Signal ensemble voting system",
+      "description": "Instead of executing every strategy signal independently, combine signals into a single weighted vote per symbol.",
+      "acceptanceCriteria": [
+        "New class SignalEnsemble in strategies/ensemble.py",
+        "collect_signals(symbol, strategies, candles) -> list[TradingSignal]: run all active strategies, collect signals",
+        "vote(signals) -> TradingSignal: combine signals into single decision",
+        "Voting logic: BUY requires at least min_agreement (configurable, default 2) strategies agreeing on BUY; same for SELL",
+        "Final confidence = weighted average of agreeing strategies' confidence scores",
+        "Strategy weights configurable via dict[strategy_name -> float] (default all 1.0)",
+        "If no agreement threshold met, return HOLD regardless of individual signals",
+        "CONFLICT handling: if some say BUY and others say SELL, return HOLD",
+        "Add to config.py: signal_min_agreement (int, default 2), strategy_weights (dict, optional)",
+        "Modify main.py _trading_cycle(): replace per-strategy execution with SignalEnsemble.vote()",
+        "Tests: 2 BUY + 1 HOLD = BUY (agreement met); 1 BUY + 1 SELL = HOLD (conflict); all HOLD = HOLD",
+        "All existing tests pass, ruff check passes"
+      ],
+      "priority": 9,
+      "passes": false,
+      "notes": "Critical for avoiding the current bug where 3 strategies BUYing causes 3x position"
+    },
+    {
+      "id": "V2-010",
+      "title": "Multi-timeframe data collection and trend confirmation",
+      "description": "Collect data on multiple timeframes and use higher timeframe for trend direction confirmation.",
+      "acceptanceCriteria": [
+        "Config: add timeframes list (default ['15m', '1h', '4h', '1d']) and trend_timeframe (default '4h')",
+        "DataCollector.collect_once() fetches all configured timeframes",
+        "New class TrendFilter in strategies/trend_filter.py",
+        "TrendFilter.get_trend(symbol, candles_4h) -> 'BULLISH' | 'BEARISH' | 'NEUTRAL': uses 20-period SMA slope + ADX",
+        "ADX > 25 = trending; ADX < 20 = ranging",
+        "SMA slope > 0 + ADX > 25 = BULLISH; SMA slope < 0 + ADX > 25 = BEARISH; else NEUTRAL",
+        "Modify SignalEnsemble: accept TrendFilter; reject BUY signals when trend is BEARISH, reject SELL signals when trend is BULLISH",
+        "Modify _trading_cycle(): fetch higher-timeframe candles from DataStore, pass to TrendFilter",
+        "Tests: BUY rejected in BEARISH trend; BUY allowed in BULLISH/NEUTRAL; trend correctly detected from sample data",
+        "All existing tests pass, ruff check passes"
+      ],
+      "priority": 10,
+      "passes": false,
+      "notes": "Trading against the trend is the #1 way to lose money"
+    },
+    {
+      "id": "V2-011",
+      "title": "Market regime detector with strategy adaptation",
+      "description": "Detect whether the market is trending, ranging, or volatile, and adjust strategy behavior accordingly.",
+      "acceptanceCriteria": [
+        "New class MarketRegimeDetector in strategies/regime.py",
+        "Regime enum: TRENDING_UP, TRENDING_DOWN, RANGING, HIGH_VOLATILITY",
+        "Detection uses: ADX (trend strength), ATR ratio (volatility relative to price), Bollinger Band width",
+        "ADX > 25 + positive DI = TRENDING_UP; ADX > 25 + negative DI = TRENDING_DOWN",
+        "ADX < 20 + low BB width = RANGING",
+        "ATR > 2x average ATR = HIGH_VOLATILITY",
+        "Each BaseStrategy gets optional adapt_to_regime(regime) method that adjusts parameters",
+        "MACrossover: in TRENDING, use shorter periods (10/30); in RANGING, disable (return HOLD)",
+        "RSI: in RANGING, use tighter bounds (35/65); in TRENDING, use standard (30/70)",
+        "Bollinger: in RANGING, enable; in TRENDING, disable",
+        "main.py: detect regime before running strategies each cycle, pass to ensemble",
+        "Tests: regime correctly detected from synthetic data for each type; strategies adapt parameters",
+        "All existing tests pass, ruff check passes"
+      ],
+      "priority": 11,
+      "passes": false,
+      "notes": "Using the wrong strategy in the wrong regime is guaranteed loss"
+    },
+    {
+      "id": "V2-012",
+      "title": "Enhanced MA Crossover with volume confirmation and momentum filter",
+      "description": "Transform the basic MA crossover into a signal that actually works by adding confirmation filters.",
+      "acceptanceCriteria": [
+        "Add volume confirmation: BUY signal only valid if current volume > 1.5x 20-period average volume",
+        "Add momentum confirmation: BUY only if close > open on crossover candle (bullish candle)",
+        "Add trend strength filter: only trade when distance between short and long MA is increasing (expanding, not contracting)",
+        "Add ADX filter: require ADX > 20 for crossover to be valid (don't trade in weak trends)",
+        "Update confidence calculation: combine volume ratio, ADX value, MA distance into weighted confidence score",
+        "Add cooldown: after a signal, wait at least N candles (configurable, default 3) before next signal to avoid whipsaw",
+        "All changes backward-compatible (new parameters have defaults matching old behavior for tests)",
+        "Add new tests for volume confirmation, momentum filter, cooldown; existing tests pass",
+        "ruff check passes"
+      ],
+      "priority": 12,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "V2-013",
+      "title": "Enhanced RSI with divergence detection",
+      "description": "Add bullish/bearish divergence detection to RSI strategy for much higher-quality signals.",
+      "acceptanceCriteria": [
+        "Detect bullish divergence: price makes lower low but RSI makes higher low → strong BUY signal",
+        "Detect bearish divergence: price makes higher high but RSI makes lower high → strong SELL signal",
+        "Divergence lookback window: configurable (default 14 candles)",
+        "Divergence signals have higher confidence (0.8) than simple oversold/overbought (0.5)",
+        "Find local peaks/troughs in both price and RSI using a simple swing detection (compare to N neighbors)",
+        "Regular RSI oversold/overbought still works as fallback, but with lower confidence",
+        "Metadata includes divergence_type: 'bullish_divergence' | 'bearish_divergence' | 'oversold' | 'overbought'",
+        "Tests: bullish divergence detected from crafted data, bearish divergence detected, regular signals still work",
+        "All existing tests pass, ruff check passes"
+      ],
+      "priority": 13,
+      "passes": false,
+      "notes": "RSI divergence is one of the most reliable signals in technical analysis"
+    },
+    {
+      "id": "V2-014",
+      "title": "Bollinger Band squeeze breakout strategy",
+      "description": "Replace naive band-touch logic with squeeze detection + breakout, which is a proven profit-generating pattern.",
+      "acceptanceCriteria": [
+        "Detect Bollinger squeeze: BB width falls below 20-period average of BB width (bands contracting = low volatility)",
+        "After squeeze detected, wait for breakout: close above upper band = BUY breakout; close below lower band = SELL breakout",
+        "Squeeze must last at least 5 candles to be valid (avoid false squeezes)",
+        "Breakout confirmation: volume on breakout candle must be > 1.5x average volume",
+        "After breakout signal, set cooldown (10 candles) to avoid re-entering during same move",
+        "Keep the old band-touch logic as a separate mode (configurable: mode='squeeze' or mode='mean_reversion')",
+        "Default mode = 'squeeze' (the profitable one)",
+        "Tests: squeeze detected, breakout with volume confirms, breakout without volume rejected",
+        "All existing tests pass (they use old mode implicitly), ruff check passes"
       ],
       "priority": 14,
       "passes": false,
       "notes": ""
     },
     {
-      "id": "FIX-015",
-      "title": "Comprehensive integration test for the improved pipeline",
-      "description": "As a developer, I need an end-to-end test that verifies the full improved pipeline: data collection → strategy → risk check (with position tracking) → execution (with balance tracking) → dashboard update → notification.",
+      "id": "V2-015",
+      "title": "VWAP strategy and volume profile analysis",
+      "description": "Add Volume-Weighted Average Price strategy — one of the most used institutional signals.",
       "acceptanceCriteria": [
-        "Integration test creates TradingBot with mocked exchanges returning a known price sequence",
-        "Test runs 3+ trading cycles with a strategy that generates BUY then SELL signals",
-        "Verify: paper portfolio balance decreases after BUY, increases after SELL",
-        "Verify: risk manager tracks the open position after BUY",
-        "Verify: risk manager removes position after SELL",
-        "Verify: dashboard state is updated with trade data after each cycle",
-        "Verify: Telegram notifier is called (mocked) on trade execution",
-        "Verify: metrics show correct win/loss after completed trade",
-        "All existing integration tests still pass",
-        "pytest passes, ruff check passes"
+        "New class VWAPStrategy in strategies/technical/vwap.py implementing BaseStrategy",
+        "Calculate intraday VWAP: sum(price * volume) / sum(volume) using available candles",
+        "BUY signal: price crosses above VWAP from below + volume increasing (institutional accumulation)",
+        "SELL signal: price crosses below VWAP from above + volume increasing (institutional distribution)",
+        "Add VWAP bands: +/- 1 and 2 standard deviations from VWAP",
+        "Confidence scales with distance from VWAP and volume strength",
+        "Register in strategy_registry",
+        "Tests: VWAP calculation correct, crossover signals detected, volume confirmation works",
+        "All existing tests pass, ruff check passes"
       ],
       "priority": 15,
       "passes": false,
-      "notes": "This validates that all FIX-001 through FIX-014 work together correctly"
+      "notes": ""
+    },
+    {
+      "id": "V2-016",
+      "title": "Composite momentum strategy (RSI + MACD + Stochastic confirmation)",
+      "description": "Create a high-quality composite strategy that requires multiple momentum indicators to confirm before signaling.",
+      "acceptanceCriteria": [
+        "New class CompositeMomentumStrategy in strategies/technical/composite.py",
+        "Uses three indicators: RSI(14), MACD(12,26,9), Stochastic(14,3)",
+        "BUY signal requires ALL THREE: RSI < 40 (not extreme oversold, but low), MACD histogram turning positive, Stochastic %K crosses above %D from below 30",
+        "SELL signal requires ALL THREE: RSI > 60, MACD histogram turning negative, Stochastic %K crosses below %D from above 70",
+        "If only 2 out of 3 agree, signal with lower confidence (0.4); if all 3, high confidence (0.8)",
+        "Metadata includes each indicator's value and whether it confirmed",
+        "Register in strategy_registry",
+        "Tests: all-agree signal, partial-agree signal, no-agree hold",
+        "All existing tests pass, ruff check passes"
+      ],
+      "priority": 16,
+      "passes": false,
+      "notes": "Triple confirmation dramatically reduces false signals"
+    },
+    {
+      "id": "V2-017",
+      "title": "Dynamic position sizing with ATR-based volatility adjustment",
+      "description": "Replace fixed percentage position sizing with volatility-adjusted sizing — risk the same dollar amount per trade regardless of volatility.",
+      "acceptanceCriteria": [
+        "New method in RiskManager: calculate_dynamic_position_size(portfolio_value, price, atr, risk_per_trade_pct=1.0) -> float",
+        "Logic: risk_amount = portfolio_value * risk_per_trade_pct / 100; position_size = risk_amount / (atr * atr_multiplier); where atr_multiplier defaults to 2.0",
+        "In volatile markets (high ATR), smaller positions; in quiet markets (low ATR), larger positions",
+        "Cap at max_position_size_pct regardless of ATR",
+        "Add ATR calculation utility in a shared module (strategies/indicators.py)",
+        "ATR period configurable (default 14)",
+        "Modify _trading_cycle: calculate ATR from recent candles, pass to position sizing",
+        "Add config: risk_per_trade_pct (float, default 1.0), atr_multiplier (float, default 2.0)",
+        "Tests: high ATR -> small position, low ATR -> bigger position, never exceeds max",
+        "All existing tests pass, ruff check passes"
+      ],
+      "priority": 17,
+      "passes": false,
+      "notes": "Fixed % sizing means you risk MORE in volatile markets — exactly backwards"
+    },
+    {
+      "id": "V2-018",
+      "title": "WebSocket real-time data feed with ccxt",
+      "description": "Add WebSocket support for real-time price updates instead of polling every 60 seconds.",
+      "acceptanceCriteria": [
+        "New class WebSocketFeed in data/websocket_feed.py",
+        "Uses ccxt's watch_ohlcv / watch_ticker for supported exchanges (Binance supports it)",
+        "Subscribes to configured symbols and timeframes",
+        "On new candle close, triggers a callback (e.g., for strategy analysis)",
+        "On ticker update, store latest price for position monitoring (stop-loss checks)",
+        "Fallback: if WebSocket not supported by exchange, fall back to REST polling (current behavior)",
+        "Add to main.py: start WebSocket feed as background task; PositionManager checks prices from feed",
+        "Feed stores latest prices in a thread-safe dict accessible by PositionManager",
+        "Graceful reconnection on disconnect with exponential backoff",
+        "Tests: mock websocket feed, verify callback triggers, verify reconnection logic",
+        "All existing tests pass, ruff check passes"
+      ],
+      "priority": 18,
+      "passes": false,
+      "notes": "Polling every 60s means the bot can miss a 5% crash and never trigger stop-loss"
+    },
+    {
+      "id": "V2-019",
+      "title": "Smart order execution: limit orders, TWAP, and fee optimization",
+      "description": "Use limit orders by default to pay maker fees (cheaper) instead of market orders, with fallback.",
+      "acceptanceCriteria": [
+        "New class SmartExecutor in execution/smart_executor.py",
+        "Default order type: LIMIT order at current best bid (for BUY) or best ask (for SELL)",
+        "Timeout: if limit order not filled within N seconds (configurable, default 30), cancel and use market order",
+        "For large orders (> 5% of average daily volume), split into smaller chunks over time (TWAP)",
+        "TWAP: split order into N chunks, execute one chunk every M seconds",
+        "Track maker vs taker fills for fee optimization metrics",
+        "Add to config: prefer_limit_orders (bool, default True), limit_order_timeout_seconds (int, default 30), twap_chunk_count (int, default 5)",
+        "Integrate with ExecutionEngine: SmartExecutor wraps the raw exchange order calls",
+        "Tests: limit order placed, timeout triggers market order, TWAP splits correctly",
+        "All existing tests pass, ruff check passes"
+      ],
+      "priority": 19,
+      "passes": false,
+      "notes": "Maker fees are typically 0.02% vs taker 0.1% — 5x cheaper"
+    },
+    {
+      "id": "V2-020",
+      "title": "ML Strategy v2: proper cross-validation, feature engineering, regime awareness",
+      "description": "Fix the ML strategy to use proper methodology that won't overfit.",
+      "acceptanceCriteria": [
+        "Replace random forest with GradientBoostingClassifier (better for financial data, less prone to overfitting)",
+        "Feature engineering: add 20+ features including lag features (returns at t-1, t-2, t-5), rolling stats (std, skew of returns), cross-asset (if multiple symbols), hour-of-day, day-of-week",
+        "Proper train/test split: TimeSeriesSplit cross-validation (never train on future data)",
+        "Add walk-forward training: retrain every N candles (configurable, default 500) on rolling window",
+        "Feature importance logging: log which features matter most",
+        "Prediction confidence: use calibrated probability (CalibratedClassifierCV) for better confidence scores",
+        "Minimum accuracy threshold: don't trade if cross-validation accuracy < 55% (configurable)",
+        "Model versioning: save model with timestamp, keep last 3 versions",
+        "Tests: cross-validation doesn't leak future data, retraining works, low-accuracy model returns HOLD",
+        "All existing tests pass (update ML tests for new model), ruff check passes"
+      ],
+      "priority": 20,
+      "passes": false,
+      "notes": "Current ML strategy is guaranteed to overfit — no train/test split at all"
+    },
+    {
+      "id": "V2-021",
+      "title": "Realistic backtesting: walk-forward, dynamic slippage, stop-loss enforcement",
+      "description": "Make the backtesting engine produce results that match real trading performance.",
+      "acceptanceCriteria": [
+        "Stop-loss enforcement: on every candle, check if low price breached stop-loss; if so, sell at stop-loss price (not close)",
+        "Take-profit enforcement: on every candle, check if high price reached take-profit; if so, sell at take-profit price",
+        "Trailing stop: track highest price since entry, adjust stop-loss upward each candle",
+        "Dynamic slippage model: slippage = base_slippage * (order_value / avg_daily_volume) — larger orders get more slippage",
+        "Walk-forward mode: split data into train/test windows, optimize on train, test on test, slide forward",
+        "BacktestResult: add equity_curve (list of portfolio values over time), drawdown_curve, monthly_returns",
+        "Add method: BacktestEngine.compare(strategies, data) -> comparison table with metrics per strategy",
+        "Results export: to_json(), to_csv() for trade log",
+        "Tests: stop-loss triggers at low price not close price, trailing stop adjusts, walk-forward splits correctly",
+        "All existing tests pass (update for new behavior), ruff check passes"
+      ],
+      "priority": 21,
+      "passes": false,
+      "notes": "Current backtest doesn't enforce stop-loss at all, making results unrealistic"
+    },
+    {
+      "id": "V2-022",
+      "title": "Per-strategy performance tracking and strategy auto-disable",
+      "description": "Track each strategy's real-time performance and automatically disable strategies that are losing money.",
+      "acceptanceCriteria": [
+        "New class StrategyTracker in monitoring/strategy_tracker.py",
+        "Track per strategy: total_trades, wins, losses, total_pnl, win_rate, avg_pnl, consecutive_losses, sharpe_ratio",
+        "record_trade(strategy_name, pnl) updates tracking",
+        "Auto-disable: if a strategy has consecutive_losses >= N (configurable, default 5), disable it from registry",
+        "Auto-disable: if strategy win_rate < 40% after minimum 20 trades, disable it",
+        "Re-enable check: disabled strategies get re-evaluated every M hours (configurable, default 24); re-enable if market regime has changed",
+        "Expose via dashboard: /strategies endpoint showing per-strategy stats",
+        "Integrate into main.py: after each trade execution, record to StrategyTracker",
+        "Tests: strategy auto-disabled after 5 consecutive losses, re-enabled after regime change, stats calculated correctly",
+        "All existing tests pass, ruff check passes"
+      ],
+      "priority": 22,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "V2-023",
+      "title": "Portfolio-level risk management: correlation, exposure limits, heat map",
+      "description": "Add portfolio-wide risk controls beyond per-trade limits.",
+      "acceptanceCriteria": [
+        "New class PortfolioRiskManager in risk/portfolio_risk.py",
+        "Max total exposure: total position value must not exceed max_total_exposure_pct (configurable, default 60%) of portfolio",
+        "Correlation check: before opening new position, check correlation with existing positions; reject if correlation > 0.8 (redundant exposure)",
+        "Calculate rolling correlation between symbols using recent returns (configurable window, default 30 candles)",
+        "Sector/category limits: configurable max positions per sector (e.g., max 3 altcoin positions)",
+        "Portfolio heat: sum of all position risk (position_size * ATR); reject new trades if total heat exceeds threshold",
+        "Integrate with RiskManager.validate_signal(): check portfolio risk before individual trade risk",
+        "Tests: high-correlation position rejected, max exposure blocks new trades, portfolio heat limit works",
+        "All existing tests pass, ruff check passes"
+      ],
+      "priority": 23,
+      "passes": false,
+      "notes": "Holding BTC+ETH+SOL is 3 positions but 1 exposure due to high correlation"
+    },
+    {
+      "id": "V2-024",
+      "title": "Funding rate monitoring and perpetual-spot spread strategy",
+      "description": "Monitor funding rates for perpetual futures and generate signals based on extreme funding.",
+      "acceptanceCriteria": [
+        "New class FundingRateMonitor in data/funding.py",
+        "Fetch funding rates from exchange (Binance perpetual futures via ccxt)",
+        "New class FundingRateStrategy in strategies/technical/funding_rate.py implementing BaseStrategy",
+        "Signal logic: extreme positive funding (> 0.05%) = market overheated, SELL signal; extreme negative funding (< -0.03%) = market oversold, BUY signal",
+        "Confidence scales with funding rate magnitude",
+        "Optional: spot-perp spread tracking (buy spot + short perp when funding is very positive = delta-neutral yield)",
+        "Funding rate data stored in DataStore (new table)",
+        "Register in strategy_registry",
+        "Tests with mocked funding data: extreme rates generate correct signals",
+        "All existing tests pass, ruff check passes"
+      ],
+      "priority": 24,
+      "passes": false,
+      "notes": "Funding rate arbitrage is one of the most consistent crypto strategies"
+    },
+    {
+      "id": "V2-025",
+      "title": "Order book imbalance detection",
+      "description": "Use order book data to detect large buy/sell walls and institutional activity for better entry timing.",
+      "acceptanceCriteria": [
+        "New class OrderBookAnalyzer in data/order_book.py",
+        "Fetch order book (top 20 levels) via exchange adapter",
+        "Calculate bid/ask imbalance: total_bid_volume / total_ask_volume",
+        "Detect walls: if single price level has > 5x average level volume, flag as wall",
+        "Buy wall below current price = support signal (increase BUY confidence)",
+        "Sell wall above current price = resistance signal (decrease BUY confidence)",
+        "Imbalance ratio > 2.0 = strong buying pressure; < 0.5 = strong selling pressure",
+        "Expose as confidence modifier in SignalEnsemble (multiply confidence by imbalance factor)",
+        "Tests: imbalance calculated correctly, wall detection works, confidence modification applied",
+        "All existing tests pass, ruff check passes"
+      ],
+      "priority": 25,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "V2-026",
+      "title": "Enhanced dashboard with real-time charts and equity curve",
+      "description": "Transform the basic HTML dashboard into a useful monitoring tool with visual charts.",
+      "acceptanceCriteria": [
+        "Add Chart.js CDN to dashboard HTML for lightweight charting",
+        "Equity curve chart: portfolio value over time (from portfolio snapshots in DataStore)",
+        "Trade markers on chart: green triangles for buys, red for sells",
+        "Per-strategy performance bar chart",
+        "Current open positions table with: symbol, entry_price, current_price, unrealized_pnl, stop_loss, take_profit",
+        "Market regime indicator (TRENDING/RANGING/VOLATILE)",
+        "Active strategy list with enable/disable toggles (POST /strategies/{name}/toggle)",
+        "API endpoint: GET /equity-curve returns time-series data for charting",
+        "Save portfolio snapshot every 10 cycles to DataStore for equity curve",
+        "Tests: new endpoints return correct data, all existing tests pass",
+        "ruff check passes"
+      ],
+      "priority": 26,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "V2-027",
+      "title": "Comprehensive backtesting CLI with strategy comparison",
+      "description": "Create a proper CLI for running backtests, comparing strategies, and generating reports.",
+      "acceptanceCriteria": [
+        "CLI entry point: python -m bot.backtest with argparse",
+        "Options: --strategy (name or 'all'), --symbol, --timeframe, --start-date, --end-date, --initial-capital, --fee-pct",
+        "When --strategy=all, run all registered strategies and output comparison table",
+        "Comparison table columns: strategy, total_return, sharpe_ratio, max_drawdown, win_rate, total_trades, profit_factor",
+        "Sort by Sharpe ratio descending",
+        "Export results: --output-json, --output-csv flags",
+        "Generate equity curve data for plotting",
+        "If DataStore has historical data, use it; otherwise, fetch from exchange and store",
+        "Print summary to stdout in a well-formatted table",
+        "Tests: CLI argument parsing, strategy comparison output format",
+        "All existing tests pass, ruff check passes"
+      ],
+      "priority": 27,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "V2-028",
+      "title": "Paper trading validation framework (auto 48-hour validation run)",
+      "description": "Build a paper trading validation mode that runs for N hours and generates a go/no-go report.",
+      "acceptanceCriteria": [
+        "New mode: python -m bot.main --validate --duration=48h",
+        "Validation mode runs paper trading for specified duration then auto-stops",
+        "After completion, generates ValidationReport: total_trades, win_rate, total_return, max_drawdown, sharpe_ratio, strategy_breakdown",
+        "Go/no-go criteria (configurable): win_rate > 45%, sharpe_ratio > 0.5, max_drawdown < 15%, min_trades > 10",
+        "Report saved to data/validation_report_{timestamp}.json",
+        "Print clear GO or NO-GO recommendation with reasons",
+        "If NO-GO, list which criteria failed and by how much",
+        "Telegram notification when validation completes (if configured)",
+        "Tests: validation report generated correctly, go/no-go logic tested",
+        "All existing tests pass, ruff check passes"
+      ],
+      "priority": 28,
+      "passes": false,
+      "notes": "Never go live without validated paper trading performance"
+    },
+    {
+      "id": "V2-029",
+      "title": "Full integration test: multi-strategy trading cycle with all v2 features",
+      "description": "End-to-end test proving the entire improved pipeline works together correctly.",
+      "acceptanceCriteria": [
+        "Integration test with mocked exchange returning a realistic 200-candle price sequence (trending up → ranging → trending down)",
+        "Configure 3+ strategies with SignalEnsemble voting (min_agreement=2)",
+        "TrendFilter enabled with 4h candles",
+        "MarketRegimeDetector active, strategies adapt to detected regime",
+        "PositionManager with stop-loss and take-profit active",
+        "PaperPortfolio tracking balance (starting 10000 USDT)",
+        "RiskManager properly tracking positions and PnL",
+        "Verify: during uptrend phase, ensemble generates BUY with high confidence",
+        "Verify: stop-loss triggers during downtrend phase",
+        "Verify: during ranging phase, trend strategies return HOLD (filtered by regime)",
+        "Verify: PaperPortfolio balance reflects all trades correctly",
+        "Verify: dashboard state updated after each cycle",
+        "Verify: StrategyTracker has correct per-strategy stats",
+        "All existing tests pass, ruff check passes"
+      ],
+      "priority": 29,
+      "passes": false,
+      "notes": "This validates all V2 features work together"
+    },
+    {
+      "id": "V2-030",
+      "title": "Documentation update: strategy guide, configuration reference, operational runbook",
+      "description": "Update all documentation to reflect the v2 architecture and provide operational guidance.",
+      "acceptanceCriteria": [
+        "README.md: update architecture diagram to include SignalEnsemble, TrendFilter, MarketRegimeDetector, PositionManager, PaperPortfolio",
+        "README.md: add 'How It Works' section explaining the signal flow: data → regime detection → strategy analysis → ensemble voting → trend filtering → risk check → position sizing → smart execution → position management",
+        "docs/strategies.md: how each strategy works, when it's effective, configurable parameters",
+        "docs/configuration.md: complete reference of all .env variables and config.yaml options with explanations",
+        "docs/backtesting.md: how to run backtests, interpret results, compare strategies",
+        "docs/operational-runbook.md: how to start paper trading, run validation, go live, handle emergencies (exchange down, large drawdown, circuit breaker tripped)",
+        "docs/risk-management.md: explanation of all risk controls, recommended settings for different risk profiles (conservative/moderate/aggressive)",
+        "All docs created in docs/ directory",
+        "ruff check passes"
+      ],
+      "priority": 30,
+      "passes": false,
+      "notes": ""
     }
   ]
 }

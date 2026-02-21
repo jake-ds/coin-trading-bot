@@ -1,117 +1,144 @@
-# Ralph Agent Instructions - Crypto Trading Bot (v2 Improvements)
+# Ralph Agent Instructions - Crypto Trading Bot (v2 Production)
 
-You are an autonomous coding agent fixing bugs and improving an existing Python cryptocurrency trading bot.
+You are an autonomous coding agent transforming a toy crypto trading bot into a production-grade system capable of generating real profit. The codebase already has 25 completed user stories with 267 passing tests.
 
 ## Your Task
 
 1. Read the PRD at `scripts/ralph/prd.json`
-2. Read the progress log at `scripts/ralph/progress.txt` (check Codebase Patterns section first)
+2. Read the progress log at `scripts/ralph/progress.txt` (check Codebase Patterns section FIRST)
 3. Check you're on the correct branch from PRD `branchName`. If not, create it from main.
 4. Pick the **highest priority** user story where `passes: false`
-5. Implement that single user story
+5. Implement that single user story fully
 6. Run quality checks:
-   - `pytest tests/ -v` (all tests must pass — including pre-existing ones)
+   - `pytest tests/ -v` (ALL tests must pass — old + new)
    - `ruff check src/ tests/` (no lint errors)
 7. Update AGENTS.md if you discover reusable patterns
-8. If checks pass, commit ALL changes with message: `fix: [Story ID] - [Story Title]`
+8. If checks pass, commit ALL changes with message: `feat: [Story ID] - [Story Title]`
 9. Update the PRD to set `passes: true` for the completed story
 10. Append your progress to `scripts/ralph/progress.txt`
 
-## IMPORTANT: This is a bugfix/improvement run
+## CRITICAL: DO NOT BREAK EXISTING TESTS
 
-The codebase is already built with 25 completed user stories and 267 passing tests.
-**DO NOT break existing functionality.** All 267 existing tests MUST continue to pass after your changes.
-When modifying existing code, ensure backward compatibility unless the story explicitly requires changing behavior.
+The codebase has 267 passing tests. ALL must continue passing after every change.
+When modifying existing code:
+- Add new parameters with default values matching old behavior
+- If a test needs updating because behavior was WRONG (e.g., backtest PnL formula), update the test
+- Never remove test coverage — only add to it
 
-## Project Architecture
+## Project Architecture (Current)
 
 ```
 src/bot/
-├── main.py                 # TradingBot orchestrator (MANY fixes needed here)
-├── config.py               # Settings (.env + YAML)
-├── models/                 # Pydantic v2 data models (OHLCV, Order, Signal, Portfolio)
-├── exchanges/              # Exchange adapters (binance.py, upbit.py, base.py, factory.py)
-├── data/                   # DataCollector + DataStore (SQLAlchemy + aiosqlite)
-│   ├── collector.py        # Fetches OHLCV from exchanges
-│   ├── store.py            # Async CRUD operations
-│   └── models.py           # SQLAlchemy table definitions
-├── strategies/             # Trading strategies
+├── main.py                 # TradingBot orchestrator — MANY changes needed
+├── config.py               # pydantic-settings config
+├── models/                 # Pydantic v2: OHLCV, Order, TradingSignal, Portfolio
+│   └── base.py             # Enums: OrderSide, OrderType, OrderStatus, SignalAction
+├── exchanges/
+│   ├── base.py             # ExchangeAdapter ABC
+│   ├── factory.py          # ExchangeFactory registry
+│   ├── binance.py          # BinanceAdapter (ccxt)
+│   └── upbit.py            # UpbitAdapter (ccxt)
+├── data/
+│   ├── collector.py        # DataCollector (REST polling)
+│   ├── store.py            # DataStore (SQLAlchemy + aiosqlite)
+│   └── models.py           # SQLAlchemy tables
+├── strategies/
 │   ├── base.py             # BaseStrategy ABC + StrategyRegistry singleton
-│   ├── technical/          # ma_crossover.py, rsi.py, macd.py, bollinger.py
-│   ├── arbitrage/          # arbitrage_strategy.py
-│   ├── dca/                # dca_strategy.py
-│   └── ml/                 # prediction.py
-├── risk/manager.py         # RiskManager (validate_signal, position sizing, drawdown)
+│   ├── technical/          # ma_crossover, rsi, macd, bollinger
+│   ├── arbitrage/          # arbitrage_strategy
+│   ├── dca/                # dca_strategy
+│   └── ml/                 # prediction (RandomForest)
+├── risk/manager.py         # RiskManager (validate_signal, sizing, drawdown)
 ├── execution/
-│   ├── engine.py           # ExecutionEngine (paper + live orders)
-│   ├── circuit_breaker.py  # CircuitBreaker state machine
-│   └── resilient.py        # ResilientExchange wrapper (CURRENTLY UNUSED)
+│   ├── engine.py           # ExecutionEngine (paper + live)
+│   ├── circuit_breaker.py  # CircuitBreaker FSM
+│   └── resilient.py        # ResilientExchange wrapper (UNUSED - fix in V2-002)
 ├── backtest/engine.py      # BacktestEngine
 ├── monitoring/
 │   ├── logger.py           # structlog setup
-│   ├── metrics.py          # MetricsCollector + PerformanceMetrics
-│   └── telegram.py         # TelegramNotifier (CURRENTLY UNUSED)
-└── dashboard/app.py        # FastAPI dashboard (CURRENTLY NOT WIRED TO BOT)
-tests/                      # 267 passing tests
+│   ├── metrics.py          # MetricsCollector
+│   └── telegram.py         # TelegramNotifier (UNUSED - fix in V2-002)
+└── dashboard/app.py        # FastAPI (UNWIRED - fix in V2-002)
 ```
 
-## Known Issues Being Fixed (Context for Agent)
+## Architecture After v2 (New Files to Create)
 
-Key problems you're fixing across the stories:
-- **main.py** never calls: dashboard.update_state(), TelegramNotifier, ResilientExchange, risk_manager.add_position/remove_position/record_trade_pnl
-- **execution/engine.py** paper mode has infinite capital (no balance tracking)
-- **backtest/engine.py** P&L formula doesn't account for buy fees
-- **ml/prediction.py** uses unsafe pickle.load()
-- **dashboard/app.py** has XSS (unescaped HTML), no CORS, never receives data from bot
-- **data/store.py** has no duplicate prevention, no indexes
-- **arbitrage_strategy.py** doesn't verify buy/sell are on different exchanges
-- **dca_strategy.py** mutates state during analyze()
+```
+src/bot/
+├── execution/
+│   ├── paper_portfolio.py  # V2-003: PaperPortfolio (balance tracking)
+│   ├── position_manager.py # V2-008: Stop-loss, take-profit, trailing stop
+│   └── smart_executor.py   # V2-019: Limit orders, TWAP
+├── strategies/
+│   ├── ensemble.py         # V2-009: SignalEnsemble voting system
+│   ├── trend_filter.py     # V2-010: Multi-TF trend confirmation
+│   ├── regime.py           # V2-011: Market regime detector
+│   ├── indicators.py       # V2-017: Shared indicator utilities (ATR etc)
+│   └── technical/
+│       ├── vwap.py          # V2-015: VWAP strategy
+│       ├── composite.py     # V2-016: Triple-confirmation momentum
+│       └── funding_rate.py  # V2-024: Funding rate strategy
+├── data/
+│   ├── websocket_feed.py   # V2-018: Real-time WebSocket feed
+│   ├── funding.py          # V2-024: Funding rate data
+│   └── order_book.py       # V2-025: Order book analysis
+├── risk/
+│   └── portfolio_risk.py   # V2-023: Portfolio-level risk
+└── monitoring/
+    └── strategy_tracker.py # V2-022: Per-strategy performance
+```
+
+## Key Design Decisions for Agent
+
+### Signal Flow (After v2 Complete)
+```
+Data Collection (REST + WebSocket)
+    ↓
+Market Regime Detection (TRENDING/RANGING/VOLATILE)
+    ↓
+Strategy Analysis (adapt to regime) → Multiple TradingSignals
+    ↓
+Signal Ensemble Voting (require min_agreement, filter conflicts)
+    ↓
+Trend Filter (reject signals against higher-TF trend)
+    ↓
+Risk Manager (position limits, drawdown, daily loss)
+    ↓
+Portfolio Risk (correlation, exposure limits)
+    ↓
+Dynamic Position Sizing (ATR-based)
+    ↓
+Smart Execution (limit orders, TWAP)
+    ↓
+Position Manager (monitor stop-loss, take-profit, trailing)
+    ↓
+Metrics + Telegram + Dashboard
+```
+
+### Critical Principles
+- **Confirmation over speed**: Never trade on a single indicator. Require multiple confirmations.
+- **Risk first**: Every trade has a predefined stop-loss and take-profit BEFORE entry.
+- **Adapt to regime**: Wrong strategy in wrong market = guaranteed loss.
+- **Realistic testing**: Backtest must enforce stop-loss, dynamic slippage, walk-forward.
+- **Finite capital**: Paper trading must track actual balance, not infinite money.
 
 ## Tech Stack
 
 - **Python 3.10+** (asdf local python 3.10.0)
-- **ccxt** for exchange connectivity
-- **ta** library for technical indicators
-- **Pydantic v2** for data models and settings
-- **SQLAlchemy + aiosqlite** for async data storage
-- **structlog** for structured JSON logging
-- **FastAPI** for dashboard
-- **scikit-learn** for ML strategy
-- **pytest + pytest-asyncio** for testing
-- **ruff** for linting
-
-## Critical Rules
-
-### Backward Compatibility
-- ALL 267 existing tests MUST continue to pass
-- If you need to change an existing interface, update all callers
-- If a test needs updating due to corrected behavior, update the test too
-
-### Security
-- NEVER hardcode API keys — use environment/config
-- Tests MUST mock all external API calls — never call real APIs
-- Use joblib (NOT pickle) for model serialization
-- Escape all HTML output in dashboard
-
-### Trading Safety
-- Default mode is ALWAYS paper trading
-- ALL signals MUST pass through RiskManager
-- Paper trading must track simulated balance
-
-### Code Quality
-- Async-first for all I/O
-- Follow existing patterns
-- Write tests for every change
-- Use type hints
+- ccxt, ta, Pydantic v2, pydantic-settings
+- SQLAlchemy + aiosqlite, structlog
+- FastAPI + Chart.js (dashboard)
+- scikit-learn (GradientBoosting after V2-020)
+- pytest + pytest-asyncio, ruff
 
 ## Progress Report Format
 
-APPEND to scripts/ralph/progress.txt (never replace):
+APPEND to scripts/ralph/progress.txt:
 ```
 ## [Date/Time] - [Story ID]
-- What was fixed/improved
-- Files changed
-- Tests added/modified
+- What was implemented/fixed
+- Files created/modified
+- Tests added
 - **Learnings for future iterations:**
   - Patterns discovered
   - Gotchas encountered
@@ -122,20 +149,17 @@ APPEND to scripts/ralph/progress.txt (never replace):
 
 Add reusable patterns to `## Codebase Patterns` at TOP of progress.txt.
 
-## Update AGENTS.md
-
-Before committing, update AGENTS.md with valuable learnings.
-
 ## Stop Condition
 
-After completing a story, check if ALL stories have `passes: true`.
-If ALL complete: `<promise>COMPLETE</promise>`
-If stories remain: end response normally.
+If ALL stories have `passes: true`: `<promise>COMPLETE</promise>`
+Otherwise end normally.
 
 ## Important
 
 - Work on ONE story per iteration
 - Commit frequently
-- Keep ALL tests passing (old + new)
-- Read Codebase Patterns before starting
-- When adding packages, update both pyproject.toml and requirements.txt
+- ALL tests must pass (old + new)
+- Read Codebase Patterns FIRST
+- New packages → update pyproject.toml AND requirements.txt
+- New files → add __init__.py imports where appropriate
+- Default parameter values must maintain backward compatibility with existing tests
