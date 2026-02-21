@@ -20,8 +20,6 @@ COPY --from=builder /install /usr/local
 COPY src/ src/
 COPY pyproject.toml .
 
-RUN pip install --no-cache-dir -e .
-
 # Create data directory for SQLite
 RUN mkdir -p /app/data
 

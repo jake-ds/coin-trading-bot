@@ -3,6 +3,7 @@
 import asyncio
 import signal
 import sys
+import time
 
 import structlog
 
@@ -37,6 +38,10 @@ class TradingBot:
         self._telegram: TelegramNotifier | None = None
         self._dashboard_task: asyncio.Task | None = None
         self._paper_portfolio: PaperPortfolio | None = None
+        self._cycle_lock: asyncio.Lock = asyncio.Lock()
+        self._cycle_count: int = 0
+        self._total_cycle_duration: float = 0.0
+        self._last_cycle_time: float | None = None
 
     async def initialize(self) -> None:
         """Initialize all bot components."""
@@ -186,18 +191,56 @@ class TradingBot:
         except ImportError as e:
             logger.warning("strategy_import_error", error=str(e))
 
+    @property
+    def cycle_metrics(self) -> dict:
+        """Return current cycle metrics."""
+        avg_duration = (
+            self._total_cycle_duration / self._cycle_count
+            if self._cycle_count > 0
+            else 0.0
+        )
+        return {
+            "cycle_count": self._cycle_count,
+            "average_cycle_duration": round(avg_duration, 4),
+            "last_cycle_time": self._last_cycle_time,
+        }
+
     async def run_trading_loop(self) -> None:
         """Run the main trading loop."""
         self._running = True
         logger.info("trading_loop_started")
 
         while self._running:
-            try:
-                await self._trading_cycle()
-            except Exception as e:
-                logger.error("trading_cycle_error", error=str(e))
-                if self._telegram:
-                    await self._telegram.notify_error(str(e))
+            if self._cycle_lock.locked():
+                logger.warning(
+                    "trading_cycle_skipped_overlap",
+                    reason="previous cycle still running",
+                )
+            else:
+                try:
+                    async with self._cycle_lock:
+                        start_time = time.monotonic()
+                        await self._trading_cycle()
+                        duration = time.monotonic() - start_time
+                        self._cycle_count += 1
+                        self._total_cycle_duration += duration
+                        self._last_cycle_time = time.time()
+                        # Update dashboard with latest cycle metrics
+                        dashboard_module.update_state(
+                            cycle_metrics=self.cycle_metrics,
+                        )
+                        logger.debug(
+                            "trading_cycle_completed",
+                            cycle_count=self._cycle_count,
+                            duration=round(duration, 4),
+                        )
+                except Exception:
+                    logger.error("trading_cycle_error", exc_info=True)
+                    if self._telegram:
+                        import traceback
+
+                        tb = traceback.format_exc()
+                        await self._telegram.notify_error(tb)
 
             await asyncio.sleep(self._settings.loop_interval_seconds)
 

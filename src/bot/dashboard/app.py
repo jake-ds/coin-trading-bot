@@ -1,6 +1,7 @@
 """FastAPI monitoring dashboard."""
 
 import html
+import time
 from datetime import datetime, timezone
 
 import structlog
@@ -38,6 +39,11 @@ _bot_state = {
     "trades": [],
     "metrics": {},
     "portfolio": {"balances": {}, "positions": [], "total_value": 0.0},
+    "cycle_metrics": {
+        "cycle_count": 0,
+        "average_cycle_duration": 0.0,
+        "last_cycle_time": None,
+    },
 }
 
 
@@ -57,6 +63,7 @@ async def get_status():
     return {
         "status": _bot_state["status"],
         "started_at": _bot_state["started_at"],
+        "cycle_metrics": _bot_state["cycle_metrics"],
     }
 
 
@@ -80,8 +87,27 @@ async def get_portfolio():
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint for Docker."""
-    return {"status": "healthy", "timestamp": datetime.now(timezone.utc).isoformat()}
+    """Health check endpoint for Docker.
+
+    Returns unhealthy if the bot is running but the last cycle was more than
+    5 minutes ago, indicating the trading loop may be stuck.
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    last_cycle = _bot_state["cycle_metrics"].get("last_cycle_time")
+    bot_status = _bot_state["status"]
+
+    # If the bot is running and we have a last_cycle_time, check staleness
+    if bot_status == "running" and last_cycle is not None:
+        elapsed = time.time() - last_cycle
+        if elapsed > 300:  # 5 minutes
+            return {
+                "status": "unhealthy",
+                "reason": "last_cycle_stale",
+                "last_cycle_seconds_ago": round(elapsed, 1),
+                "timestamp": now,
+            }
+
+    return {"status": "healthy", "timestamp": now}
 
 
 @app.get("/", response_class=HTMLResponse)

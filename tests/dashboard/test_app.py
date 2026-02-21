@@ -15,6 +15,11 @@ def reset_state():
         trades=[],
         metrics={},
         portfolio={"balances": {}, "positions": [], "total_value": 0.0},
+        cycle_metrics={
+            "cycle_count": 0,
+            "average_cycle_duration": 0.0,
+            "last_cycle_time": None,
+        },
     )
 
 

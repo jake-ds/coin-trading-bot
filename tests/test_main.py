@@ -151,7 +151,7 @@ class TestTelegramWiring:
 
     @pytest.mark.asyncio
     async def test_telegram_error_notification_on_cycle_error(self):
-        """Bot sends Telegram error notification when trading cycle raises."""
+        """Bot sends Telegram error notification with full traceback when trading cycle raises."""
         settings = make_settings()
         bot = TradingBot(settings=settings)
         await bot.initialize()
@@ -176,7 +176,11 @@ class TestTelegramWiring:
         asyncio.create_task(stop_after_one())
         await bot.run_trading_loop()
 
-        mock_telegram.notify_error.assert_called_with("test error")
+        # Telegram receives full traceback (not just error message)
+        mock_telegram.notify_error.assert_called()
+        error_msg = mock_telegram.notify_error.call_args[0][0]
+        assert "test error" in error_msg
+        assert "Traceback" in error_msg
 
         await bot.shutdown()
 

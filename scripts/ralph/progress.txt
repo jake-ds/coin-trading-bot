@@ -7,7 +7,9 @@ Started: 2026년 2월 22일 일요일 00시 13분 50초 KST
 - **CORS**: Use `CORSMiddleware` from `fastapi.middleware.cors` with configurable origins
 - **Model serialization**: Use `joblib.dump()`/`joblib.load()` instead of pickle for sklearn models
 - **Config pattern**: Add new settings to `Settings` class with defaults that maintain backward compat
-- **Test count baseline**: 357 tests passing as of V2-006
+- **Test count baseline**: 371 tests passing as of V2-007
+- **Cycle metrics**: `cycle_metrics` dict added to dashboard `_bot_state` — must be reset in test fixtures via `update_state(cycle_metrics={"cycle_count": 0, "average_cycle_duration": 0.0, "last_cycle_time": None})`
+- **Telegram error notifications**: Now send full `traceback.format_exc()` instead of just `str(e)` — tests should check `"Traceback" in error_msg` and `"error text" in error_msg`
 - **DCA confirm_buy pattern**: After DCAStrategy.analyze() returns BUY, call `strategy.confirm_buy(buy_time, amount, quantity)` to commit state. analyze() is idempotent and side-effect-free.
 - **BacktestEngine entry_cost**: Track `entry_cost = cash` (total cash before buy, including fee) and compute PnL as `cash_after_sell - entry_cost`
 - **RiskManager pipeline**: After BUY, call `risk_manager.add_position(symbol, qty, price)`. After SELL, get position entry price via `risk_manager.get_position(symbol)`, calculate `pnl = (sell_price - entry_price) * qty`, call `record_trade_pnl(pnl)` then `remove_position(symbol)`. Call `check_and_reset_daily()` at start of each cycle for auto daily-loss-limit reset. Update portfolio value from `paper_portfolio.total_value` each cycle.
@@ -161,4 +163,33 @@ Started: 2026년 2월 22일 일요일 00시 13분 50초 KST
   - BacktestEngine PnL bug: `cash - (qty * entry_price)` ignores buy fee. Correct formula: track total cash spent as `entry_cost` and compute `cash_after_sell - entry_cost`
   - When removing variables (position_entry), ruff F841 catches unused assignments — clean up completely
   - Projected metadata (total_invested, total_quantity) shows what WOULD happen if buy succeeds, without committing to it
+---
+
+## 2026-02-22 - V2-007: Trading cycle safety: overlap lock, error tracebacks, cycle metrics
+- **Implemented:**
+  - Added `asyncio.Lock` (`_cycle_lock`) to `TradingBot` to prevent concurrent `_trading_cycle()` calls
+  - When lock is held on next interval fire, cycle is skipped with a warning log
+  - Changed error logging from `logger.error("...", error=str(e))` to `logger.error("trading_cycle_error", exc_info=True)` for full tracebacks
+  - Telegram error notifications now send `traceback.format_exc()` (full traceback) instead of just `str(e)`
+  - Added cycle metrics tracking: `_cycle_count`, `_total_cycle_duration`, `_last_cycle_time` with `cycle_metrics` property
+  - Dashboard `/status` endpoint now includes `cycle_metrics` (cycle_count, average_cycle_duration, last_cycle_time)
+  - Dashboard `/health` endpoint enhanced: returns unhealthy if bot is running and last cycle was >5 minutes ago
+  - Added `cycle_metrics` to `_bot_state` dict in dashboard module
+  - Fixed Docker multi-stage build: removed redundant `pip install -e .` in runtime stage
+  - Added `deploy.resources.limits` to `docker-compose.yml`: memory 512M, cpus 1.0
+- **Files modified:**
+  - `src/bot/main.py` — asyncio.Lock, cycle metrics tracking, exc_info logging, traceback in Telegram
+  - `src/bot/dashboard/app.py` — cycle_metrics in state, /status includes metrics, /health staleness check
+  - `tests/test_main.py` — updated telegram error test to check for traceback content
+  - `tests/dashboard/test_app.py` — updated reset_state fixture to include cycle_metrics
+  - `Dockerfile` — removed redundant pip install in runtime stage
+  - `docker-compose.yml` — added deploy.resources.limits
+- **Files created:**
+  - `tests/test_v2_007_cycle_safety.py` — 14 new tests (lock behavior, cycle metrics, health endpoint, error logging)
+- **Tests:** 371 tests passing (357 previous + 14 new), ruff check passes
+- **Learnings for future iterations:**
+  - `time.monotonic()` for duration measurement, `time.time()` for absolute timestamps (last_cycle_time)
+  - Dashboard cycle_metrics must be updated AFTER incrementing counters in `run_trading_loop`, not inside `_trading_cycle` (which runs before the increment)
+  - `loop_interval_seconds` has `ge=1` validator — tests must use at least 1, not 0
+  - Existing tests that checked `notify_error("error msg")` needed updating to match new traceback format
 ---
