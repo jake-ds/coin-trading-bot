@@ -3,7 +3,7 @@
 import json
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import insert, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from bot.data.models import Base, OHLCVRecord, PortfolioSnapshot, TradeRecord
@@ -31,20 +31,30 @@ class DataStore:
     # --- OHLCV Operations ---
 
     async def save_candles(self, candles: list[OHLCV]) -> None:
-        """Save a list of OHLCV candles to the database."""
+        """Save a list of OHLCV candles to the database.
+
+        Uses INSERT OR IGNORE to silently skip duplicate candles
+        (same symbol + timeframe + timestamp).
+        """
+        if not candles:
+            return
         async with self._session_factory() as session:
             for candle in candles:
-                record = OHLCVRecord(
-                    symbol=candle.symbol,
-                    timeframe=candle.timeframe,
-                    timestamp=candle.timestamp,
-                    open=candle.open,
-                    high=candle.high,
-                    low=candle.low,
-                    close=candle.close,
-                    volume=candle.volume,
+                stmt = (
+                    insert(OHLCVRecord)
+                    .values(
+                        symbol=candle.symbol,
+                        timeframe=candle.timeframe,
+                        timestamp=candle.timestamp,
+                        open=candle.open,
+                        high=candle.high,
+                        low=candle.low,
+                        close=candle.close,
+                        volume=candle.volume,
+                    )
+                    .prefix_with("OR IGNORE")
                 )
-                session.add(record)
+                await session.execute(stmt)
             await session.commit()
 
     async def get_candles(

@@ -7,7 +7,7 @@ Started: 2026년 2월 22일 일요일 00시 13분 50초 KST
 - **CORS**: Use `CORSMiddleware` from `fastapi.middleware.cors` with configurable origins
 - **Model serialization**: Use `joblib.dump()`/`joblib.load()` instead of pickle for sklearn models
 - **Config pattern**: Add new settings to `Settings` class with defaults that maintain backward compat
-- **Test count baseline**: 313 tests passing as of V2-003
+- **Test count baseline**: 332 tests passing as of V2-004
 - **PaperPortfolio**: Optional `paper_portfolio` param in `ExecutionEngine.__init__` — defaults to `None` for backward compat; when provided, `_paper_execute` checks balance via `buy()`/`sell()` and returns `None` if rejected
 - **Config for paper trading**: `paper_initial_balance` (default 10000.0) and `paper_fee_pct` (default 0.1) in Settings
 - **ResilientExchange wrapping**: In `_init_exchanges()`, wrap each adapter with `ResilientExchange(adapter)` after creation
@@ -87,4 +87,28 @@ Started: 2026년 2월 22일 일요일 00시 13분 50초 KST
   - Use `TYPE_CHECKING` guard for imports that could cause circular dependencies
   - Float comparison for positions: use epsilon (1e-10) when checking if remaining qty is zero
   - Test data must account for fees: 0.2 BTC at 50000 with 0.1% fee costs 10010, not 10000
+---
+
+## 2026-02-22 - V2-004: Database indexes, duplicate candle prevention, data quality validation
+- **Implemented:**
+  - Added `UniqueConstraint("symbol", "timeframe", "timestamp")` to `OHLCVRecord` model
+  - Added composite index `ix_ohlcv_symbol_timeframe_timestamp` on `OHLCVRecord`
+  - Added composite index `ix_trades_symbol_created_at` on `TradeRecord`
+  - `save_candles()` now uses `INSERT OR IGNORE` via SQLAlchemy `insert().prefix_with("OR IGNORE")` to skip duplicates silently
+  - Added `validate_candle()` function in `DataCollector` — rejects candles where `high < low`, `close > high`, `close < low`, or `volume < 0`
+  - `collect_once()` now filters invalid candles before saving and logs rejected count
+  - Added staleness check: warns if latest candle timestamp is older than 2x the timeframe duration
+  - `TIMEFRAME_SECONDS` mapping for all standard timeframes (1m through 1w)
+- **Files modified:**
+  - `src/bot/data/models.py` — added UniqueConstraint and composite indexes
+  - `src/bot/data/store.py` — changed `save_candles()` to use INSERT OR IGNORE
+  - `src/bot/data/collector.py` — added `validate_candle()`, `_filter_valid_candles()`, `_check_staleness()`
+- **Files created:**
+  - `tests/data/test_data_quality.py` — 19 new tests
+- **Tests:** 332 tests passing (313 previous + 19 new), ruff check passes
+- **Learnings for future iterations:**
+  - SQLAlchemy `insert().prefix_with("OR IGNORE")` works for SQLite duplicate handling
+  - `UniqueConstraint` and `Index` go in `__table_args__` tuple on the model class
+  - OHLCV Pydantic model already validates `high >= low`, `high >= close`, `low <= close` — `validate_candle()` is defense-in-depth for data from untrusted exchange APIs
+  - Staleness check must handle naive timestamps by assuming UTC
 ---

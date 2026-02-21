@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, Integer, String
+from sqlalchemy import DateTime, Float, Index, Integer, String, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -14,6 +14,10 @@ class OHLCVRecord(Base):
     """OHLCV candlestick record."""
 
     __tablename__ = "ohlcv"
+    __table_args__ = (
+        UniqueConstraint("symbol", "timeframe", "timestamp", name="uq_ohlcv_symbol_tf_ts"),
+        Index("ix_ohlcv_symbol_timeframe_timestamp", "symbol", "timeframe", "timestamp"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     symbol: Mapped[str] = mapped_column(String(50), index=True)
@@ -30,6 +34,9 @@ class TradeRecord(Base):
     """Executed trade record."""
 
     __tablename__ = "trades"
+    __table_args__ = (
+        Index("ix_trades_symbol_created_at", "symbol", "created_at"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     order_id: Mapped[str] = mapped_column(String(100), index=True)

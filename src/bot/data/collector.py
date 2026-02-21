@@ -1,13 +1,49 @@
 """DataCollector - fetches market data from exchanges and stores it."""
 
 import asyncio
+from datetime import datetime, timezone
 
 import structlog
 
 from bot.data.store import DataStore
 from bot.exchanges.base import ExchangeAdapter
+from bot.models import OHLCV
 
 logger = structlog.get_logger()
+
+# Map timeframe strings to their duration in seconds
+TIMEFRAME_SECONDS: dict[str, int] = {
+    "1m": 60,
+    "3m": 180,
+    "5m": 300,
+    "15m": 900,
+    "30m": 1800,
+    "1h": 3600,
+    "2h": 7200,
+    "4h": 14400,
+    "6h": 21600,
+    "8h": 28800,
+    "12h": 43200,
+    "1d": 86400,
+    "1w": 604800,
+}
+
+
+def validate_candle(candle: OHLCV) -> bool:
+    """Validate candle data quality.
+
+    Rejects candles where:
+    - high < low
+    - close > high or close < low
+    - volume < 0
+    """
+    if candle.high < candle.low:
+        return False
+    if candle.close > candle.high or candle.close < candle.low:
+        return False
+    if candle.volume < 0:
+        return False
+    return True
 
 
 class DataCollector:
@@ -28,6 +64,51 @@ class DataCollector:
         self._collection_interval = collection_interval
         self._running = False
 
+    @staticmethod
+    def _filter_valid_candles(candles: list[OHLCV]) -> list[OHLCV]:
+        """Filter out candles that fail data quality validation."""
+        valid = []
+        for candle in candles:
+            if validate_candle(candle):
+                valid.append(candle)
+            else:
+                logger.warning(
+                    "invalid_candle_rejected",
+                    symbol=candle.symbol,
+                    timeframe=candle.timeframe,
+                    timestamp=str(candle.timestamp),
+                    high=candle.high,
+                    low=candle.low,
+                    close=candle.close,
+                    volume=candle.volume,
+                )
+        return valid
+
+    @staticmethod
+    def _check_staleness(candles: list[OHLCV], timeframe: str) -> None:
+        """Warn if the latest candle is stale (older than 2x the timeframe)."""
+        if not candles:
+            return
+        tf_seconds = TIMEFRAME_SECONDS.get(timeframe)
+        if tf_seconds is None:
+            return
+        latest = candles[-1].timestamp
+        # Ensure we compare in UTC
+        if latest.tzinfo is None:
+            latest = latest.replace(tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
+        age_seconds = (now - latest).total_seconds()
+        staleness_threshold = tf_seconds * 2
+        if age_seconds > staleness_threshold:
+            logger.warning(
+                "stale_candle_data",
+                symbol=candles[-1].symbol,
+                timeframe=timeframe,
+                latest_timestamp=str(latest),
+                age_seconds=age_seconds,
+                threshold_seconds=staleness_threshold,
+            )
+
     async def collect_once(self) -> int:
         """Run a single collection cycle across all exchanges/symbols/timeframes.
 
@@ -44,14 +125,18 @@ class DataCollector:
                             limit=100,
                         )
                         if candles:
-                            await self._store.save_candles(candles)
-                            total += len(candles)
+                            valid_candles = self._filter_valid_candles(candles)
+                            self._check_staleness(valid_candles, timeframe)
+                            if valid_candles:
+                                await self._store.save_candles(valid_candles)
+                                total += len(valid_candles)
                             logger.info(
                                 "collected_candles",
                                 exchange=exchange.name,
                                 symbol=symbol,
                                 timeframe=timeframe,
-                                count=len(candles),
+                                count=len(valid_candles),
+                                rejected=len(candles) - len(valid_candles),
                             )
                     except (ValueError, ConnectionError, RuntimeError) as e:
                         logger.error(
