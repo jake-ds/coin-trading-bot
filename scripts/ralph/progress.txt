@@ -17,7 +17,10 @@ Started: 2026년 2월 22일 일요일 00시 13분 50초 KST
 - **Telegram error notifications**: Now send full `traceback.format_exc()` instead of just `str(e)` — tests should check `"Traceback" in error_msg` and `"error text" in error_msg`
 - **TrendFilter pattern**: Create `TrendFilter` in `initialize()`. In `_trading_cycle()`, fetch candles for `trend_timeframe` (default "4h"), call `get_trend(symbol, candles)` → pass `trend_direction` to `ensemble.vote()`. Trend errors are caught gracefully (trend_direction stays None). Tests that use MagicMock candles won't trigger trend filter because `ta.trend.ADXIndicator` fails on mocks — caught by try/except.
 - **Ensemble trend filtering**: `vote()` accepts optional `trend_direction` param. BUY rejected if BEARISH, SELL rejected if BULLISH. Conflict detection runs BEFORE trend filter. NEUTRAL and None allow all signals through.
-- **Test count baseline**: 517 tests passing as of V2-011
+- **Test count baseline**: 545 tests passing as of V2-012
+- **MA Crossover filter pattern**: All new filter params default to disabled (`False`/`0`) for backward compatibility. Filters (volume, momentum, ADX, trend strength, cooldown) only activate when explicitly enabled. Crossover detection runs first, then filters gate BUY/SELL → HOLD. NumPy bools must be cast to Python `bool()` before storing in metadata (`np.True_ is not True`).
+- **ADX computation needs 28+ candles**: The `ta` library's ADXIndicator with window=14 requires ~28 candles to produce valid results. Wrap in try/except (IndexError, ValueError) and skip the filter gracefully when data is insufficient.
+- **Test crossover data design**: For MA crossover tests, the crossover must happen at the LAST candle: `prev_short <= prev_long AND current_short > current_long`. Simply having short > long is NOT sufficient — must verify the transition happens at the boundary.
 - **MarketRegimeDetector pattern**: Create `MarketRegimeDetector` in `initialize()`. In `_trading_cycle()`, detect regime from primary candles (needs `required_history_length` candles). Call `strategy.adapt_to_regime(regime)` on each active strategy BEFORE `collect_signals()`. Regime detection errors caught gracefully (strategies use default params). Tests using MagicMock candles skip regime detection because `ta` library fails on mocks.
 - **adapt_to_regime pattern**: Optional method on `BaseStrategy` (default no-op). Strategies store `_original_*` params in `__init__` and `_regime_disabled` flag (default False). `adapt_to_regime()` sets params/flags based on regime; `analyze()` checks `_regime_disabled` first and returns HOLD if True. Each call to `adapt_to_regime()` sets state from scratch (not incrementally).
 - **OHLCV validators**: Model enforces `high >= max(open, close)` and `low <= min(open, close)`. Test candle generators must satisfy these constraints.
@@ -332,4 +335,27 @@ Started: 2026년 2월 22일 일요일 00시 13분 50초 KST
   - Classification priority matters: ATR volatility check runs before ADX trending check, so a volatile trending market is classified as HIGH_VOLATILITY
   - Using `__future__` annotations + TYPE_CHECKING for `MarketRegime` in strategy files avoids circular imports
   - Strategies store original constructor params (`_original_short_period`, etc.) so `adapt_to_regime()` can restore them
+---
+
+## 2026-02-22 - V2-012: Enhanced MA Crossover with volume confirmation and momentum filter
+- **Implemented:**
+  - Volume confirmation filter: BUY/SELL only if current volume > N× (default 1.5×) the rolling average volume (configurable period, default 20)
+  - Momentum confirmation: BUY requires bullish candle (close > open), SELL requires bearish candle (close < open)
+  - Trend strength filter: signal only if MA distance is expanding (not contracting) — prevents signals during convergence
+  - ADX filter: require ADX > threshold (default 20) for crossover to be valid — rejects signals in weak/ranging trends
+  - Cooldown mechanism: after a signal, wait at least N candles (configurable, default 0=disabled) before next signal — prevents whipsaw
+  - Enhanced confidence: weighted average of MA distance ratio, volume ratio, and ADX value when filters enabled
+  - All new parameters default to disabled for full backward compatibility with existing tests
+  - Graceful ADX handling: try/except for insufficient data (ADX needs ~28 candles), skips filter when data is too short
+  - NumPy bool conversion: all metadata values cast to Python `bool()` to prevent `np.True_ is not True` issues
+- **Files modified:**
+  - `src/bot/strategies/technical/ma_crossover.py` — added 6 new constructor params, filter logic in analyze(), _calculate_confidence() helper
+- **Files created:**
+  - `tests/strategies/test_v2_012_ma_enhanced.py` — 28 new tests (backward compat, volume, momentum, trend strength, ADX, cooldown, confidence, combined filters, regime)
+- **Tests:** 545 tests passing (517 previous + 28 new), ruff check passes
+- **Learnings for future iterations:**
+  - NumPy comparisons return `np.bool_`, not Python `bool` — always cast with `bool()` before storing in metadata dicts for clean assertions
+  - The `ta` ADX indicator needs ~28 candles (2× window + warmup) — wrap in try/except for shorter data
+  - Test data for crossover strategies must produce the crossover at the LAST candle (transition from prev ≤ to current >), not just show short > long
+  - All new filter params should default to `False`/`0` (disabled) so the strategy module-level `register()` call and existing tests are unaffected
 ---
