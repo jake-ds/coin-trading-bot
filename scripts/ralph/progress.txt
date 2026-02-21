@@ -17,7 +17,8 @@ Started: 2026년 2월 22일 일요일 00시 13분 50초 KST
 - **Telegram error notifications**: Now send full `traceback.format_exc()` instead of just `str(e)` — tests should check `"Traceback" in error_msg` and `"error text" in error_msg`
 - **TrendFilter pattern**: Create `TrendFilter` in `initialize()`. In `_trading_cycle()`, fetch candles for `trend_timeframe` (default "4h"), call `get_trend(symbol, candles)` → pass `trend_direction` to `ensemble.vote()`. Trend errors are caught gracefully (trend_direction stays None). Tests that use MagicMock candles won't trigger trend filter because `ta.trend.ADXIndicator` fails on mocks — caught by try/except.
 - **Ensemble trend filtering**: `vote()` accepts optional `trend_direction` param. BUY rejected if BEARISH, SELL rejected if BULLISH. Conflict detection runs BEFORE trend filter. NEUTRAL and None allow all signals through.
-- **Test count baseline**: 545 tests passing as of V2-012
+- **Test count baseline**: 571 tests passing as of V2-013
+- **RSI divergence pattern**: `divergence_enabled` defaults to `False` for backward compatibility. When enabled, swing detection (`_find_peaks`/`_find_troughs`) finds local extrema in price and RSI within `divergence_lookback` window. Bullish divergence: price lower low + RSI higher low → BUY (0.8 confidence). Bearish: price higher high + RSI lower high → SELL (0.8 confidence). Fallback oversold/overbought signals capped at 0.5 confidence when divergence enabled. RSI NaN warmup period (~`period` candles) causes swing detection to skip early indices — test data needs enough warmup before first pattern.
 - **MA Crossover filter pattern**: All new filter params default to disabled (`False`/`0`) for backward compatibility. Filters (volume, momentum, ADX, trend strength, cooldown) only activate when explicitly enabled. Crossover detection runs first, then filters gate BUY/SELL → HOLD. NumPy bools must be cast to Python `bool()` before storing in metadata (`np.True_ is not True`).
 - **ADX computation needs 28+ candles**: The `ta` library's ADXIndicator with window=14 requires ~28 candles to produce valid results. Wrap in try/except (IndexError, ValueError) and skip the filter gracefully when data is insufficient.
 - **Test crossover data design**: For MA crossover tests, the crossover must happen at the LAST candle: `prev_short <= prev_long AND current_short > current_long`. Simply having short > long is NOT sufficient — must verify the transition happens at the boundary.
@@ -358,4 +359,27 @@ Started: 2026년 2월 22일 일요일 00시 13분 50초 KST
   - The `ta` ADX indicator needs ~28 candles (2× window + warmup) — wrap in try/except for shorter data
   - Test data for crossover strategies must produce the crossover at the LAST candle (transition from prev ≤ to current >), not just show short > long
   - All new filter params should default to `False`/`0` (disabled) so the strategy module-level `register()` call and existing tests are unaffected
+---
+
+## 2026-02-22 - V2-013: Enhanced RSI with divergence detection
+- **Implemented:**
+  - Bullish divergence: price makes lower low but RSI makes higher low → BUY with 0.8 confidence
+  - Bearish divergence: price makes higher high but RSI makes lower high → SELL with 0.8 confidence
+  - Swing detection: `_find_troughs()` and `_find_peaks()` functions find local extrema using configurable `order` (neighbor comparison distance)
+  - Divergence lookback window: configurable via `divergence_lookback` (default 14 candles)
+  - Swing order: configurable via `divergence_swing_order` (default 3)
+  - Regular RSI oversold/overbought still works as fallback with lower confidence (capped at 0.5 when divergence enabled)
+  - Metadata includes `divergence_type`: `bullish_divergence`, `bearish_divergence`, `oversold`, `overbought`
+  - Divergence signals include price/RSI peak/trough details in metadata
+  - `divergence_enabled` defaults to `False` — fully backward compatible with all existing tests
+- **Files modified:**
+  - `src/bot/strategies/technical/rsi.py` — added `_find_troughs()`, `_find_peaks()`, divergence detection methods, updated `analyze()` with divergence priority
+- **Files created:**
+  - `tests/strategies/test_v2_013_rsi_divergence.py` — 26 new tests (swing detection, backward compat, bullish/bearish divergence, fallback, config, regime)
+- **Tests:** 571 tests passing (545 previous + 26 new), ruff check passes
+- **Learnings for future iterations:**
+  - RSI has NaN values for the first `period` candles — swing detection skips indices with NaN neighbors, so test data needs sufficient warmup (flat prices) before the first pattern
+  - Crafting divergence test data: need strong move (sharp RSI change), recovery, then gradual move past the same price level (weaker RSI change) — the key is the momentum difference creates divergence in the RSI indicator
+  - `_find_troughs`/`_find_peaks` compare to all neighbors within `order` distance — both left and right must exist and be non-NaN
+  - Import ordering in tests: third-party imports (pandas) must come before local imports (bot.models) for ruff I001
 ---
