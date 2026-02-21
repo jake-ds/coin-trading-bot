@@ -39,6 +39,7 @@ logs/
 # OS
 .DS_Store
 Thumbs.db
+.tool-versions
 
 # Testing & coverage
 .pytest_cache/
