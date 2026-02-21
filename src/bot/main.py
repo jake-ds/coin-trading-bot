@@ -11,6 +11,7 @@ from bot.config import Settings, TradingMode, load_settings
 from bot.dashboard import app as dashboard_module
 from bot.data.collector import DataCollector
 from bot.data.store import DataStore
+from bot.data.websocket_feed import WebSocketFeed
 from bot.exchanges.factory import ExchangeFactory
 from bot.execution.engine import ExecutionEngine
 from bot.execution.paper_portfolio import PaperPortfolio
@@ -47,6 +48,7 @@ class TradingBot:
         self._signal_ensemble: SignalEnsemble | None = None
         self._trend_filter: TrendFilter | None = None
         self._regime_detector: MarketRegimeDetector | None = None
+        self._ws_feed: WebSocketFeed | None = None
         self._cycle_lock: asyncio.Lock = asyncio.Lock()
         self._cycle_count: int = 0
         self._total_cycle_duration: float = 0.0
@@ -117,6 +119,9 @@ class TradingBot:
                 paper_portfolio=self._paper_portfolio,
             )
 
+        # Initialize WebSocket feed (if enabled and exchanges available)
+        self._init_ws_feed()
+
         # Initialize Telegram notifier (gracefully skip if not configured)
         self._init_telegram()
 
@@ -168,6 +173,30 @@ class TradingBot:
                 self._exchanges.append(ResilientExchange(adapter))
             except ValueError:
                 logger.warning("upbit_adapter_not_available")
+
+    def _init_ws_feed(self) -> None:
+        """Initialize WebSocket feed if enabled and exchanges are available."""
+        if not self._settings.websocket_enabled:
+            logger.debug("websocket_feed_disabled")
+            return
+        if not self._exchanges:
+            logger.debug("websocket_feed_no_exchanges")
+            return
+
+        # Use first exchange for the WebSocket feed
+        self._ws_feed = WebSocketFeed(
+            exchange=self._exchanges[0],
+            symbols=self._settings.symbols,
+            timeframes=self._settings.timeframes,
+            poll_interval=self._settings.websocket_poll_interval,
+            max_reconnect_delay=self._settings.websocket_max_reconnect_delay,
+        )
+        # Start feed as background task
+        asyncio.ensure_future(self._ws_feed.start())
+        logger.info(
+            "websocket_feed_initialized",
+            ws_supported=self._ws_feed.ws_supported,
+        )
 
     def _init_telegram(self) -> None:
         """Initialize Telegram notifier if bot_token and chat_id are configured."""
@@ -298,10 +327,15 @@ class TradingBot:
         # BEFORE running strategies, check exit conditions on all managed positions
         if self._position_manager and self._store:
             for symbol in list(self._position_manager.managed_symbols):
-                candles = await self._store.get_candles(symbol, limit=1)
-                if not candles:
-                    continue
-                current_price = candles[-1].close
+                # Prefer WebSocket feed price for faster stop-loss checks
+                current_price = None
+                if self._ws_feed:
+                    current_price = self._ws_feed.get_latest_price(symbol)
+                if current_price is None:
+                    candles = await self._store.get_candles(symbol, limit=1)
+                    if not candles:
+                        continue
+                    current_price = candles[-1].close
                 exit_signal = self._position_manager.check_exits(
                     symbol, current_price
                 )
@@ -584,6 +618,10 @@ class TradingBot:
         # Notify shutdown via Telegram
         if self._telegram:
             await self._telegram.send_message("Bot shutting down.")
+
+        # Stop WebSocket feed
+        if self._ws_feed:
+            await self._ws_feed.stop()
 
         # Cancel dashboard background task
         if self._dashboard_task and not self._dashboard_task.done():

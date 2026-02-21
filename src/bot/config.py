@@ -71,6 +71,11 @@ class Settings(BaseSettings):
     timeframes: list[str] = Field(default_factory=lambda: ["15m", "1h", "4h", "1d"])
     trend_timeframe: str = "4h"
 
+    # WebSocket feed
+    websocket_enabled: bool = False
+    websocket_poll_interval: float = Field(default=5.0, gt=0)
+    websocket_max_reconnect_delay: float = Field(default=60.0, gt=0)
+
     # Trading loop
     loop_interval_seconds: int = Field(default=60, ge=1)
 

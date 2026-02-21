@@ -347,7 +347,7 @@
         "All existing tests pass, ruff check passes"
       ],
       "priority": 18,
-      "passes": false,
+      "passes": true,
       "notes": "Polling every 60s means the bot can miss a 5% crash and never trigger stop-loss"
     },
     {

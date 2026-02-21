@@ -17,6 +17,10 @@ Started: 2026년 2월 22일 일요일 00시 13분 50초 KST
 - **Telegram error notifications**: Now send full `traceback.format_exc()` instead of just `str(e)` — tests should check `"Traceback" in error_msg` and `"error text" in error_msg`
 - **TrendFilter pattern**: Create `TrendFilter` in `initialize()`. In `_trading_cycle()`, fetch candles for `trend_timeframe` (default "4h"), call `get_trend(symbol, candles)` → pass `trend_direction` to `ensemble.vote()`. Trend errors are caught gracefully (trend_direction stays None). Tests that use MagicMock candles won't trigger trend filter because `ta.trend.ADXIndicator` fails on mocks — caught by try/except.
 - **Ensemble trend filtering**: `vote()` accepts optional `trend_direction` param. BUY rejected if BEARISH, SELL rejected if BULLISH. Conflict detection runs BEFORE trend filter. NEUTRAL and None allow all signals through.
+- **Test count baseline**: 733 tests passing as of V2-018
+- **WebSocketFeed pattern**: `websocket_enabled` defaults to `False` in config for backward compat. In `initialize()`, `_init_ws_feed()` creates WebSocketFeed only if `websocket_enabled=True` AND exchanges exist. Uses first exchange. Start via `asyncio.ensure_future(feed.start())`. Stop via `await feed.stop()` in shutdown. WS support auto-detected via `ccxt_exchange.has['watchTicker']`.
+- **WebSocket price in exit checks**: In `_trading_cycle()`, prefer `ws_feed.get_latest_price(symbol)` over candle close for faster stop-loss checks. Falls back to `store.get_candles()` when WS price is None.
+- **WS mock pattern**: Mock the adapter chain: `exchange._exchange._exchange` = ccxt exchange with `has` dict. Use `AsyncMock(side_effect=...)` for `watch_ticker`/`watch_ohlcv`. Block with `asyncio.sleep(100)` to simulate long-running WS streams. For REST fallback tests, mock `exchange.get_ticker`. Always add `mock_feed.stop = AsyncMock()` on mock feeds injected into bot for shutdown compatibility.
 - **Test count baseline**: 600 tests passing as of V2-014
 - **Bollinger squeeze pattern**: `mode` param controls strategy behavior: `mean_reversion` (default, backward compat) = original band-touch logic; `squeeze` = detect BB width contraction below rolling average, then trade breakouts with volume confirmation and cooldown. Squeeze needs `2 * period + squeeze_candles_required` candles of history. Consecutive squeeze candles counted BEFORE the breakout candle. Cooldown state tracked via `_candles_since_signal` (same pattern as MA Crossover).
 - **RSI divergence pattern**: `divergence_enabled` defaults to `False` for backward compatibility. When enabled, swing detection (`_find_peaks`/`_find_troughs`) finds local extrema in price and RSI within `divergence_lookback` window. Bullish divergence: price lower low + RSI higher low → BUY (0.8 confidence). Bearish: price higher high + RSI lower high → SELL (0.8 confidence). Fallback oversold/overbought signals capped at 0.5 confidence when divergence enabled. RSI NaN warmup period (~`period` candles) causes swing detection to skip early indices — test data needs enough warmup before first pattern.
@@ -499,4 +503,38 @@ Started: 2026년 2월 22일 일요일 00시 13분 50초 KST
   - Use `timedelta(hours=idx)` instead of `datetime(year, month, day, hour=idx)` for candle timestamps in tests — avoids hour overflow when `idx >= 24`
   - ATR requires `period + 1` candles minimum (need one previous close for true range calculation)
   - Test count baseline: 698 tests passing as of V2-017
+---
+
+## 2026-02-22 - V2-018: WebSocket real-time data feed with ccxt
+- **Implemented:**
+  - New `WebSocketFeed` class in `src/bot/data/websocket_feed.py` with dual-mode operation
+  - WebSocket mode: uses ccxt pro's `watch_ticker`/`watch_ohlcv` when exchange supports it (auto-detected via `has['watchTicker']`)
+  - REST polling mode: falls back to `exchange.get_ticker()` at configurable interval when WebSocket not supported
+  - Latest prices stored in dict accessible via `get_latest_price(symbol)` and `latest_prices` property
+  - Candle close detection: compares timestamps between consecutive OHLCV updates; triggers `on_candle_close` callback when new candle appears
+  - Graceful reconnection: exponential backoff (doubles on each failure, up to `max_reconnect_delay`, resets on success)
+  - Callback error isolation: errors in `on_candle_close` callback are caught and logged, don't crash the feed
+  - Auto-detection traverses adapter chain: ResilientExchange → ExchangeAdapter → ccxt exchange
+  - `update_price()` method for manual price updates (used by REST polling and tests)
+  - Added `websocket_enabled` (default False), `websocket_poll_interval` (default 5.0), `websocket_max_reconnect_delay` (default 60.0) to Settings
+  - Wired into `main.py`: `_init_ws_feed()` creates and starts feed if enabled and exchanges exist; shutdown stops feed
+  - PositionManager exit checks now prefer WebSocket feed prices for faster stop-loss detection, falling back to candle close
+  - Exported `WebSocketFeed` from `data/__init__.py`
+- **Files created:**
+  - `src/bot/data/websocket_feed.py` — WebSocketFeed class
+  - `tests/data/test_websocket_feed.py` — 35 new tests
+- **Files modified:**
+  - `src/bot/config.py` — added websocket_enabled, websocket_poll_interval, websocket_max_reconnect_delay settings
+  - `src/bot/data/__init__.py` — exported WebSocketFeed
+  - `src/bot/main.py` — import WebSocketFeed, _init_ws_feed(), WS price in exit checks, shutdown stops feed
+- **Tests:** 733 tests passing (698 previous + 35 new), ruff check passes
+- **Learnings for future iterations:**
+  - ccxt WebSocket support detected via `exchange.has['watchTicker']` — not all exchanges support it
+  - ResilientExchange adapter chain traversal: `resilient._exchange` → adapter, `adapter._exchange` → ccxt exchange
+  - AsyncMock `side_effect=lambda *a: asyncio.sleep(100)` simulates long-running WebSocket streams in tests
+  - When injecting mock WS feed into bot, must set `mock_feed.stop = AsyncMock()` or shutdown will fail with "can't be used in await"
+  - Candle close detection via timestamp comparison: when new candle timestamp > last seen timestamp, previous candle just closed
+  - `websocket_enabled` defaults to False for backward compatibility — all existing tests unaffected
+  - Zero prices from ticker should be ignored (could indicate exchange error)
+  - Test count baseline: 733 tests passing as of V2-018
 ---
