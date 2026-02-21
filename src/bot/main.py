@@ -22,6 +22,7 @@ from bot.monitoring.telegram import TelegramNotifier
 from bot.risk.manager import RiskManager
 from bot.strategies.base import strategy_registry
 from bot.strategies.ensemble import SignalEnsemble
+from bot.strategies.trend_filter import TrendFilter
 
 logger = structlog.get_logger()
 
@@ -42,6 +43,7 @@ class TradingBot:
         self._paper_portfolio: PaperPortfolio | None = None
         self._position_manager: PositionManager | None = None
         self._signal_ensemble: SignalEnsemble | None = None
+        self._trend_filter: TrendFilter | None = None
         self._cycle_lock: asyncio.Lock = asyncio.Lock()
         self._cycle_count: int = 0
         self._total_cycle_duration: float = 0.0
@@ -59,11 +61,12 @@ class TradingBot:
         # Create exchange adapters (wrapped in ResilientExchange)
         self._init_exchanges()
 
-        # Initialize data collector
+        # Initialize data collector (collect all configured timeframes)
         self._collector = DataCollector(
             exchanges=self._exchanges,
             store=self._store,
             symbols=self._settings.symbols,
+            timeframes=self._settings.timeframes,
             collection_interval=self._settings.loop_interval_seconds,
         )
 
@@ -81,6 +84,9 @@ class TradingBot:
             min_agreement=self._settings.signal_min_agreement,
             strategy_weights=self._settings.strategy_weights,
         )
+
+        # Initialize trend filter for higher-timeframe confirmation
+        self._trend_filter = TrendFilter()
 
         # Initialize position manager (stop-loss, take-profit, trailing stop)
         self._position_manager = PositionManager(
@@ -309,12 +315,37 @@ class TradingBot:
             if not candles:
                 continue
 
+            # Determine trend from higher-timeframe candles
+            trend_direction = None
+            if self._trend_filter and self._store:
+                try:
+                    trend_candles = await self._store.get_candles(
+                        symbol,
+                        timeframe=self._settings.trend_timeframe,
+                        limit=50,
+                    )
+                    if (
+                        len(trend_candles)
+                        >= self._trend_filter.required_history_length
+                    ):
+                        trend_direction = self._trend_filter.get_trend(
+                            symbol, trend_candles
+                        )
+                except Exception:
+                    logger.warning(
+                        "trend_filter_error",
+                        symbol=symbol,
+                        exc_info=True,
+                    )
+
             # Collect signals from all strategies and vote
             if self._signal_ensemble:
                 signals = await self._signal_ensemble.collect_signals(
                     symbol, active_strategies, candles
                 )
-                signal = self._signal_ensemble.vote(signals, symbol)
+                signal = self._signal_ensemble.vote(
+                    signals, symbol, trend_direction=trend_direction
+                )
             else:
                 continue
 

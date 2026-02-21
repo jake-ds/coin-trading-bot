@@ -62,6 +62,10 @@ class Settings(BaseSettings):
     signal_min_agreement: int = Field(default=2, ge=1)
     strategy_weights: dict[str, float] = Field(default_factory=dict)
 
+    # Multi-timeframe
+    timeframes: list[str] = Field(default_factory=lambda: ["15m", "1h", "4h", "1d"])
+    trend_timeframe: str = "4h"
+
     # Trading loop
     loop_interval_seconds: int = Field(default=60, ge=1)
 

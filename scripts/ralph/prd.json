@@ -188,7 +188,7 @@
         "All existing tests pass, ruff check passes"
       ],
       "priority": 10,
-      "passes": false,
+      "passes": true,
       "notes": "Trading against the trend is the #1 way to lose money"
     },
     {

@@ -15,6 +15,10 @@ Started: 2026년 2월 22일 일요일 00시 13분 50초 KST
 - **ExitType handling**: TP1 = partial exit (sell 50%), keep position in both managers with reduced qty; TP2/SL/trailing = full exit, remove from both PositionManager and RiskManager
 - **Cycle metrics**: `cycle_metrics` dict added to dashboard `_bot_state` — must be reset in test fixtures via `update_state(cycle_metrics={"cycle_count": 0, "average_cycle_duration": 0.0, "last_cycle_time": None})`
 - **Telegram error notifications**: Now send full `traceback.format_exc()` instead of just `str(e)` — tests should check `"Traceback" in error_msg` and `"error text" in error_msg`
+- **TrendFilter pattern**: Create `TrendFilter` in `initialize()`. In `_trading_cycle()`, fetch candles for `trend_timeframe` (default "4h"), call `get_trend(symbol, candles)` → pass `trend_direction` to `ensemble.vote()`. Trend errors are caught gracefully (trend_direction stays None). Tests that use MagicMock candles won't trigger trend filter because `ta.trend.ADXIndicator` fails on mocks — caught by try/except.
+- **Ensemble trend filtering**: `vote()` accepts optional `trend_direction` param. BUY rejected if BEARISH, SELL rejected if BULLISH. Conflict detection runs BEFORE trend filter. NEUTRAL and None allow all signals through.
+- **Test count baseline**: 475 tests passing as of V2-010
+- **OHLCV validators**: Model enforces `high >= max(open, close)` and `low <= min(open, close)`. Test candle generators must satisfy these constraints.
 - **DCA confirm_buy pattern**: After DCAStrategy.analyze() returns BUY, call `strategy.confirm_buy(buy_time, amount, quantity)` to commit state. analyze() is idempotent and side-effect-free.
 - **BacktestEngine entry_cost**: Track `entry_cost = cash` (total cash before buy, including fee) and compute PnL as `cash_after_sell - entry_cost`
 - **RiskManager pipeline**: After BUY, call `risk_manager.add_position(symbol, qty, price)`. After SELL, get position entry price via `risk_manager.get_position(symbol)`, calculate `pnl = (sell_price - entry_price) * qty`, call `record_trade_pnl(pnl)` then `remove_position(symbol)`. Call `check_and_reset_daily()` at start of each cycle for auto daily-loss-limit reset. Update portfolio value from `paper_portfolio.total_value` each cycle.
@@ -261,4 +265,35 @@ Started: 2026년 2월 22일 일요일 00시 13분 50초 KST
   - Ensemble must get strategies via `strategy_registry.get_active()` BEFORE the symbol loop, then pass them to `collect_signals()` — this ensures tests that patch `bot.main.strategy_registry` still work
   - Keep ensemble's `vote()` synchronous (no I/O) — only `collect_signals()` is async (calls strategy.analyze)
   - The ensemble's `strategy_name` field is always "ensemble" for voted signals — downstream code that checks strategy_name needs to be aware
+---
+
+## 2026-02-22 - V2-010: Multi-timeframe data collection and trend confirmation
+- **Implemented:**
+  - Added `timeframes` (default `["15m", "1h", "4h", "1d"]`) and `trend_timeframe` (default `"4h"`) to `Settings` in config.py
+  - `DataCollector` now receives configured `timeframes` list and fetches all timeframes in `collect_once()`
+  - New `TrendFilter` class in `src/bot/strategies/trend_filter.py` using 20-period SMA slope + ADX for trend detection
+  - `TrendDirection` enum: BULLISH, BEARISH, NEUTRAL
+  - ADX > 25 + SMA slope > 0 = BULLISH; ADX > 25 + SMA slope < 0 = BEARISH; else NEUTRAL
+  - `get_trend()` and `get_trend_details()` methods for trend analysis
+  - Modified `SignalEnsemble.vote()` to accept optional `trend_direction` parameter
+  - BUY signals rejected in BEARISH trend; SELL signals rejected in BULLISH trend; NEUTRAL allows all
+  - Conflict detection runs BEFORE trend filter (consistent with existing behavior)
+  - Wired into `_trading_cycle()`: fetches higher-timeframe candles, computes trend, passes to `vote()`
+  - Trend filter errors caught gracefully — falls back to no filtering (trend_direction=None)
+  - Exported `TrendFilter` and `TrendDirection` from `strategies/__init__.py`
+- **Files created:**
+  - `src/bot/strategies/trend_filter.py` — TrendFilter, TrendDirection
+  - `tests/strategies/test_trend_filter.py` — 26 new tests
+- **Files modified:**
+  - `src/bot/config.py` — added `timeframes`, `trend_timeframe` settings
+  - `src/bot/strategies/ensemble.py` — added `trend_direction` param to `vote()` with trend filtering logic
+  - `src/bot/strategies/__init__.py` — exported TrendFilter, TrendDirection
+  - `src/bot/main.py` — import TrendFilter, create in initialize(), pass timeframes to DataCollector, fetch trend candles and apply in _trading_cycle()
+- **Tests:** 475 tests passing (449 previous + 26 new), ruff check passes
+- **Learnings for future iterations:**
+  - OHLCV model validates `high >= max(open, close)` and `low <= min(open, close)` — test candle generators must respect these constraints
+  - Tests using MagicMock candles cause `ta.trend.ADXIndicator` to fail with TypeError — wrapping trend filter in try/except in `_trading_cycle()` makes it gracefully degrade
+  - `__future__` annotations + TYPE_CHECKING guard avoids circular imports between ensemble.py and trend_filter.py
+  - The `ta` library's ADX needs proper high/low/close series — it can't work with mocked data
+  - Trend filter is optional (None trend_direction) — backward compatible with all existing tests
 ---

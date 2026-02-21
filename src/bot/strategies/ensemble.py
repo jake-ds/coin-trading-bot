@@ -1,11 +1,16 @@
 """Signal ensemble voting system for combining multiple strategy signals."""
 
-from typing import Any
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
 
 import structlog
 
 from bot.models import SignalAction, TradingSignal
 from bot.strategies.base import BaseStrategy
+
+if TYPE_CHECKING:
+    from bot.strategies.trend_filter import TrendDirection
 
 logger = structlog.get_logger()
 
@@ -70,7 +75,12 @@ class SignalEnsemble:
 
         return signals
 
-    def vote(self, signals: list[TradingSignal], symbol: str) -> TradingSignal:
+    def vote(
+        self,
+        signals: list[TradingSignal],
+        symbol: str,
+        trend_direction: TrendDirection | None = None,
+    ) -> TradingSignal:
         """Combine signals into a single decision via weighted voting.
 
         Voting logic:
@@ -80,9 +90,15 @@ class SignalEnsemble:
         - If no agreement threshold met, return HOLD.
         - Final confidence = weighted average of agreeing strategies' confidence.
 
+        Trend filtering (when trend_direction is provided):
+        - BUY signals are rejected when trend is BEARISH.
+        - SELL signals are rejected when trend is BULLISH.
+        - NEUTRAL trend allows all signals through.
+
         Args:
             signals: List of signals from different strategies.
             symbol: Trading pair symbol.
+            trend_direction: Optional higher-timeframe trend direction.
 
         Returns:
             A single TradingSignal representing the ensemble decision.
@@ -108,10 +124,49 @@ class SignalEnsemble:
                 sell_count=len(sell_signals),
             )
 
+        # Apply trend filter to reject signals against the trend
+        if trend_direction is not None:
+            from bot.strategies.trend_filter import TrendDirection
+
+            if buy_signals and trend_direction == TrendDirection.BEARISH:
+                logger.info(
+                    "ensemble_buy_rejected_by_trend",
+                    symbol=symbol,
+                    trend=trend_direction.value,
+                    buy_count=len(buy_signals),
+                )
+                return self._make_hold(
+                    symbol,
+                    reason="trend_filter_rejected",
+                    rejected_action="BUY",
+                    trend=trend_direction.value,
+                )
+
+            if sell_signals and trend_direction == TrendDirection.BULLISH:
+                logger.info(
+                    "ensemble_sell_rejected_by_trend",
+                    symbol=symbol,
+                    trend=trend_direction.value,
+                    sell_count=len(sell_signals),
+                )
+                return self._make_hold(
+                    symbol,
+                    reason="trend_filter_rejected",
+                    rejected_action="SELL",
+                    trend=trend_direction.value,
+                )
+
         # Check BUY agreement
         if len(buy_signals) >= self._min_agreement:
             confidence = self._weighted_confidence(buy_signals)
             strategy_names = [s.strategy_name for s in buy_signals]
+            metadata: dict[str, Any] = {
+                "ensemble_agreement": len(buy_signals),
+                "total_signals": len(signals),
+                "agreeing_strategies": strategy_names,
+            }
+            if trend_direction is not None:
+                metadata["trend"] = trend_direction.value
             logger.info(
                 "ensemble_buy",
                 symbol=symbol,
@@ -124,17 +179,20 @@ class SignalEnsemble:
                 symbol=symbol,
                 action=SignalAction.BUY,
                 confidence=confidence,
-                metadata={
-                    "ensemble_agreement": len(buy_signals),
-                    "total_signals": len(signals),
-                    "agreeing_strategies": strategy_names,
-                },
+                metadata=metadata,
             )
 
         # Check SELL agreement
         if len(sell_signals) >= self._min_agreement:
             confidence = self._weighted_confidence(sell_signals)
             strategy_names = [s.strategy_name for s in sell_signals]
+            metadata = {
+                "ensemble_agreement": len(sell_signals),
+                "total_signals": len(signals),
+                "agreeing_strategies": strategy_names,
+            }
+            if trend_direction is not None:
+                metadata["trend"] = trend_direction.value
             logger.info(
                 "ensemble_sell",
                 symbol=symbol,
@@ -147,11 +205,7 @@ class SignalEnsemble:
                 symbol=symbol,
                 action=SignalAction.SELL,
                 confidence=confidence,
-                metadata={
-                    "ensemble_agreement": len(sell_signals),
-                    "total_signals": len(signals),
-                    "agreeing_strategies": strategy_names,
-                },
+                metadata=metadata,
             )
 
         # No agreement threshold met
