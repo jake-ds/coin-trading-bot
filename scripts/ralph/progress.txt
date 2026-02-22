@@ -896,3 +896,36 @@ Started: 2026년 2월 22일 일요일 00시 13분 50초 KST
   - Main branch is nearly empty — V3 branch must be based on ralph/v2-production
   - All 1263 existing tests still pass after dependency addition
 ---
+
+## 2026-02-22 - V3-002
+- Created src/bot/quant/statistics.py with 6 functions: adf_test, engle_granger_cointegration, calculate_zscore, calculate_half_life, estimate_ou_params, rolling_ols_hedge_ratio
+- Created tests/quant/__init__.py and tests/quant/test_statistics.py (16 tests)
+- Exported all functions from quant/__init__.py
+- Tests: 1279 passing (1263 + 16 new)
+---
+
+## 2026-02-22 - V3-003
+- Created src/bot/quant/risk_metrics.py with 7 functions: parametric_var, historical_var, cornish_fisher_var, cvar, sortino_ratio, calmar_ratio, information_ratio
+- Created tests/quant/test_risk_metrics.py (19 tests)
+- Tests: 1298 passing (1279 + 19 new)
+---
+
+## 2026-02-22 - V3-004
+- Created src/bot/quant/volatility.py with GARCHModel class and classify_volatility_regime function
+- Created tests/quant/test_volatility.py (12 tests)
+- Tests: 1310 passing (1298 + 12 new)
+- **Learnings:** GARCH fit requires rescaling returns by 100x for arch library numerical stability
+---
+
+## 2026-02-22 - V3-005
+- Created src/bot/quant/portfolio.py with 4 functions: min_variance_portfolio, max_sharpe_portfolio, risk_parity_portfolio, efficient_frontier
+- Created tests/quant/test_portfolio.py (9 tests)
+- Tests: 1319 passing (1310 + 9 new)
+---
+
+## 2026-02-22 - V3-006
+- Created src/bot/quant/microstructure.py with 5 functions: vwap_midprice, microprice, orderbook_imbalance, detect_walls, compute_orderbook_metrics
+- Created tests/quant/test_microstructure.py (16 tests)
+- Tests: 1335 passing (1319 + 16 new)
+- **All 5 quant math modules now complete.** Test count baseline: 1335
+---

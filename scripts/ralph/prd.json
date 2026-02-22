@@ -31,7 +31,7 @@
         "All existing tests pass, ruff check passes"
       ],
       "priority": 2,
-      "passes": false,
+      "passes": true,
       "notes": "Reference: git show feat/v3-quant-trading-system:src/bot/quant/statistics.py"
     },
     {
@@ -46,7 +46,7 @@
         "All existing tests pass, ruff check passes"
       ],
       "priority": 3,
-      "passes": false,
+      "passes": true,
       "notes": "Reference: git show feat/v3-quant-trading-system:src/bot/quant/risk_metrics.py"
     },
     {
@@ -61,7 +61,7 @@
         "All existing tests pass, ruff check passes"
       ],
       "priority": 4,
-      "passes": false,
+      "passes": true,
       "notes": "Reference: git show feat/v3-quant-trading-system:src/bot/quant/volatility.py"
     },
     {
@@ -76,7 +76,7 @@
         "All existing tests pass, ruff check passes"
       ],
       "priority": 5,
-      "passes": false,
+      "passes": true,
       "notes": "Reference: git show feat/v3-quant-trading-system:src/bot/quant/portfolio.py"
     },
     {
@@ -91,7 +91,7 @@
         "All existing tests pass, ruff check passes"
       ],
       "priority": 6,
-      "passes": false,
+      "passes": true,
       "notes": "Reference: git show feat/v3-quant-trading-system:src/bot/quant/microstructure.py"
     },
     {
