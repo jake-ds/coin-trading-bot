@@ -170,3 +170,19 @@ Started: 2026-02-22
   - Config fields can accumulate across story branches — always verify before duplicating
   - Test count baseline: 1442 tests passing as of V3-014
 ---
+
+## 2026-02-22 - V3-015
+- Created src/bot/execution/rebalancer.py with PortfolioRebalancer class
+  - compute_target_weights(): risk_parity or max_sharpe optimization via quant.portfolio
+  - check_rebalance_needed(): drift detection with threshold, interval timer, order generation
+  - reset_timer(), target_weights property
+  - Equal-weight fallback for single asset or insufficient data (<20 returns)
+- Created tests/execution/test_rebalancer.py (13 tests)
+  - Covers: weight computation, single asset, drift detection, interval gating, both methods
+  - Order fields validation, overweight SELL / underweight BUY, zero portfolio, timer reset
+- Tests: 1455 passing (1442 + 13 new), ruff clean
+- **Learnings for future iterations:**
+  - PortfolioRebalancer uses hours_since_rebalance counter incremented each call
+  - min_rebalance_interval=0 in tests to bypass interval gating
+  - Test count baseline: 1455 tests passing as of V3-015
+---
