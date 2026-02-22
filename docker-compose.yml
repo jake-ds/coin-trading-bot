@@ -1,0 +1,31 @@
+services:
+  bot:
+    build: .
+    container_name: coin-trading-bot
+    restart: unless-stopped
+    ports:
+      - "${DASHBOARD_PORT:-8000}:8000"
+    volumes:
+      - bot-data:/app/data
+      - ./config.yaml:/app/config.yaml:ro
+    env_file:
+      - .env
+    environment:
+      - TRADING_MODE=${TRADING_MODE:-paper}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - DATABASE_URL=sqlite+aiosqlite:///data/trading.db
+      - NODE_ENV=production
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "1.0"
+
+volumes:
+  bot-data:
