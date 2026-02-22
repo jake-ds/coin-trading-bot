@@ -21,6 +21,8 @@ Started: 2026년 2월 22일 일요일 00시 13분 50초 KST
 - **WebSocketFeed pattern**: `websocket_enabled` defaults to `False` in config for backward compat. In `initialize()`, `_init_ws_feed()` creates WebSocketFeed only if `websocket_enabled=True` AND exchanges exist. Uses first exchange. Start via `asyncio.ensure_future(feed.start())`. Stop via `await feed.stop()` in shutdown. WS support auto-detected via `ccxt_exchange.has['watchTicker']`.
 - **WebSocket price in exit checks**: In `_trading_cycle()`, prefer `ws_feed.get_latest_price(symbol)` over candle close for faster stop-loss checks. Falls back to `store.get_candles()` when WS price is None.
 - **WS mock pattern**: Mock the adapter chain: `exchange._exchange._exchange` = ccxt exchange with `has` dict. Use `AsyncMock(side_effect=...)` for `watch_ticker`/`watch_ohlcv`. Block with `asyncio.sleep(100)` to simulate long-running WS streams. For REST fallback tests, mock `exchange.get_ticker`. Always add `mock_feed.stop = AsyncMock()` on mock feeds injected into bot for shutdown compatibility.
+- **StrategyTracker pattern**: Create `StrategyTracker` in `initialize()` with config settings and `strategy_registry`. In `_trading_cycle()`: call `check_re_enable()` at start; after regime detection call `tracker.update_regime(regime)`; after SELL execution record PnL via `tracker.record_trade(strategy_name, pnl)` for each contributing strategy. Ensemble signals use `signal.metadata["agreeing_strategies"]` to attribute PnL. Exit PnL (SL/TP) recorded under `"position_manager"`. Dashboard `strategy_stats` updated via `tracker.get_all_stats()` at end of cycle. Dashboard state must include `strategy_stats: {}` in reset fixtures.
+- **Test count baseline**: 900 tests passing as of V2-022
 - **Test count baseline**: 600 tests passing as of V2-014
 - **Bollinger squeeze pattern**: `mode` param controls strategy behavior: `mean_reversion` (default, backward compat) = original band-touch logic; `squeeze` = detect BB width contraction below rolling average, then trade breakouts with volume confirmation and cooldown. Squeeze needs `2 * period + squeeze_candles_required` candles of history. Consecutive squeeze candles counted BEFORE the breakout candle. Cooldown state tracked via `_candles_since_signal` (same pattern as MA Crossover).
 - **RSI divergence pattern**: `divergence_enabled` defaults to `False` for backward compatibility. When enabled, swing detection (`_find_peaks`/`_find_troughs`) finds local extrema in price and RSI within `divergence_lookback` window. Bullish divergence: price lower low + RSI higher low → BUY (0.8 confidence). Bearish: price higher high + RSI lower high → SELL (0.8 confidence). Fallback oversold/overbought signals capped at 0.5 confidence when divergence enabled. RSI NaN warmup period (~`period` candles) causes swing detection to skip early indices — test data needs enough warmup before first pattern.
@@ -637,4 +639,44 @@ Started: 2026년 2월 22일 일요일 00시 13분 50초 KST
   - Walk-forward capital carry-over: create a new BacktestEngine per window with `initial_capital=previous_window_final_value`
   - Backward compat: all new constructor params (stop_loss_pct, take_profit_pct, trailing_stop_pct, dynamic_slippage) default to 0/False so existing tests work unchanged
   - Test count baseline: 853 tests passing as of V2-021
+---
+
+## 2026-02-22 - V2-022: Per-strategy performance tracking and strategy auto-disable
+- **Implemented:**
+  - New `StrategyTracker` class in `src/bot/monitoring/strategy_tracker.py` with full per-strategy stats
+  - `StrategyStats` class: total_trades, wins, losses, total_pnl, win_rate, avg_pnl, consecutive_losses, sharpe_ratio, profit_factor
+  - `record_trade(strategy_name, pnl)` updates stats and checks auto-disable conditions
+  - Auto-disable on consecutive losses: configurable `max_consecutive_losses` (default 5)
+  - Auto-disable on low win rate: `min_win_rate_pct` (default 40%) after `min_trades_for_evaluation` (default 20) trades
+  - Re-enable on regime change: when market regime changes from when strategy was disabled, strategy is re-enabled
+  - Time-based re-enable check: every `re_enable_check_hours` (default 24), checks if regime changed; defers if same regime
+  - `update_regime(regime)` tracks current regime and triggers re-enable check on regime change
+  - `check_re_enable()` called at start of each trading cycle for time-based re-evaluation
+  - Dashboard `/strategies` endpoint returns per-strategy stats dict
+  - Added `strategy_stats` to dashboard `_bot_state` (default empty dict)
+  - Wired into `main.py`: created in `initialize()` with config settings; registry passed for auto-disable/re-enable
+  - After SELL execution, PnL recorded to contributing strategies from ensemble's `agreeing_strategies` metadata
+  - After PositionManager exits (SL/TP), PnL recorded under "position_manager" strategy name
+  - Regime updates forwarded to tracker from `_trading_cycle()` regime detection
+  - Added `strategy_max_consecutive_losses`, `strategy_min_win_rate_pct`, `strategy_min_trades_for_eval`, `strategy_re_enable_check_hours` to Settings in config.py
+  - Exported `StrategyTracker`, `StrategyStats` from `monitoring/__init__.py`
+- **Files created:**
+  - `src/bot/monitoring/strategy_tracker.py` — StrategyTracker, StrategyStats
+  - `tests/monitoring/test_strategy_tracker.py` — 37 unit tests
+  - `tests/test_v2_022_strategy_tracker.py` — 10 integration tests
+- **Files modified:**
+  - `src/bot/main.py` — import StrategyTracker, create in initialize(), record trades, update regime, check re-enable
+  - `src/bot/config.py` — added 4 strategy tracker settings
+  - `src/bot/dashboard/app.py` — added strategy_stats to state, /strategies endpoint
+  - `src/bot/monitoring/__init__.py` — exported StrategyTracker, StrategyStats
+  - `tests/dashboard/test_app.py` — added strategy_stats to reset_state fixture
+- **Tests:** 900 tests passing (853 previous + 47 new), ruff check passes
+- **Learnings for future iterations:**
+  - Ensemble SELL signals carry `agreeing_strategies` in metadata — use this to attribute PnL to contributing strategies
+  - PositionManager exits (SL/TP) are recorded under "position_manager" since they're not strategy-initiated
+  - When replacing bot._store with MagicMock in tests, must also set `mock_store.close = AsyncMock()` or shutdown fails
+  - Dashboard `_bot_state` key additions need corresponding updates in test fixtures that reset state
+  - StrategyRegistry `disable()` and `enable()` use `_active` set — StrategyTracker calls these directly for auto-management
+  - Re-enable resets `consecutive_losses` to 0 to give the strategy a fresh start
+  - Test count baseline: 900 tests passing as of V2-022
 ---

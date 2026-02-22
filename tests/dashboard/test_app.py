@@ -20,6 +20,7 @@ def reset_state():
             "average_cycle_duration": 0.0,
             "last_cycle_time": None,
         },
+        strategy_stats={},
     )
 
 

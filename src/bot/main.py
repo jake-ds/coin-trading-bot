@@ -20,6 +20,7 @@ from bot.execution.resilient import ResilientExchange
 from bot.execution.smart_executor import SmartExecutor
 from bot.models import OrderSide, SignalAction, TradingSignal
 from bot.monitoring.logger import setup_logging
+from bot.monitoring.strategy_tracker import StrategyTracker
 from bot.monitoring.telegram import TelegramNotifier
 from bot.risk.manager import RiskManager
 from bot.strategies.base import strategy_registry
@@ -50,6 +51,7 @@ class TradingBot:
         self._trend_filter: TrendFilter | None = None
         self._regime_detector: MarketRegimeDetector | None = None
         self._ws_feed: WebSocketFeed | None = None
+        self._strategy_tracker: StrategyTracker | None = None
         self._cycle_lock: asyncio.Lock = asyncio.Lock()
         self._cycle_count: int = 0
         self._total_cycle_duration: float = 0.0
@@ -96,6 +98,15 @@ class TradingBot:
 
         # Initialize market regime detector
         self._regime_detector = MarketRegimeDetector()
+
+        # Initialize strategy performance tracker
+        self._strategy_tracker = StrategyTracker(
+            max_consecutive_losses=self._settings.strategy_max_consecutive_losses,
+            min_win_rate_pct=self._settings.strategy_min_win_rate_pct,
+            min_trades_for_evaluation=self._settings.strategy_min_trades_for_eval,
+            re_enable_check_hours=self._settings.strategy_re_enable_check_hours,
+            registry=strategy_registry,
+        )
 
         # Initialize position manager (stop-loss, take-profit, trailing stop)
         self._position_manager = PositionManager(
@@ -320,6 +331,10 @@ class TradingBot:
         if self._risk_manager:
             self._risk_manager.check_and_reset_daily()
 
+        # Check if disabled strategies should be re-enabled
+        if self._strategy_tracker:
+            self._strategy_tracker.check_re_enable()
+
         # Update portfolio value from paper portfolio or default
         if self._risk_manager:
             if self._paper_portfolio:
@@ -376,6 +391,9 @@ class TradingBot:
                         regime = self._regime_detector.detect(candles)
                         for strategy in active_strategies:
                             strategy.adapt_to_regime(regime)
+                        # Update strategy tracker with regime
+                        if self._strategy_tracker:
+                            self._strategy_tracker.update_regime(regime)
                         logger.debug(
                             "regime_applied",
                             symbol=symbol,
@@ -501,6 +519,21 @@ class TradingBot:
                                         self._risk_manager.record_trade_pnl(
                                             pnl
                                         )
+                                        # Record to strategy tracker
+                                        if self._strategy_tracker:
+                                            strat_names = signal.metadata.get(
+                                                "agreeing_strategies", []
+                                            )
+                                            if strat_names:
+                                                for sn in strat_names:
+                                                    self._strategy_tracker.record_trade(
+                                                        sn, pnl
+                                                    )
+                                            else:
+                                                self._strategy_tracker.record_trade(
+                                                    signal.strategy_name,
+                                                    pnl,
+                                                )
                                     self._risk_manager.remove_position(
                                         order.symbol
                                     )
@@ -533,11 +566,17 @@ class TradingBot:
                     break
 
         # Update dashboard state after each cycle
+        strategy_stats = (
+            self._strategy_tracker.get_all_stats()
+            if self._strategy_tracker
+            else {}
+        )
         dashboard_module.update_state(
             status="running",
             trades=dashboard_module.get_state()["trades"] + recent_trades,
             metrics=dashboard_module.get_state()["metrics"],
             portfolio=dashboard_module.get_state()["portfolio"],
+            strategy_stats=strategy_stats,
         )
 
     async def _execute_exit(
@@ -572,6 +611,11 @@ class TradingBot:
                             fill_price - position["entry_price"]
                         ) * order.quantity
                         self._risk_manager.record_trade_pnl(pnl)
+                        # Record exit to strategy tracker
+                        if self._strategy_tracker:
+                            self._strategy_tracker.record_trade(
+                                "position_manager", pnl
+                            )
 
                     # For partial exits (TP1), update RiskManager position
                     # For full exits (SL, TP2, trailing), remove entirely

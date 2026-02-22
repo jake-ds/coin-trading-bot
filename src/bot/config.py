@@ -76,6 +76,12 @@ class Settings(BaseSettings):
     limit_order_timeout_seconds: float = Field(default=30.0, gt=0)
     twap_chunk_count: int = Field(default=5, ge=1)
 
+    # Strategy auto-disable
+    strategy_max_consecutive_losses: int = Field(default=5, ge=1)
+    strategy_min_win_rate_pct: float = Field(default=40.0, ge=0, le=100)
+    strategy_min_trades_for_eval: int = Field(default=20, ge=1)
+    strategy_re_enable_check_hours: float = Field(default=24.0, gt=0)
+
     # WebSocket feed
     websocket_enabled: bool = False
     websocket_poll_interval: float = Field(default=5.0, gt=0)

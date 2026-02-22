@@ -1,6 +1,13 @@
 """Monitoring package."""
 
 from bot.monitoring.metrics import MetricsCollector, PerformanceMetrics
+from bot.monitoring.strategy_tracker import StrategyStats, StrategyTracker
 from bot.monitoring.telegram import TelegramNotifier
 
-__all__ = ["MetricsCollector", "PerformanceMetrics", "TelegramNotifier"]
+__all__ = [
+    "MetricsCollector",
+    "PerformanceMetrics",
+    "StrategyStats",
+    "StrategyTracker",
+    "TelegramNotifier",
+]

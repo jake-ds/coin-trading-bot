@@ -44,6 +44,7 @@ _bot_state = {
         "average_cycle_duration": 0.0,
         "last_cycle_time": None,
     },
+    "strategy_stats": {},
 }
 
 
@@ -83,6 +84,12 @@ async def get_metrics():
 async def get_portfolio():
     """Get current portfolio."""
     return {"portfolio": _bot_state["portfolio"]}
+
+
+@app.get("/strategies")
+async def get_strategies():
+    """Get per-strategy performance stats."""
+    return {"strategies": _bot_state["strategy_stats"]}
 
 
 @app.get("/health")
