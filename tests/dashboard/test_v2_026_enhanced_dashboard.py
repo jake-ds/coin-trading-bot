@@ -58,7 +58,7 @@ async def client():
 class TestEquityCurveEndpoint:
     @pytest.mark.asyncio
     async def test_equity_curve_empty(self, client):
-        resp = await client.get("/equity-curve")
+        resp = await client.get("/api/equity-curve")
         assert resp.status_code == 200
         data = resp.json()
         assert data["equity_curve"] == []
@@ -70,7 +70,7 @@ class TestEquityCurveEndpoint:
             {"timestamp": "2026-01-01T01:00:00", "total_value": 10050.0},
             {"timestamp": "2026-01-01T02:00:00", "total_value": 10100.0},
         ])
-        resp = await client.get("/equity-curve")
+        resp = await client.get("/api/equity-curve")
         data = resp.json()
         assert len(data["equity_curve"]) == 3
         assert data["equity_curve"][0]["total_value"] == 10000.0
@@ -80,7 +80,7 @@ class TestEquityCurveEndpoint:
 class TestOpenPositionsEndpoint:
     @pytest.mark.asyncio
     async def test_open_positions_empty(self, client):
-        resp = await client.get("/open-positions")
+        resp = await client.get("/api/open-positions")
         assert resp.status_code == 200
         data = resp.json()
         assert data["positions"] == []
@@ -98,7 +98,7 @@ class TestOpenPositionsEndpoint:
                 "take_profit": 52500,
             }
         ])
-        resp = await client.get("/open-positions")
+        resp = await client.get("/api/open-positions")
         data = resp.json()
         assert len(data["positions"]) == 1
         assert data["positions"][0]["symbol"] == "BTC/USDT"
@@ -108,7 +108,7 @@ class TestOpenPositionsEndpoint:
 class TestRegimeEndpoint:
     @pytest.mark.asyncio
     async def test_regime_default(self, client):
-        resp = await client.get("/regime")
+        resp = await client.get("/api/regime")
         assert resp.status_code == 200
         data = resp.json()
         assert data["regime"] is None
@@ -116,7 +116,7 @@ class TestRegimeEndpoint:
     @pytest.mark.asyncio
     async def test_regime_with_data(self, client):
         update_state(regime="TRENDING_UP")
-        resp = await client.get("/regime")
+        resp = await client.get("/api/regime")
         data = resp.json()
         assert data["regime"] == "TRENDING_UP"
 
@@ -125,7 +125,7 @@ class TestStrategyToggle:
     @pytest.mark.asyncio
     async def test_toggle_no_registry(self, client):
         """Toggle without registry returns error."""
-        resp = await client.post("/strategies/test_strategy/toggle")
+        resp = await client.post("/api/strategies/test_strategy/toggle")
         assert resp.status_code == 200
         data = resp.json()
         assert data["success"] is False
@@ -138,7 +138,7 @@ class TestStrategyToggle:
         mock_registry.get.return_value = None
         set_strategy_registry(mock_registry)
 
-        resp = await client.post("/strategies/nonexistent/toggle")
+        resp = await client.post("/api/strategies/nonexistent/toggle")
         data = resp.json()
         assert data["success"] is False
         assert "not found" in data["error"]
@@ -152,7 +152,7 @@ class TestStrategyToggle:
         mock_registry.disable.return_value = True
         set_strategy_registry(mock_registry)
 
-        resp = await client.post("/strategies/ma_crossover/toggle")
+        resp = await client.post("/api/strategies/ma_crossover/toggle")
         data = resp.json()
         assert data["success"] is True
         assert data["active"] is False
@@ -168,7 +168,7 @@ class TestStrategyToggle:
         mock_registry.enable.return_value = True
         set_strategy_registry(mock_registry)
 
-        resp = await client.post("/strategies/rsi/toggle")
+        resp = await client.post("/api/strategies/rsi/toggle")
         data = resp.json()
         assert data["success"] is True
         assert data["active"] is True
@@ -182,42 +182,42 @@ class TestStrategyToggle:
 class TestEnhancedDashboardHTML:
     @pytest.mark.asyncio
     async def test_dashboard_includes_chartjs(self, client):
-        """Dashboard HTML includes Chart.js CDN."""
-        resp = await client.get("/")
+        """Legacy dashboard HTML includes Chart.js CDN."""
+        resp = await client.get("/legacy")
         assert resp.status_code == 200
         assert "chart.js" in resp.text.lower() or "Chart" in resp.text
 
     @pytest.mark.asyncio
     async def test_dashboard_includes_equity_chart(self, client):
-        """Dashboard HTML includes equity curve chart canvas."""
-        resp = await client.get("/")
+        """Legacy dashboard HTML includes equity curve chart canvas."""
+        resp = await client.get("/legacy")
         assert "equityChart" in resp.text
 
     @pytest.mark.asyncio
     async def test_dashboard_includes_strategy_chart(self, client):
-        """Dashboard HTML includes strategy performance chart canvas."""
-        resp = await client.get("/")
+        """Legacy dashboard HTML includes strategy performance chart canvas."""
+        resp = await client.get("/legacy")
         assert "strategyChart" in resp.text
 
     @pytest.mark.asyncio
     async def test_dashboard_includes_positions_table(self, client):
-        """Dashboard HTML includes open positions table."""
-        resp = await client.get("/")
+        """Legacy dashboard HTML includes open positions table."""
+        resp = await client.get("/legacy")
         assert "Open Positions" in resp.text
         assert "Stop Loss" in resp.text
         assert "Take Profit" in resp.text
 
     @pytest.mark.asyncio
     async def test_dashboard_shows_regime(self, client):
-        """Dashboard HTML shows market regime badge."""
+        """Legacy dashboard HTML shows market regime badge."""
         update_state(regime="TRENDING_UP")
-        resp = await client.get("/")
+        resp = await client.get("/legacy")
         assert "TRENDING_UP" in resp.text
         assert "regime-badge" in resp.text
 
     @pytest.mark.asyncio
     async def test_dashboard_shows_open_positions(self, client):
-        """Dashboard HTML renders open positions data."""
+        """Legacy dashboard HTML renders open positions data."""
         update_state(open_positions=[
             {
                 "symbol": "ETH/USDT",
@@ -229,33 +229,33 @@ class TestEnhancedDashboardHTML:
                 "take_profit": 3150.0,
             }
         ])
-        resp = await client.get("/")
+        resp = await client.get("/legacy")
         assert "ETH/USDT" in resp.text
         assert "3,000.00" in resp.text
         assert "3,100.00" in resp.text
 
     @pytest.mark.asyncio
     async def test_dashboard_strategy_list(self, client):
-        """Dashboard HTML shows strategy list with toggle buttons."""
+        """Legacy dashboard HTML shows strategy list with toggle buttons."""
         update_state(strategy_stats={
             "ma_crossover": {"total_pnl": 150.0, "win_rate": 55.0, "active": True},
             "rsi": {"total_pnl": -50.0, "win_rate": 40.0, "active": False},
         })
-        resp = await client.get("/")
+        resp = await client.get("/legacy")
         assert "ma_crossover" in resp.text
         assert "rsi" in resp.text
         assert "toggleStrategy" in resp.text
 
     @pytest.mark.asyncio
     async def test_dashboard_trade_markers_buy_sell(self, client):
-        """Dashboard shows BUY/SELL styling on trades."""
+        """Legacy dashboard shows BUY/SELL styling on trades."""
         update_state(trades=[
             {"timestamp": "2026-01-01T00:00:00", "symbol": "BTC/USDT",
              "side": "BUY", "quantity": 0.1, "price": 50000},
             {"timestamp": "2026-01-01T01:00:00", "symbol": "BTC/USDT",
              "side": "SELL", "quantity": 0.1, "price": 51000},
         ])
-        resp = await client.get("/")
+        resp = await client.get("/legacy")
         text = resp.text
         assert 'class="buy"' in text
         assert 'class="sell"' in text

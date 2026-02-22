@@ -232,7 +232,7 @@ class TestDashboardStrategiesEndpoint:
     @pytest.mark.asyncio
     async def test_strategies_endpoint_empty(self, client):
         """GET /strategies should return empty dict when no strategies tracked."""
-        resp = await client.get("/strategies")
+        resp = await client.get("/api/strategies")
         assert resp.status_code == 200
         data = resp.json()
         assert data["strategies"] == {}
@@ -257,7 +257,7 @@ class TestDashboardStrategiesEndpoint:
             }
         )
 
-        resp = await client.get("/strategies")
+        resp = await client.get("/api/strategies")
         assert resp.status_code == 200
         data = resp.json()
         assert "rsi" in data["strategies"]

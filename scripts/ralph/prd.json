@@ -1,318 +1,327 @@
 {
-  "project": "CoinTradingBot-V3-Quant",
-  "branchName": "ralph/v3-quant-trading-system",
-  "description": "Quantitative finance trading system: statistical arbitrage, mean reversion, momentum factors, volatility models, portfolio optimization, and advanced risk metrics. Source code exists on feat/v3-quant-trading-system branch — each story ports modules incrementally, adds tests, and verifies integration.",
-  "sourceRef": "feat/v3-quant-trading-system",
+  "project": "CoinTradingBot-V4-LiveReady",
+  "branchName": "ralph/v4-live-ready",
+  "description": "Transform the trading bot into a live-ready system with a modern React dashboard (replacing server-rendered HTML), JWT authentication, real-time WebSocket updates, web-based configuration, exchange rate limiting, position reconciliation, emergency controls, and comprehensive audit trail.",
   "userStories": [
     {
-      "id": "V3-001",
-      "title": "Add quant dependencies and package scaffold",
-      "description": "Add statsmodels, scipy, arch to pyproject.toml. Create src/bot/quant/__init__.py (empty initially) and src/bot/strategies/quant/__init__.py. Ensure all existing tests still pass after dependency addition.",
+      "id": "V4-001",
+      "title": "React frontend scaffold with Vite + TypeScript + Tailwind",
+      "description": "Set up a modern React frontend in frontend/ directory. FastAPI serves the built React app in production. This replaces the inline HTML dashboard.",
       "acceptanceCriteria": [
-        "pyproject.toml: add statsmodels>=0.14.0, scipy>=1.11.0, arch>=6.0.0 to dependencies",
-        "Create src/bot/quant/__init__.py with docstring",
-        "Create src/bot/strategies/quant/__init__.py with empty content",
-        "pip install -e . succeeds with new deps",
-        "All existing tests pass, ruff check passes"
+        "Create frontend/ with Vite + React 18 + TypeScript + Tailwind CSS 3",
+        "Add react-router-dom for client-side routing with placeholder pages: Dashboard, Trades, Strategies, Settings, Login",
+        "Create frontend/src/api/client.ts with axios instance pointing to /api/* endpoints",
+        "Add vite.config.ts with proxy to localhost:8003 (configurable) for dev mode",
+        "Add build script: npm run build outputs to src/bot/dashboard/static/",
+        "FastAPI app.py: serve static files from dashboard/static/ at / with SPA fallback (index.html for all non-API routes)",
+        "Move all existing API endpoints under /api/* prefix (e.g., /status -> /api/status)",
+        "Keep legacy HTML dashboard at /legacy for backward compatibility",
+        "Add frontend/package.json, tsconfig.json, tailwind.config.js",
+        "Add Makefile targets: make frontend-install, make frontend-dev, make frontend-build",
+        "All existing Python tests pass (API tests updated for /api/ prefix), ruff check passes"
       ],
       "priority": 1,
       "passes": true,
-      "notes": "Foundation story — no logic, just plumbing."
+      "notes": "Foundation story. No visual components yet, just the scaffold and build pipeline."
     },
     {
-      "id": "V3-002",
-      "title": "Statistical utilities: cointegration, z-score, hedge ratio",
-      "description": "Port src/bot/quant/statistics.py from the V3 branch. Functions: engle_granger_cointegration, rolling_ols_hedge_ratio, calculate_zscore, calculate_half_life, adf_test, estimate_ou_params.",
+      "id": "V4-002",
+      "title": "Dashboard overview page with portfolio metrics",
+      "description": "Build the main dashboard page showing portfolio value, key metrics, market regime, and bot status in a modern card-based layout.",
       "acceptanceCriteria": [
-        "Create src/bot/quant/statistics.py with all 6 functions",
-        "Export all functions from src/bot/quant/__init__.py",
-        "Create tests/quant/__init__.py and tests/quant/test_statistics.py",
-        "Tests cover: cointegration on synthetic cointegrated series, z-score normalization, half-life > 0, ADF rejects unit root, OU params valid",
-        "All existing tests pass, ruff check passes"
+        "Create React components: StatusBadge, MetricCard, RegimeBadge, PortfolioSummary",
+        "Dashboard page fetches /api/status, /api/portfolio, /api/regime on mount",
+        "Display: bot status (running/stopped with color), total portfolio value, total return %, win rate %, total trades, max drawdown %",
+        "Market regime badge with color coding (green=trending up, red=trending down, amber=ranging, purple=volatile)",
+        "Cycle metrics: last cycle time, average duration, cycle count",
+        "Responsive grid layout with Tailwind (mobile-friendly: 1 col on mobile, 2-3 cols on desktop)",
+        "Loading skeleton states while data is being fetched",
+        "Auto-refresh every 10 seconds via useEffect interval",
+        "Dark theme by default with Tailwind dark mode classes",
+        "All existing Python tests pass, ruff check passes"
       ],
       "priority": 2,
-      "passes": true,
-      "notes": "Reference: git show feat/v3-quant-trading-system:src/bot/quant/statistics.py"
+      "passes": false,
+      "notes": "First visual page. Keep it clean and minimal."
     },
     {
-      "id": "V3-003",
-      "title": "Risk metrics: VaR, CVaR, Sortino, Calmar",
-      "description": "Port src/bot/quant/risk_metrics.py. Functions: parametric_var, historical_var, cornish_fisher_var, cvar, sortino_ratio, calmar_ratio, information_ratio.",
+      "id": "V4-003",
+      "title": "WebSocket real-time updates replacing polling",
+      "description": "Add a WebSocket endpoint to FastAPI and a React hook for real-time dashboard updates instead of polling/meta-refresh.",
       "acceptanceCriteria": [
-        "Create src/bot/quant/risk_metrics.py with all 7 functions",
-        "Export all functions from src/bot/quant/__init__.py",
-        "Create tests/quant/test_risk_metrics.py",
-        "Tests cover: VaR values are negative (losses), CVaR <= VaR, Sortino >= 0 for positive returns, parametric vs historical consistency",
-        "All existing tests pass, ruff check passes"
+        "New FastAPI WebSocket endpoint: /api/ws",
+        "Server broadcasts dashboard state every trading cycle (status, portfolio, metrics, regime, recent trades)",
+        "Server broadcasts immediately on trade execution, position change, or strategy toggle",
+        "Create React hook: useWebSocket(url) with auto-reconnect (exponential backoff, max 30s)",
+        "Hook returns: { connected, data, lastUpdate } with connection status indicator in UI",
+        "Dashboard page switches from polling to WebSocket (fallback to polling if WS disconnects)",
+        "Green dot = connected, red dot = disconnected in header",
+        "Message format: { type: 'status_update' | 'trade' | 'position_change' | 'alert', payload: {...} }",
+        "Rate limit broadcasts to max 1 per second (debounce rapid updates)",
+        "Tests: WebSocket endpoint accepts connection, broadcasts on state change, handles disconnect",
+        "All existing Python tests pass, ruff check passes"
       ],
       "priority": 3,
-      "passes": true,
-      "notes": "Reference: git show feat/v3-quant-trading-system:src/bot/quant/risk_metrics.py"
+      "passes": false,
+      "notes": "Core infrastructure for real-time UX. All subsequent pages will use this."
     },
     {
-      "id": "V3-004",
-      "title": "GARCH volatility model",
-      "description": "Port src/bot/quant/volatility.py. Classes/functions: GARCHModel (fit, forecast, get_current_vol), classify_volatility_regime.",
+      "id": "V4-004",
+      "title": "Trades and positions page with live updates",
+      "description": "Build dedicated pages for viewing open positions and trade history with real-time updates via WebSocket.",
       "acceptanceCriteria": [
-        "Create src/bot/quant/volatility.py with GARCHModel class and classify_volatility_regime function",
-        "Export from src/bot/quant/__init__.py",
-        "Create tests/quant/test_volatility.py",
-        "Tests cover: GARCH fit on synthetic data, forecast returns positive vol, regime classification returns valid enum, insufficient data handled gracefully",
-        "All existing tests pass, ruff check passes"
+        "Positions page: table with symbol, qty, entry price, current price, unrealized PnL (color-coded), SL, TP, duration held",
+        "PnL cells: green background for profit, red for loss, with percentage and absolute value",
+        "Trade history page: sortable table with timestamp, symbol, side (BUY/SELL badge), qty, price, PnL, strategy name",
+        "Pagination for trade history (20 per page) via /api/trades?page=1&limit=20",
+        "Add pagination support to FastAPI /api/trades endpoint (query params: page, limit, symbol filter)",
+        "New trade notification: toast popup when WebSocket receives 'trade' event",
+        "Export trade history as CSV button (client-side generation)",
+        "Both pages update in real-time via WebSocket (no polling)",
+        "Empty state messages when no positions/trades",
+        "All existing Python tests pass, ruff check passes"
       ],
       "priority": 4,
-      "passes": true,
-      "notes": "Reference: git show feat/v3-quant-trading-system:src/bot/quant/volatility.py"
+      "passes": false,
+      "notes": ""
     },
     {
-      "id": "V3-005",
-      "title": "Portfolio optimization: min variance, max Sharpe, risk parity",
-      "description": "Port src/bot/quant/portfolio.py. Functions: min_variance_portfolio, max_sharpe_portfolio, risk_parity_portfolio, efficient_frontier.",
+      "id": "V4-005",
+      "title": "Strategy management page with live toggle and stats",
+      "description": "Build a strategy management page where users can view stats, enable/disable strategies, and see per-strategy performance charts.",
       "acceptanceCriteria": [
-        "Create src/bot/quant/portfolio.py with all 4 functions",
-        "Export from src/bot/quant/__init__.py",
-        "Create tests/quant/test_portfolio.py",
-        "Tests cover: weights sum to 1.0, all weights >= 0, min variance has lowest vol, risk parity has roughly equal risk contributions, efficient frontier has multiple points",
-        "All existing tests pass, ruff check passes"
+        "Strategy list: cards showing name, status (enabled/disabled toggle), win rate, total PnL, total trades, consecutive losses, Sharpe ratio",
+        "Toggle switch calls POST /api/strategies/{name}/toggle with optimistic UI update",
+        "Per-strategy mini chart: PnL over time (last 50 trades) using a lightweight chart library (recharts or chart.js via react-chartjs-2)",
+        "Strategy comparison bar chart: all strategies side-by-side by PnL",
+        "Auto-disabled strategies show warning badge with reason (consecutive losses / low win rate)",
+        "Confirmation dialog before disabling a strategy that has open positions",
+        "All data updates via WebSocket",
+        "All existing Python tests pass, ruff check passes"
       ],
       "priority": 5,
-      "passes": true,
-      "notes": "Reference: git show feat/v3-quant-trading-system:src/bot/quant/portfolio.py"
+      "passes": false,
+      "notes": ""
     },
     {
-      "id": "V3-006",
-      "title": "Microstructure analysis: VWAP, microprice, order book imbalance",
-      "description": "Port src/bot/quant/microstructure.py. Functions: vwap_midprice, microprice, orderbook_imbalance, detect_walls.",
+      "id": "V4-006",
+      "title": "Equity curve and performance analytics page",
+      "description": "Build a dedicated analytics page with interactive equity curve chart, drawdown visualization, and monthly returns heatmap.",
       "acceptanceCriteria": [
-        "Create src/bot/quant/microstructure.py with all 4 functions",
-        "Export all functions from src/bot/quant/__init__.py",
-        "Create tests/quant/test_microstructure.py",
-        "Tests cover: VWAP between bid and ask, microprice weighted toward heavier side, imbalance in [-1, 1], walls detected at correct levels",
-        "All existing tests pass, ruff check passes"
+        "Interactive equity curve chart (recharts or react-chartjs-2): zoomable, tooltip with exact values",
+        "Overlay BUY/SELL markers on equity curve (green/red dots)",
+        "Drawdown chart below equity curve (red filled area)",
+        "Monthly returns heatmap: grid of months x years, color intensity = return %",
+        "Key stats sidebar: Sharpe ratio, Sortino ratio, max drawdown, profit factor, avg trade PnL, best/worst trade",
+        "Date range selector to filter analytics (last 7d, 30d, 90d, all time)",
+        "Add /api/analytics endpoint returning aggregated stats for date range",
+        "Data fetched on mount + date range change, not via WebSocket (historical data)",
+        "All existing Python tests pass, ruff check passes"
       ],
       "priority": 6,
-      "passes": true,
-      "notes": "Reference: git show feat/v3-quant-trading-system:src/bot/quant/microstructure.py"
+      "passes": false,
+      "notes": ""
     },
     {
-      "id": "V3-007",
-      "title": "Pair data provider",
-      "description": "Port src/bot/data/pair_data.py. PairDataProvider class that aligns multi-symbol price data for pairs trading and correlation analysis.",
+      "id": "V4-007",
+      "title": "JWT authentication with login page",
+      "description": "Add JWT-based authentication to protect the dashboard and API. Single admin user with configurable credentials.",
       "acceptanceCriteria": [
-        "Create src/bot/data/pair_data.py with PairDataProvider class",
-        "Create tests/data/test_pair_data.py",
-        "Tests cover: aligned data has same timestamps, missing data handled, returns dict of symbol -> prices",
-        "All existing tests pass, ruff check passes"
+        "New module: src/bot/dashboard/auth.py with JWT token creation/verification using python-jose",
+        "Add python-jose[cryptography] to pyproject.toml",
+        "POST /api/auth/login: accepts username + password, returns JWT access token (1h expiry) + refresh token (7d)",
+        "POST /api/auth/refresh: accepts refresh token, returns new access token",
+        "POST /api/auth/logout: invalidates refresh token (server-side token blacklist in memory)",
+        "FastAPI dependency: require_auth() that validates JWT on all /api/* routes except /api/auth/* and /api/health",
+        "Config: dashboard_username (default 'admin'), dashboard_password (default 'changeme'), jwt_secret (auto-generated if not set)",
+        "React: Login page with username/password form, JWT stored in memory (not localStorage for security)",
+        "React: axios interceptor adds Authorization: Bearer token, auto-refresh on 401",
+        "React: ProtectedRoute component redirects to /login if no token",
+        "Auth disabled by default when dashboard_password='changeme' (dev mode warning banner instead)",
+        "Tests: login returns token, protected route rejects without token, refresh works, logout invalidates",
+        "All existing Python tests pass (auth disabled in test mode), ruff check passes"
       ],
       "priority": 7,
-      "passes": true,
-      "notes": "Reference: git show feat/v3-quant-trading-system:src/bot/data/pair_data.py"
+      "passes": false,
+      "notes": "Auth disabled by default for dev convenience. Enable by setting a real password."
     },
     {
-      "id": "V3-008",
-      "title": "Pairs trading strategy",
-      "description": "Port src/bot/strategies/quant/pairs_trading.py. Statistical pairs trading using Engle-Granger cointegration and rolling hedge ratio with z-score entry/exit.",
+      "id": "V4-008",
+      "title": "Web-based settings panel with hot-reload",
+      "description": "Allow users to view and modify bot configuration from the web dashboard without editing .env files or restarting.",
       "acceptanceCriteria": [
-        "Create src/bot/strategies/quant/pairs_trading.py with PairsTradingStrategy extending BaseStrategy",
-        "Strategy registers with strategy_registry",
-        "analyze() accepts pair_prices kwarg, returns BUY/SELL/HOLD based on z-score",
-        "Create tests/strategies/quant/__init__.py and tests/strategies/quant/test_pairs_trading.py",
-        "Tests cover: BUY when z-score < -2, SELL when z-score > 2, HOLD in between, HOLD when no pair_prices provided",
-        "All existing tests pass, ruff check passes"
+        "Settings page with grouped sections: Trading, Risk Management, Strategies, Exchange, Dashboard, Notifications",
+        "GET /api/settings: returns current config as JSON (sensitive fields like API keys are masked)",
+        "PUT /api/settings: accepts partial config update, validates with Pydantic, applies changes",
+        "Hot-reload mechanism: Settings class gets a reload() method that updates in-memory values without restart",
+        "Safe settings (can change at runtime): risk params, position sizing, SL/TP percentages, strategy weights, signal_min_agreement, loop_interval_seconds",
+        "Unsafe settings (require restart, shown as read-only): exchange API keys, database URL, trading mode",
+        "Each setting shows: current value, description, type, default value, whether it requires restart",
+        "Save button with confirmation dialog showing what changed",
+        "Settings change logged to audit trail (V4-013)",
+        "Undo button: revert to last saved state",
+        "Tests: GET returns config, PUT updates values, unsafe settings rejected for hot-reload, validation errors returned",
+        "All existing Python tests pass, ruff check passes"
       ],
       "priority": 8,
-      "passes": true,
-      "notes": "Reference: git show feat/v3-quant-trading-system:src/bot/strategies/quant/pairs_trading.py"
+      "passes": false,
+      "notes": "API keys are NEVER returned in GET response. Only masked indicators (e.g., '***configured***' or 'not set')."
     },
     {
-      "id": "V3-009",
-      "title": "Mean reversion strategy",
-      "description": "Port src/bot/strategies/quant/mean_reversion.py. Single-asset mean reversion using z-score with regime awareness (disabled in trending markets).",
+      "id": "V4-009",
+      "title": "Exchange rate limiter with token bucket",
+      "description": "Add proper rate limiting for exchange API calls to prevent bans during live trading.",
       "acceptanceCriteria": [
-        "Create src/bot/strategies/quant/mean_reversion.py with MeanReversionStrategy extending BaseStrategy",
-        "Strategy registers with strategy_registry",
-        "analyze() returns BUY when z-score < -entry_threshold, SELL when > entry_threshold",
-        "adapt_to_regime() disables in TRENDING_UP/TRENDING_DOWN",
-        "Create tests/strategies/quant/test_mean_reversion.py",
-        "Tests cover: signals at threshold crossings, HOLD in trending regime, HOLD with insufficient data",
-        "All existing tests pass, ruff check passes"
+        "New class RateLimiter in src/bot/exchanges/rate_limiter.py using token bucket algorithm",
+        "Configurable: max_requests_per_second (default 10), burst_size (default 20)",
+        "Token bucket: refills at max_requests_per_second rate, allows burst_size concurrent requests",
+        "async acquire() method: waits if no tokens available (never exceeds rate)",
+        "Per-exchange rate limits: different exchanges have different limits (Binance: 1200/min, Upbit: 600/min)",
+        "Integrate into ExchangeAdapter base class: all API calls go through rate limiter",
+        "ResilientExchange: rate limiter applied before circuit breaker (don't trip breaker on rate limit wait)",
+        "Metrics: track requests/second, wait times, throttle events",
+        "Dashboard: show rate limit usage in /api/status (requests_remaining, avg_wait_ms)",
+        "Config: rate_limit_enabled (default True), per-exchange override via exchange_rate_limits dict",
+        "Tests: rate limiter throttles correctly, burst allowed, per-exchange limits work",
+        "All existing Python tests pass, ruff check passes"
       ],
       "priority": 9,
-      "passes": true,
-      "notes": "Reference: git show feat/v3-quant-trading-system:src/bot/strategies/quant/mean_reversion.py"
+      "passes": false,
+      "notes": "Binance will ban IPs that exceed rate limits. This is critical for live trading."
     },
     {
-      "id": "V3-010",
-      "title": "Momentum factor strategy",
-      "description": "Port src/bot/strategies/quant/momentum_factor.py. Cross-timeframe momentum factor using weighted z-score composite across multiple lookback periods.",
+      "id": "V4-010",
+      "title": "Position reconciliation: sync local state with exchange",
+      "description": "Periodically verify that local position tracking matches actual exchange state. Detect and alert on discrepancies.",
       "acceptanceCriteria": [
-        "Create src/bot/strategies/quant/momentum_factor.py with MomentumFactorStrategy extending BaseStrategy",
-        "Strategy registers with strategy_registry",
-        "analyze() accepts multi_timeframe_candles kwarg, computes weighted momentum z-score",
-        "Create tests/strategies/quant/test_momentum_factor.py",
-        "Tests cover: BUY on strong positive momentum, SELL on strong negative, HOLD when neutral, HOLD without multi_timeframe_candles",
-        "All existing tests pass, ruff check passes"
+        "New class PositionReconciler in src/bot/execution/reconciler.py",
+        "reconcile(exchange, local_positions) -> ReconciliationResult: compares local vs exchange positions",
+        "ReconciliationResult: matched (list), local_only (list), exchange_only (list), qty_mismatch (list)",
+        "Run reconciliation every N cycles (configurable, default 10) in _trading_cycle()",
+        "On discrepancy: log warning with details, send Telegram alert, add to dashboard alerts",
+        "Auto-fix option (configurable, default False): update local state to match exchange when discrepancy found",
+        "GET /api/reconciliation: returns last reconciliation result and timestamp",
+        "For paper mode: skip reconciliation (no exchange to compare against)",
+        "Handle exchange errors gracefully: if balance fetch fails, skip reconciliation for this cycle",
+        "Tests: matching positions return clean result, missing position detected, qty mismatch detected",
+        "All existing Python tests pass, ruff check passes"
       ],
       "priority": 10,
-      "passes": true,
-      "notes": "Reference: git show feat/v3-quant-trading-system:src/bot/strategies/quant/momentum_factor.py"
+      "passes": false,
+      "notes": "Drift between local and exchange state is the #1 cause of live trading bugs."
     },
     {
-      "id": "V3-011",
-      "title": "Volatility breakout strategy",
-      "description": "Port src/bot/strategies/quant/volatility_breakout.py. GARCH-based volatility breakout — BUY when realized vol exceeds forecasted vol (breakout), with regime awareness.",
+      "id": "V4-011",
+      "title": "Live trading pre-flight checks and safety gates",
+      "description": "Before the bot enters live trading mode, run comprehensive safety checks to prevent accidents.",
       "acceptanceCriteria": [
-        "Create src/bot/strategies/quant/volatility_breakout.py with VolatilityBreakoutStrategy extending BaseStrategy",
-        "Strategy registers with strategy_registry",
-        "analyze() uses GARCH forecast vs realized vol for breakout detection",
-        "Create tests/strategies/quant/test_volatility_breakout.py",
-        "Tests cover: signal generation on vol breakout, HOLD in normal vol, graceful fallback on GARCH failure",
-        "All existing tests pass, ruff check passes"
+        "New class PreFlightChecker in src/bot/execution/preflight.py",
+        "Pre-flight checks run during initialize() when TRADING_MODE=live:",
+        "  1. API key validity: test exchange connection with a balance fetch",
+        "  2. Sufficient balance: exchange balance >= configured minimum (default $100)",
+        "  3. Symbol availability: all configured symbols exist on exchange",
+        "  4. Rate limit headroom: test that rate limiter is configured",
+        "  5. Stop-loss configured: verify stop_loss_pct > 0 (refuse to trade without SL in live mode)",
+        "  6. Daily loss limit configured: verify daily_loss_limit_pct > 0",
+        "  7. Password changed: dashboard_password != 'changeme' (warn if auth disabled)",
+        "  8. Paper validation passed: check for recent validation report with GO recommendation (warn if missing)",
+        "Pre-flight results: PASS, WARN, FAIL for each check",
+        "Any FAIL check prevents bot from starting in live mode (exit with clear error message)",
+        "WARN checks allow startup but log warnings and send Telegram alert",
+        "GET /api/preflight: returns last pre-flight check results",
+        "Tests: each check returns correct status, FAIL prevents startup, WARN allows startup",
+        "All existing Python tests pass, ruff check passes"
       ],
       "priority": 11,
-      "passes": true,
-      "notes": "Reference: git show feat/v3-quant-trading-system:src/bot/strategies/quant/volatility_breakout.py"
+      "passes": false,
+      "notes": "Never let the bot go live without basic safety checks."
     },
     {
-      "id": "V3-012",
-      "title": "Triangular arbitrage strategy",
-      "description": "Port src/bot/strategies/quant/triangular_arb.py. Graph-based triangular arbitrage detecting 3-leg cycles with profit above threshold.",
+      "id": "V4-012",
+      "title": "Emergency kill switch via API and Telegram",
+      "description": "Add ability to immediately stop all trading, cancel pending orders, and optionally close all positions via dashboard button or Telegram command.",
       "acceptanceCriteria": [
-        "Create src/bot/strategies/quant/triangular_arb.py with TriangularArbStrategy extending BaseStrategy",
-        "Strategy registers with strategy_registry",
-        "analyze() accepts tickers kwarg, detects triangular arb opportunities",
-        "Create tests/strategies/quant/test_triangular_arb.py",
-        "Tests cover: detects arb opportunity when cycle profit > threshold, HOLD when no profitable cycle, HOLD without tickers",
-        "All existing tests pass, ruff check passes"
+        "POST /api/emergency/stop: halts trading loop, cancels all pending orders, keeps positions open",
+        "POST /api/emergency/close-all: halts trading + closes all open positions at market price",
+        "POST /api/emergency/resume: resumes trading loop after emergency stop",
+        "Dashboard: red emergency stop button (prominent, with confirmation dialog)",
+        "Dashboard: shows emergency state with clear visual indicator when halted",
+        "Telegram commands (if configured): /stop, /closeall, /resume, /status",
+        "TelegramNotifier: add command handler for incoming messages (polling or webhook)",
+        "Emergency stop persists across cycles (set flag in TradingBot, checked at cycle start)",
+        "All emergency actions logged to audit trail",
+        "Send Telegram notification on any emergency action",
+        "Tests: stop halts cycle, close-all sells positions, resume restores trading",
+        "All existing Python tests pass, ruff check passes"
       ],
       "priority": 12,
-      "passes": true,
-      "notes": "Reference: git show feat/v3-quant-trading-system:src/bot/strategies/quant/triangular_arb.py"
+      "passes": false,
+      "notes": "When something goes wrong in live trading, you need to stop FAST."
     },
     {
-      "id": "V3-013",
-      "title": "VaR integration into PortfolioRiskManager",
-      "description": "Extend src/bot/risk/portfolio_risk.py to include VaR-based risk checks. Add var_enabled, var_confidence, max_portfolio_var_pct fields. VaR check in validate_new_position.",
+      "id": "V4-013",
+      "title": "Comprehensive audit trail and trade log",
+      "description": "Record every significant action (trades, config changes, emergency actions, strategy toggles) in a persistent, queryable audit log.",
       "acceptanceCriteria": [
-        "Add VaR fields to PortfolioRiskManager: var_enabled, var_confidence, max_portfolio_var_pct",
-        "Add calculate_portfolio_var() method using parametric VaR from quant.risk_metrics",
-        "validate_new_position() checks VaR when var_enabled=True",
-        "Update tests/risk/test_portfolio_risk.py with VaR test cases",
-        "All existing tests pass, ruff check passes"
+        "New SQLAlchemy model AuditLog in data/models.py: id, timestamp, event_type, actor (system/user/telegram), details (JSON), severity (info/warning/critical)",
+        "AuditLogger class in src/bot/monitoring/audit.py with log_event() method",
+        "Events logged: trade_executed, order_cancelled, position_closed, strategy_toggled, config_changed, emergency_stop, emergency_resume, preflight_result, reconciliation_result, bot_started, bot_stopped, auth_login, auth_failed",
+        "DataStore: save_audit_log() and get_audit_logs(event_type, start_date, end_date, limit)",
+        "GET /api/audit: paginated audit log with filters (event_type, date range, severity)",
+        "Dashboard: audit log page with filterable table, severity color coding",
+        "Audit entries are immutable (append-only, no updates or deletes)",
+        "Auto-cleanup: delete audit entries older than 90 days (configurable)",
+        "Tests: events logged correctly, query filters work, pagination works",
+        "All existing Python tests pass, ruff check passes"
       ],
       "priority": 13,
-      "passes": true,
-      "notes": "Reference: git show feat/v3-quant-trading-system:src/bot/risk/portfolio_risk.py"
+      "passes": false,
+      "notes": "Essential for debugging live trading issues and compliance."
     },
     {
-      "id": "V3-014",
-      "title": "V3 config settings",
-      "description": "Add all V3-related settings to src/bot/config.py: var_enabled, var_confidence, max_portfolio_var_pct, quant_pairs, triangular_arb_enabled, rebalance_enabled, rebalance_method, rebalance_threshold_pct, garch_enabled.",
+      "id": "V4-014",
+      "title": "Live mode integration test",
+      "description": "End-to-end test simulating a complete live trading session with all V4 features active.",
       "acceptanceCriteria": [
-        "Add all V3 config fields to Settings class with appropriate defaults (all features disabled by default)",
-        "var_enabled: bool = False, var_confidence: float = 0.95, max_portfolio_var_pct: float = 5.0",
-        "quant_pairs: list[list[str]] = [], triangular_arb_enabled: bool = False",
-        "rebalance_enabled: bool = False, rebalance_method: str = 'risk_parity', rebalance_threshold_pct: float = 5.0",
-        "garch_enabled: bool = False",
+        "Integration test with mocked exchange simulating live mode",
+        "Verify: pre-flight checks pass before startup",
+        "Verify: rate limiter throttles rapid API calls",
+        "Verify: position reconciliation detects and reports discrepancy",
+        "Verify: emergency stop halts trading immediately",
+        "Verify: emergency close-all sells all positions",
+        "Verify: resume restarts trading after emergency",
+        "Verify: audit trail records all events from the session",
+        "Verify: WebSocket broadcasts state changes to connected client",
+        "Verify: JWT auth blocks unauthenticated API requests",
+        "Verify: settings hot-reload changes take effect without restart",
+        "Test runs in under 30 seconds with all mocks",
         "All existing tests pass, ruff check passes"
       ],
       "priority": 14,
-      "passes": true,
-      "notes": "Config fields already partially exist on main (from V2-028 work). Verify no conflicts."
+      "passes": false,
+      "notes": "This validates all V4 features work together in live mode context."
     },
     {
-      "id": "V3-015",
-      "title": "Portfolio rebalancer",
-      "description": "Port src/bot/execution/rebalancer.py. PortfolioRebalancer that computes target weights (risk parity or max Sharpe) and generates rebalance orders.",
+      "id": "V4-015",
+      "title": "Final build pipeline, docs, and verification",
+      "description": "Ensure the full build pipeline works (frontend build + Python package), update documentation, run full test suite.",
       "acceptanceCriteria": [
-        "Create src/bot/execution/rebalancer.py with PortfolioRebalancer class",
-        "Methods: calculate_target_weights(), generate_rebalance_orders(), should_rebalance()",
-        "Supports risk_parity and max_sharpe methods",
-        "Create tests/execution/test_rebalancer.py",
-        "Tests cover: weights sum to 1, rebalance triggered when drift > threshold, orders generated correctly",
-        "All existing tests pass, ruff check passes"
+        "Makefile: make build runs frontend build + copies to static/ + verifies Python package",
+        "Dockerfile updated: multi-stage build includes Node.js for frontend build, final image serves React app",
+        "docker-compose.yml: add NODE_ENV=production for frontend build",
+        "Update README.md: new architecture diagram, setup instructions for frontend, live trading checklist",
+        "Update docs/operational-runbook.md: add emergency procedures, pre-flight checklist, live trading go-live steps",
+        "Add docs/dashboard.md: screenshots/descriptions of all dashboard pages",
+        "Add docs/live-trading.md: step-by-step guide from paper trading to live",
+        "Verify: make build succeeds, Docker build succeeds",
+        "Verify: all Python tests pass (V2 + V3 + V4)",
+        "Verify: ruff check passes on entire codebase",
+        "Verify: frontend build produces valid static files",
+        "Verify: bot starts and serves React dashboard correctly"
       ],
       "priority": 15,
-      "passes": true,
-      "notes": "Reference: git show feat/v3-quant-trading-system:src/bot/execution/rebalancer.py"
-    },
-    {
-      "id": "V3-016",
-      "title": "Quant backtesting engine",
-      "description": "Port src/bot/backtest/quant_backtest.py. PairsBacktestEngine and PortfolioBacktestEngine for quant strategy backtesting.",
-      "acceptanceCriteria": [
-        "Create src/bot/backtest/quant_backtest.py with PairsBacktestEngine and PortfolioBacktestEngine",
-        "PairsBacktestEngine: simulate pairs trading with entry/exit on z-score thresholds",
-        "PortfolioBacktestEngine: simulate portfolio rebalancing strategies",
-        "Create tests/backtest/test_quant_backtest.py",
-        "Tests cover: pairs backtest produces trades, portfolio backtest tracks equity, metrics computed correctly",
-        "All existing tests pass, ruff check passes"
-      ],
-      "priority": 16,
-      "passes": true,
-      "notes": "Reference: git show feat/v3-quant-trading-system:src/bot/backtest/quant_backtest.py"
-    },
-    {
-      "id": "V3-017",
-      "title": "Dashboard quant endpoints",
-      "description": "Add quant-specific API endpoints to the dashboard: /quant/risk-metrics, /quant/correlation-matrix, /quant/portfolio-optimization, /quant/garch.",
-      "acceptanceCriteria": [
-        "Add GET /quant/risk-metrics endpoint returning VaR, CVaR, Sortino, Calmar",
-        "Add GET /quant/correlation-matrix endpoint returning symbol correlation matrix",
-        "Add GET /quant/portfolio-optimization endpoint returning optimal weights",
-        "Add GET /quant/garch endpoint returning GARCH forecast",
-        "Update tests/dashboard/test_app.py with tests for all 4 endpoints",
-        "All existing tests pass, ruff check passes"
-      ],
-      "priority": 17,
-      "passes": true,
-      "notes": "Reference: git show feat/v3-quant-trading-system:src/bot/dashboard/app.py (look for /quant/ routes)"
-    },
-    {
-      "id": "V3-018",
-      "title": "Test directory restructure",
-      "description": "Move flat test files into the organized subdirectory structure matching the V3 branch. Create missing __init__.py files in test subdirectories.",
-      "acceptanceCriteria": [
-        "Ensure all test subdirectories have __init__.py: tests/quant/, tests/strategies/quant/, tests/backtest/, tests/data/, tests/execution/, tests/risk/, tests/monitoring/, tests/models/, tests/exchanges/, tests/dashboard/, tests/integration/",
-        "Verify test discovery still works: pytest tests/ --co finds all tests",
-        "All existing tests pass, ruff check passes"
-      ],
-      "priority": 18,
-      "passes": true,
-      "notes": "Some __init__.py files may already exist. Only create missing ones."
-    },
-    {
-      "id": "V3-019",
-      "title": "V3 integration test",
-      "description": "Port tests/test_v3_integration.py — comprehensive integration test proving all quant components work together end-to-end.",
-      "acceptanceCriteria": [
-        "Create tests/test_v3_integration.py covering all V3 modules",
-        "Test quant math pipeline: statistics → risk_metrics → GARCH → portfolio optimization → microstructure",
-        "Test all 5 quant strategies generate valid signals",
-        "Test VaR integration with PortfolioRiskManager",
-        "Test quant backtesting (pairs + portfolio)",
-        "Test dashboard quant endpoints return valid data",
-        "All tests pass in under 30 seconds, ruff check passes"
-      ],
-      "priority": 19,
-      "passes": true,
-      "notes": "Reference: git show feat/v3-quant-trading-system:tests/test_v3_integration.py"
-    },
-    {
-      "id": "V3-020",
-      "title": "Final verification and quant __init__.py exports",
-      "description": "Ensure src/bot/quant/__init__.py exports all functions/classes from all 5 modules. Run full test suite (V2 + V3). Verify ruff passes on entire codebase.",
-      "acceptanceCriteria": [
-        "src/bot/quant/__init__.py exports all public functions from statistics, risk_metrics, volatility, portfolio, microstructure",
-        "__all__ list includes all 20+ exported names",
-        "All V2 tests (1263+) still pass",
-        "All V3 tests pass",
-        "ruff check src/ tests/ passes with no errors",
-        "pytest tests/ -v completes successfully"
-      ],
-      "priority": 20,
-      "passes": true,
-      "notes": "Final verification story — ensure everything is wired together."
+      "passes": false,
+      "notes": "Final verification story. Everything must be production-ready."
     }
   ]
 }

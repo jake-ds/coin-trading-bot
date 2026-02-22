@@ -57,6 +57,13 @@ coverage.xml
 # Docker
 docker-compose.override.yml
 
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Built frontend assets served by FastAPI
+src/bot/dashboard/static/
+
 # Ralph
 scripts/ralph/.last-branch
 scripts/ralph/archive/

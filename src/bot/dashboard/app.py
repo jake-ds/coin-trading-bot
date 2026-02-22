@@ -1,20 +1,25 @@
-"""FastAPI monitoring dashboard."""
+"""FastAPI monitoring dashboard with React SPA frontend."""
 
 import html
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 
 import structlog
-from fastapi import FastAPI
+from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.staticfiles import StaticFiles
 
 logger = structlog.get_logger()
 
 app = FastAPI(title="Coin Trading Bot Dashboard")
 
+# API router — all data endpoints live under /api/*
+api_router = APIRouter(prefix="/api")
+
 # CORS configuration — allowed_origins can be overridden via configure_cors()
-_default_origins = ["http://localhost", "http://localhost:8000"]
+_default_origins = ["http://localhost", "http://localhost:8000", "http://localhost:5173"]
 
 
 def configure_cors(allowed_origins: list[str] | None = None) -> None:
@@ -70,7 +75,12 @@ def update_state(**kwargs) -> None:
     _bot_state.update(kwargs)
 
 
-@app.get("/status")
+# ---------------------------------------------------------------------------
+# API endpoints (under /api/ prefix)
+# ---------------------------------------------------------------------------
+
+
+@api_router.get("/status")
 async def get_status():
     """Get bot status."""
     return {
@@ -80,73 +90,73 @@ async def get_status():
     }
 
 
-@app.get("/trades")
+@api_router.get("/trades")
 async def get_trades():
     """Get recent trades."""
     return {"trades": _bot_state["trades"][-50:]}
 
 
-@app.get("/metrics")
+@api_router.get("/metrics")
 async def get_metrics():
     """Get performance metrics."""
     return {"metrics": _bot_state["metrics"]}
 
 
-@app.get("/portfolio")
+@api_router.get("/portfolio")
 async def get_portfolio():
     """Get current portfolio."""
     return {"portfolio": _bot_state["portfolio"]}
 
 
-@app.get("/strategies")
+@api_router.get("/strategies")
 async def get_strategies():
     """Get per-strategy performance stats."""
     return {"strategies": _bot_state["strategy_stats"]}
 
 
-@app.get("/equity-curve")
+@api_router.get("/equity-curve")
 async def get_equity_curve():
     """Get equity curve time-series data for charting."""
     return {"equity_curve": _bot_state["equity_curve"]}
 
 
-@app.get("/open-positions")
+@api_router.get("/open-positions")
 async def get_open_positions():
     """Get current open positions with SL/TP info."""
     return {"positions": _bot_state["open_positions"]}
 
 
-@app.get("/regime")
+@api_router.get("/regime")
 async def get_regime():
     """Get current market regime."""
     return {"regime": _bot_state["regime"]}
 
 
-@app.get("/quant/risk-metrics")
+@api_router.get("/quant/risk-metrics")
 async def get_quant_risk_metrics():
     """Get quantitative risk metrics (VaR, CVaR, Sortino, etc.)."""
     return {"risk_metrics": _bot_state.get("quant_risk_metrics", {})}
 
 
-@app.get("/quant/correlation-matrix")
+@api_router.get("/quant/correlation-matrix")
 async def get_correlation_matrix():
     """Get correlation matrix between traded symbols."""
     return {"correlation_matrix": _bot_state.get("correlation_matrix", {})}
 
 
-@app.get("/quant/portfolio-optimization")
+@api_router.get("/quant/portfolio-optimization")
 async def get_portfolio_optimization():
     """Get current portfolio optimization results."""
     return {"optimization": _bot_state.get("portfolio_optimization", {})}
 
 
-@app.get("/quant/garch")
+@api_router.get("/quant/garch")
 async def get_garch_metrics():
     """Get GARCH volatility model metrics."""
     return {"garch": _bot_state.get("garch_metrics", {})}
 
 
-@app.post("/strategies/{name}/toggle")
+@api_router.post("/strategies/{name}/toggle")
 async def toggle_strategy(name: str):
     """Toggle a strategy's active state (enable/disable)."""
     if _strategy_registry is None:
@@ -165,6 +175,21 @@ async def toggle_strategy(name: str):
 
     logger.info("strategy_toggled", name=name, state=new_state)
     return {"name": name, "active": new_state == "enabled", "success": True}
+
+
+@api_router.get("/health")
+async def api_health_check():
+    """Health check endpoint under /api prefix."""
+    return await health_check()
+
+
+# Include the API router
+app.include_router(api_router)
+
+
+# ---------------------------------------------------------------------------
+# Root-level routes
+# ---------------------------------------------------------------------------
 
 
 @app.get("/health")
@@ -192,9 +217,9 @@ async def health_check():
     return {"status": "healthy", "timestamp": now}
 
 
-@app.get("/", response_class=HTMLResponse)
-async def dashboard():
-    """Render HTML dashboard page."""
+@app.get("/legacy", response_class=HTMLResponse)
+async def legacy_dashboard():
+    """Render legacy HTML dashboard page (backward compatibility)."""
     status = html.escape(str(_bot_state["status"]))
     metrics = _bot_state["metrics"]
     trades = _bot_state["trades"][-10:]
@@ -301,7 +326,7 @@ async def dashboard():
     </style>
 </head>
 <body>
-    <h1>Trading Bot Dashboard</h1>
+    <h1>Trading Bot Dashboard (Legacy)</h1>
 
     <div class="card">
         <h2>Status</h2>
@@ -435,7 +460,7 @@ async def dashboard():
     // Strategy toggle
     async function toggleStrategy(name) {{
         try {{
-            const resp = await fetch('/strategies/' + name + '/toggle', {{ method: 'POST' }});
+            const resp = await fetch('/api/strategies/' + name + '/toggle', {{ method: 'POST' }});
             const data = await resp.json();
             if (data.success) {{
                 location.reload();
@@ -447,6 +472,53 @@ async def dashboard():
     </script>
 </body>
 </html>"""
+
+
+# ---------------------------------------------------------------------------
+# SPA fallback — serve React frontend for non-API routes
+# ---------------------------------------------------------------------------
+
+_static_dir = Path(__file__).parent / "static"
+
+# Mount static assets if the build directory exists
+if _static_dir.exists() and (_static_dir / "assets").exists():
+    app.mount("/assets", StaticFiles(directory=str(_static_dir / "assets")), name="static-assets")
+
+
+@app.get("/", response_class=HTMLResponse)
+async def serve_root():
+    """Serve React SPA index.html or fallback message."""
+    index_file = _static_dir / "index.html"
+    if index_file.exists():
+        return FileResponse(str(index_file))
+    return HTMLResponse(
+        "<h1>Frontend not built</h1>"
+        "<p>Run <code>make frontend-build</code> to build the React dashboard.</p>"
+        '<p>Or visit <a href="/legacy">/legacy</a> for the legacy HTML dashboard.</p>'
+    )
+
+
+@app.get("/{full_path:path}")
+async def serve_spa(full_path: str):
+    """SPA fallback: serve index.html for all unmatched routes."""
+    # Try to serve a static file first
+    static_file = _static_dir / full_path
+    if static_file.exists() and static_file.is_file():
+        return FileResponse(str(static_file))
+    # Fall back to index.html for client-side routing
+    index_file = _static_dir / "index.html"
+    if index_file.exists():
+        return FileResponse(str(index_file))
+    return HTMLResponse(
+        "<h1>Frontend not built</h1>"
+        "<p>Run <code>make frontend-build</code> to build the React dashboard.</p>"
+        '<p>Or visit <a href="/legacy">/legacy</a> for the legacy HTML dashboard.</p>'
+    )
+
+
+# ---------------------------------------------------------------------------
+# Helper functions (private)
+# ---------------------------------------------------------------------------
 
 
 def _regime_color(regime) -> str:

@@ -1,261 +1,55 @@
-# Ralph Progress Log — V3 Quant Trading System
+# Ralph Progress Log — V4 Live-Ready Dashboard & Infrastructure
 Started: 2026-02-22
 
-## Codebase Patterns (V2 essentials)
-- **Dependency management**: Always update both `pyproject.toml` and `requirements.txt`
-- **Config pattern**: Add new settings to `Settings` class with defaults that maintain backward compat
+## Codebase Patterns
 - **Strategy pattern**: All strategies extend BaseStrategy ABC, register via strategy_registry.register()
 - **Async-first**: All I/O uses async/await. Strategy analyze() is async.
-- **OHLCV validators**: Model enforces `high >= max(open, close)` and `low <= min(open, close)`.
-- **TradingSignal**: Requires `strategy_name` field — always include in test signal construction
-- **signal_min_agreement=1**: Existing tests that use single strategies must set this in make_settings defaults.
-- **adapt_to_regime pattern**: Optional method on BaseStrategy (default no-op). `_original_*` params + `_regime_disabled` flag.
-- **Dashboard state reset**: Test fixtures must include `strategy_stats: {}`, `equity_curve: []`, `open_positions: []`, `regime: None`, `cycle_metrics: {...}`.
-
-## V3 Codebase Patterns
-- Reference code: `git show feat/v3-quant-trading-system:<path>`
-- New quant modules: `src/bot/quant/`, new strategies: `src/bot/strategies/quant/`
-- V3 dependencies: statsmodels>=0.14.0, scipy>=1.11.0, arch>=6.0.0
-- GARCH fit requires rescaling returns by 100x for arch library numerical stability
-- PairDataProvider uses int(timestamp.timestamp()) as alignment key — works for hourly+ timeframes
-- compute_correlation_matrix returns 0.0 for series with < 5 data points
-- PairsTradingStrategy requires pair_prices kwarg with prices_a, prices_b, symbol_a, symbol_b
-- Deterministic test data for z-score thresholds is tricky — use conditional assertions when needed
-- Constant price data causes statsmodels adfuller ValueError — always use non-constant test data for strategies that call adf_test
-- Full V2 history preserved in: `scripts/ralph/prd/v2-production.progress.txt`
-- Test count baseline: 1381 tests passing as of V3-009
+- **Config**: pydantic-settings with .env + YAML override. New features disabled by default.
+- **Testing**: pytest + pytest-asyncio. Always clean strategy_registry in fixtures.
+- **Imports**: Always update __init__.py when adding new modules.
+- **Dependencies**: Add to pyproject.toml AND requirements.txt.
+- **Dashboard state**: Module-level dict in bot.dashboard.app. Test fixtures must reset all fields.
+- **API endpoints**: V4 moves to /api/* prefix. /health stays at root for Docker healthcheck.
+- **Frontend build**: npm run build outputs to src/bot/dashboard/static/. FastAPI serves as SPA.
+- **Auth**: JWT via python-jose. Disabled when dashboard_password='changeme'.
+- **Baseline**: 1494 tests passing on V3 branch (V2 + V3 complete).
+- **API Router**: All API endpoints use `api_router = APIRouter(prefix="/api")`. Legacy HTML at `/legacy`.
+- **Test URL prefix**: All test HTTP calls use `/api/` prefix (e.g., `/api/status`, `/api/trades`). `/health` stays at root.
+- **SPA fallback**: `/{full_path:path}` catch-all serves index.html. Must be defined AFTER all API routes.
+- **Frontend scaffold**: Vite + React 18 + TypeScript + Tailwind CSS 3 + react-router-dom v6.
+- **Makefile**: `make frontend-install`, `make frontend-dev`, `make frontend-build`, `make test`, `make lint`.
 
 ---
 
-## 2026-02-22 - V3-001
-- Added statsmodels>=0.14.0, scipy>=1.11.0, arch>=6.0.0 to pyproject.toml
-- Created src/bot/quant/__init__.py and src/bot/strategies/quant/__init__.py
-- Tests: 1263 existing pass, 0 new (scaffold only)
----
-
-## 2026-02-22 - V3-002
-- Created src/bot/quant/statistics.py: adf_test, engle_granger_cointegration, calculate_zscore, calculate_half_life, estimate_ou_params, rolling_ols_hedge_ratio
-- Created tests/quant/test_statistics.py (16 tests)
-- Tests: 1279 passing (1263 + 16 new)
----
-
-## 2026-02-22 - V3-003
-- Created src/bot/quant/risk_metrics.py: parametric_var, historical_var, cornish_fisher_var, cvar, sortino_ratio, calmar_ratio, information_ratio
-- Created tests/quant/test_risk_metrics.py (19 tests)
-- Tests: 1298 passing (1279 + 19 new)
----
-
-## 2026-02-22 - V3-004
-- Created src/bot/quant/volatility.py: GARCHModel class, classify_volatility_regime
-- Created tests/quant/test_volatility.py (12 tests)
-- Tests: 1310 passing (1298 + 12 new)
----
-
-## 2026-02-22 - V3-005
-- Created src/bot/quant/portfolio.py: min_variance_portfolio, max_sharpe_portfolio, risk_parity_portfolio, efficient_frontier
-- Created tests/quant/test_portfolio.py (9 tests)
-- Tests: 1319 passing (1310 + 9 new)
----
-
-## 2026-02-22 - V3-006
-- Created src/bot/quant/microstructure.py: vwap_midprice, microprice, orderbook_imbalance, detect_walls, compute_orderbook_metrics
-- Created tests/quant/test_microstructure.py (16 tests)
-- Tests: 1335 passing (1319 + 16 new)
-- **All 5 quant math modules complete.**
----
-
-## 2026-02-22 - V3-007
-- Created src/bot/data/pair_data.py with PairDataProvider class
-  - get_aligned_closes_from_candles (sync), get_aligned_closes (async from DataStore)
-  - compute_spread, compute_log_returns, compute_correlation_matrix
-- Created tests/data/test_pair_data.py (17 tests)
-- Tests: 1352 passing (1335 + 17 new)
----
-
-## 2026-02-22 - V3-008
-- Created src/bot/strategies/quant/pairs_trading.py with PairsTradingStrategy
-  - Z-score entry/exit via Engle-Granger cointegration + rolling OLS hedge ratio
-  - Half-life filter, cached cointegration test, regime adaptation (disabled in HIGH_VOLATILITY)
-- Created tests/strategies/quant/test_pairs_trading.py (13 tests)
-- Tests: 1365 passing (1352 + 13 new)
----
-
-## 2026-02-22 - V3-009
-- Created src/bot/strategies/quant/mean_reversion.py with MeanReversionStrategy
-  - Single-asset mean reversion using z-score on log prices
-  - ADF stationarity test with confidence penalty for non-stationary series
-  - OU parameter estimation for half-life filtering
-  - Regime adaptation: disabled in TRENDING_UP/TRENDING_DOWN
-- Created tests/strategies/quant/test_mean_reversion.py (16 tests)
-- Tests: 1381 passing (1365 + 16 new)
+## 2026-02-22 - V4-001
+- Created frontend/ directory with Vite + React 18 + TypeScript + Tailwind CSS 3
+- Files created:
+  - frontend/package.json, tsconfig.json, tsconfig.node.json, vite.config.ts
+  - frontend/tailwind.config.js, postcss.config.js, index.html
+  - frontend/src/main.tsx, App.tsx, index.css, vite-env.d.ts
+  - frontend/src/api/client.ts (axios with /api base + 401 interceptor)
+  - frontend/src/api/types.ts (TypeScript types matching Python models)
+  - frontend/src/pages/Dashboard.tsx, Trades.tsx, Strategies.tsx, Settings.tsx, Login.tsx
+- Modified src/bot/dashboard/app.py:
+  - Added APIRouter with `/api` prefix for all data endpoints
+  - Moved HTML dashboard to `/legacy` route
+  - Added SPA static file serving with index.html fallback
+  - /health available at both root and /api/health
+  - Added StaticFiles mount for built frontend assets
+- Updated 5 test files for /api/ prefix:
+  - tests/dashboard/test_app.py (all endpoint paths + dashboard HTML → /legacy)
+  - tests/dashboard/test_v2_026_enhanced_dashboard.py (all paths + HTML → /legacy)
+  - tests/test_v2_022_strategy_tracker.py (/strategies → /api/strategies)
+  - tests/test_v3_integration.py (/quant/* → /api/quant/*)
+  - tests/test_v2_007_cycle_safety.py (/status → /api/status)
+- Created Makefile with frontend-install, frontend-dev, frontend-build, test, lint targets
+- Updated .gitignore: added frontend/node_modules/, frontend/dist/, src/bot/dashboard/static/
+- Tests: 1494 passing (all existing tests updated for /api/ prefix), ruff clean
+- Frontend: npm run build succeeds (TypeScript + Vite)
 - **Learnings for future iterations:**
-  - Constant price data causes statsmodels adfuller to raise ValueError — always use non-constant test data
-  - Test count baseline: 1381 tests passing as of V3-009
----
-
-## 2026-02-22 - V3-010
-- Created src/bot/strategies/quant/momentum_factor.py with MomentumFactorStrategy
-  - Cross-timeframe momentum factor using weighted z-score composite
-  - Computes momentum = short MA / long MA - 1, then z-scores across window
-  - Combines multiple timeframes (1h: 0.2, 4h: 0.3, 1d: 0.5) into single composite z-score
-  - Regime adaptation: 1.3x multiplier in TRENDING, 0.5x in RANGING
-  - Falls back to provided ohlcv_data as "1h" if no multi_timeframe_candles kwarg
-- Created tests/strategies/quant/test_momentum_factor.py (15 tests)
-- Tests: 1396 passing (1381 + 15 new)
-- **Learnings for future iterations:**
-  - Test count baseline: 1396 tests passing as of V3-010
----
-
-## 2026-02-22 - V3-011
-- Created src/bot/strategies/quant/volatility_breakout.py with VolatilityBreakoutStrategy
-  - GARCH-based volatility breakout: BUY/SELL when realized vol >> forecasted vol
-  - Direction determined by sign of recent returns (positive = BUY, negative = SELL)
-  - Dynamic stop-loss from GARCH forecast included in metadata
-  - Confidence capped at 1.0, scaled by vol_ratio / (2 * breakout_multiplier)
-  - Graceful fallback to HOLD on GARCH fit failure or insufficient data
-- Created tests/strategies/quant/test_volatility_breakout.py (14 tests)
-- Tests: 1410 passing (1396 + 14 new)
-- **Learnings for future iterations:**
-  - Near-constant data causes GARCH to fail gracefully (DataScaleWarning) — good for testing fallback path
-  - Test count baseline: 1410 tests passing as of V3-011
----
-
-## 2026-02-22 - V3-012
-- Created src/bot/strategies/quant/triangular_arb.py with TriangularArbStrategy
-  - Graph-based triangular arbitrage detecting 3-leg cycles across currency pairs
-  - Builds directed graph from ticker bid/ask prices (quote->base buy, base->quote sell)
-  - Searches all combinations of base_currencies for profitable 3-node cycles
-  - Net profit accounts for 3x taker fees: (1 - fee_rate)^3
-  - BUY signal when net profit > min_profit_pct, HOLD otherwise
-  - Confidence scaled by profit_pct / (min_profit_pct * 5), capped at 1.0
-- Created tests/strategies/quant/test_triangular_arb.py (17 tests)
-- Tests: 1427 passing (1410 + 17 new)
-- **Learnings for future iterations:**
-  - Triangular arb needs carefully constructed test tickers to guarantee arb exists (use bid=ask for simplicity)
-  - Pairs that don't form a triangle (e.g., all X/USDT) correctly return no cycle
-  - Test count baseline: 1427 tests passing as of V3-012
----
-
-## 2026-02-22 - V3-013
-- Extended src/bot/risk/portfolio_risk.py with VaR integration:
-  - Added var_enabled, var_confidence, max_portfolio_var_pct constructor params (all with backward-compatible defaults)
-  - Added calculate_portfolio_var() — historical VaR using weighted portfolio returns from price_history
-  - Added check_var_limit() — blocks new positions when portfolio VaR exceeds limit (only when var_enabled=True)
-  - Added get_risk_metrics() — returns dict with exposure_pct, heat, var_pct, n_positions, portfolio_value, var_enabled
-  - Wired VaR check as step 5 in validate_new_position()
-- Updated tests/risk/test_portfolio_risk.py with 15 new VaR test cases (TestVarIntegration class):
-  - calculate_portfolio_var: returns percentage, None for no positions/history/insufficient data
-  - check_var_limit: disabled allows, no-data allows, exceeds blocks, within allows
-  - validate_new_position: VaR blocks, VaR disabled passes
-  - get_risk_metrics: all keys present, correct values
-  - Config defaults and custom config
-  - Higher confidence → higher VaR property
-- Tests: 1442 passing (1427 + 15 new)
-- **Learnings for future iterations:**
-  - VaR defaults (var_enabled=False) ensure all existing tests pass without modification
-  - Historical VaR requires >= 10 returns per position — tests must generate 11+ candles
-  - Test count baseline: 1442 tests passing as of V3-013
----
-
-## 2026-02-22 - V3-014
-- Verified all V3 config fields already present in src/bot/config.py:
-  - var_enabled: bool = False, var_confidence: float = 0.95, max_portfolio_var_pct: float = 5.0
-  - quant_pairs: list[list[str]] = [], triangular_arb_enabled: bool = False
-  - rebalance_enabled: bool = False, rebalance_method: str = 'risk_parity', rebalance_threshold_pct: float = 5.0
-  - garch_enabled: bool = False
-- All fields match reference implementation and PRD acceptance criteria
-- No code changes needed — fields were added progressively during V2/V3 development
-- Tests: 1442 passing (no change), ruff clean
-- **Learnings for future iterations:**
-  - Config fields can accumulate across story branches — always verify before duplicating
-  - Test count baseline: 1442 tests passing as of V3-014
----
-
-## 2026-02-22 - V3-015
-- Created src/bot/execution/rebalancer.py with PortfolioRebalancer class
-  - compute_target_weights(): risk_parity or max_sharpe optimization via quant.portfolio
-  - check_rebalance_needed(): drift detection with threshold, interval timer, order generation
-  - reset_timer(), target_weights property
-  - Equal-weight fallback for single asset or insufficient data (<20 returns)
-- Created tests/execution/test_rebalancer.py (13 tests)
-  - Covers: weight computation, single asset, drift detection, interval gating, both methods
-  - Order fields validation, overweight SELL / underweight BUY, zero portfolio, timer reset
-- Tests: 1455 passing (1442 + 13 new), ruff clean
-- **Learnings for future iterations:**
-  - PortfolioRebalancer uses hours_since_rebalance counter incremented each call
-  - min_rebalance_interval=0 in tests to bypass interval gating
-  - Test count baseline: 1455 tests passing as of V3-015
----
-
-## 2026-02-22 - V3-016
-- Created src/bot/backtest/quant_backtest.py with PairsBacktestEngine and PortfolioBacktestEngine
-  - PairsBacktestEngine: z-score entry/exit on rolling hedge ratio spread, stop-loss, fee accounting
-  - PortfolioBacktestEngine: periodic risk_parity rebalance, turnover-based fees, equity tracking
-  - Both produce BacktestResult with equity_curve, drawdown_curve, trades, metrics
-- Created tests/backtest/test_quant_backtest.py (10 tests)
-  - Pairs: basic backtest, non-cointegrated pair, drawdown curve, symbol names, initial capital
-  - Portfolio: basic backtest, single asset empty result, rebalance trades, equity curve length, drawdown
-- Tests: 1465 passing (1455 + 10 new), ruff clean
-- **Learnings for future iterations:**
-  - PairsBacktestEngine needs start_idx = hedge_window + zscore_window before trading begins
-  - PerformanceMetrics import needed for _empty_result() fallback
-  - Test count baseline: 1465 tests passing as of V3-016
----
-
-## 2026-02-22 - V3-017
-- Added 4 quant endpoints to src/bot/dashboard/app.py:
-  - GET /quant/risk-metrics — VaR, CVaR, Sortino, Calmar from bot state
-  - GET /quant/correlation-matrix — symbol correlation matrix from bot state
-  - GET /quant/portfolio-optimization — optimal weights from bot state
-  - GET /quant/garch — GARCH volatility forecast from bot state
-- All endpoints use _bot_state.get() with empty dict default for backward compat
-- Updated tests/dashboard/test_app.py with 8 new tests (empty + with-data for each endpoint)
-- Tests: 1473 passing (1465 + 8 new), ruff clean
-- **Learnings for future iterations:**
-  - Quant endpoints are read-only views into bot state — orchestrator populates state
-  - Test count baseline: 1473 tests passing as of V3-017
----
-
-## 2026-02-22 - V3-018
-- Verified all test subdirectories already have __init__.py files:
-  - tests/, tests/quant/, tests/strategies/, tests/strategies/quant/
-  - tests/backtest/, tests/data/, tests/execution/, tests/risk/
-  - tests/monitoring/, tests/models/, tests/exchanges/, tests/dashboard/
-  - tests/integration/
-- Test discovery: `pytest tests/ --co` finds all 1473 tests
-- No changes needed — all __init__.py files were created during previous stories
-- Tests: 1473 passing (no change), ruff clean
-- **Learnings for future iterations:**
-  - Each V3 story already created needed __init__.py files incrementally
-  - Test count baseline: 1473 tests passing as of V3-018
----
-
-## 2026-02-22 - V3-019
-- Created tests/test_v3_integration.py with 21 comprehensive integration tests:
-  - TestQuantMathIntegration (5): statistics pipeline, risk metrics, GARCH, portfolio opt, microstructure
-  - TestQuantStrategiesIntegration (3): registration, signal generation, pairs trading with data provider
-  - TestPortfolioRiskVaRIntegration (4): VaR calculation, limit check, risk metrics summary, validate position
-  - TestQuantBacktestIntegration (3): pairs backtest trades, portfolio preservation, no lookahead bias
-  - TestDashboardEndpoints (4): all 4 quant endpoints return 200
-  - TestConfigV3Settings (2): default and custom V3 config
-- All tests pass in under 2 seconds
-- Tests: 1494 passing (1473 + 21 new), ruff clean
-- **Learnings for future iterations:**
-  - Integration test uses autouse clean_registry fixture to avoid cross-test pollution
-  - Test count baseline: 1494 tests passing as of V3-019
----
-
-## 2026-02-22 - V3-020
-- Final verification of quant __init__.py exports
-- Added missing `VolatilityRegime` enum to imports and `__all__` in src/bot/quant/__init__.py
-- __all__ now contains 25 public names across all 5 modules:
-  - statistics (6): adf_test, engle_granger_cointegration, calculate_zscore, calculate_half_life, estimate_ou_params, rolling_ols_hedge_ratio
-  - risk_metrics (7): parametric_var, historical_var, cornish_fisher_var, cvar, sortino_ratio, calmar_ratio, information_ratio
-  - volatility (3): GARCHModel, VolatilityRegime, classify_volatility_regime
-  - portfolio (4): min_variance_portfolio, max_sharpe_portfolio, risk_parity_portfolio, efficient_frontier
-  - microstructure (5): vwap_midprice, microprice, orderbook_imbalance, detect_walls, compute_orderbook_metrics
-- All 1494 tests pass (V2 + V3), ruff clean
-- **Learnings for future iterations:**
-  - Always verify enum classes are exported alongside their associated functions
-  - Final test count: 1494 tests passing across entire V3 quant trading system
+  - APIRouter prefix means endpoint decorators use `/status` not `/api/status`
+  - SPA catch-all route `/{full_path:path}` must be last to avoid catching API routes
+  - /health stays at root for Docker healthcheck AND at /api/health for API consistency
+  - Legacy dashboard at /legacy preserves backward compatibility for test assertions
+  - Test count baseline: 1494 tests passing as of V4-001
 ---

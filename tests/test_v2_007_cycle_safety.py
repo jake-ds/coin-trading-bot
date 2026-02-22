@@ -354,7 +354,7 @@ class TestStatusEndpoint:
                 "last_cycle_time": 1700000000.0,
             },
         )
-        resp = await client.get("/status")
+        resp = await client.get("/api/status")
         data = resp.json()
         assert "cycle_metrics" in data
         assert data["cycle_metrics"]["cycle_count"] == 5

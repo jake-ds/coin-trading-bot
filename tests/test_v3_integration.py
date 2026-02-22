@@ -365,7 +365,7 @@ class TestDashboardEndpoints:
         async with AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
-            resp = await client.get("/quant/risk-metrics")
+            resp = await client.get("/api/quant/risk-metrics")
             assert resp.status_code == 200
             assert "risk_metrics" in resp.json()
 
@@ -378,7 +378,7 @@ class TestDashboardEndpoints:
         async with AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
-            resp = await client.get("/quant/correlation-matrix")
+            resp = await client.get("/api/quant/correlation-matrix")
             assert resp.status_code == 200
             assert "correlation_matrix" in resp.json()
 
@@ -391,7 +391,7 @@ class TestDashboardEndpoints:
         async with AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
-            resp = await client.get("/quant/portfolio-optimization")
+            resp = await client.get("/api/quant/portfolio-optimization")
             assert resp.status_code == 200
 
     @pytest.mark.asyncio
@@ -403,7 +403,7 @@ class TestDashboardEndpoints:
         async with AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
-            resp = await client.get("/quant/garch")
+            resp = await client.get("/api/quant/garch")
             assert resp.status_code == 200
 
 
