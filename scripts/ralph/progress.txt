@@ -244,3 +244,18 @@ Started: 2026-02-22
   - Integration test uses autouse clean_registry fixture to avoid cross-test pollution
   - Test count baseline: 1494 tests passing as of V3-019
 ---
+
+## 2026-02-22 - V3-020
+- Final verification of quant __init__.py exports
+- Added missing `VolatilityRegime` enum to imports and `__all__` in src/bot/quant/__init__.py
+- __all__ now contains 25 public names across all 5 modules:
+  - statistics (6): adf_test, engle_granger_cointegration, calculate_zscore, calculate_half_life, estimate_ou_params, rolling_ols_hedge_ratio
+  - risk_metrics (7): parametric_var, historical_var, cornish_fisher_var, cvar, sortino_ratio, calmar_ratio, information_ratio
+  - volatility (3): GARCHModel, VolatilityRegime, classify_volatility_regime
+  - portfolio (4): min_variance_portfolio, max_sharpe_portfolio, risk_parity_portfolio, efficient_frontier
+  - microstructure (5): vwap_midprice, microprice, orderbook_imbalance, detect_walls, compute_orderbook_metrics
+- All 1494 tests pass (V2 + V3), ruff clean
+- **Learnings for future iterations:**
+  - Always verify enum classes are exported alongside their associated functions
+  - Final test count: 1494 tests passing across entire V3 quant trading system
+---

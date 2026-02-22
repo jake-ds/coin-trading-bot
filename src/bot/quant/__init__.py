@@ -32,11 +32,13 @@ from bot.quant.statistics import (
 )
 from bot.quant.volatility import (
     GARCHModel,
+    VolatilityRegime,
     classify_volatility_regime,
 )
 
 __all__ = [
     "GARCHModel",
+    "VolatilityRegime",
     "adf_test",
     "calmar_ratio",
     "calculate_half_life",

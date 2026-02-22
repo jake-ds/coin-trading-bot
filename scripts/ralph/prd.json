@@ -311,7 +311,7 @@
         "pytest tests/ -v completes successfully"
       ],
       "priority": 20,
-      "passes": false,
+      "passes": true,
       "notes": "Final verification story — ensure everything is wired together."
     }
   ]
