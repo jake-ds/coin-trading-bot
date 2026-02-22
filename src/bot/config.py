@@ -120,6 +120,11 @@ class Settings(BaseSettings):
     rate_limit_enabled: bool = True
     exchange_rate_limits: dict[str, dict[str, float]] = Field(default_factory=dict)
 
+    # Position reconciliation
+    reconciliation_enabled: bool = True
+    reconciliation_interval_cycles: int = Field(default=10, ge=1)
+    reconciliation_auto_fix: bool = False
+
     # WebSocket feed
     websocket_enabled: bool = False
     websocket_poll_interval: float = Field(default=5.0, gt=0)
@@ -275,6 +280,25 @@ SETTINGS_METADATA: dict[str, dict[str, Any]] = {
         "description": "Per-exchange rate limit overrides (JSON)",
         "type": "dict",
         "requires_restart": True,
+    },
+    # Reconciliation (safe — hot-reloadable)
+    "reconciliation_enabled": {
+        "section": "Risk Management",
+        "description": "Enable position reconciliation with exchange",
+        "type": "bool",
+        "requires_restart": False,
+    },
+    "reconciliation_interval_cycles": {
+        "section": "Risk Management",
+        "description": "Run reconciliation every N trading cycles",
+        "type": "int",
+        "requires_restart": False,
+    },
+    "reconciliation_auto_fix": {
+        "section": "Risk Management",
+        "description": "Auto-fix local state to match exchange on discrepancy",
+        "type": "bool",
+        "requires_restart": False,
     },
     # Database (unsafe)
     "database_url": {

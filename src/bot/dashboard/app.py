@@ -66,6 +66,7 @@ _bot_state = {
     "open_positions": [],
     "regime": None,
     "cycle_log": [],
+    "reconciliation": {},
 }
 
 # Reference to strategy_registry — set by main.py via set_strategy_registry()
@@ -362,6 +363,12 @@ async def get_regime():
 async def get_cycle_log():
     """Get cycle decision log (last 50 cycles)."""
     return {"cycle_log": _bot_state["cycle_log"]}
+
+
+@api_router.get("/reconciliation")
+async def get_reconciliation():
+    """Get last position reconciliation result and timestamp."""
+    return {"reconciliation": _bot_state.get("reconciliation", {})}
 
 
 @api_router.get("/analytics")

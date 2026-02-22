@@ -33,6 +33,8 @@ Started: 2026-02-22
 - **Rate limiter**: Token bucket in `bot.exchanges.rate_limiter.RateLimiter`. Per-exchange defaults in `DEFAULT_EXCHANGE_LIMITS`. `ResilientExchange` applies rate limiter BEFORE circuit breaker.
 - **Rate limit config**: `rate_limit_enabled` (default True) and `exchange_rate_limits` (dict of per-exchange overrides) in Settings.
 - **Rate limit metrics**: `RateLimitMetrics` dataclass tracks total_requests, throttled_requests, avg_wait_ms, current_rps. Exposed via `/api/status` in `rate_limits` field.
+- **Reconciliation**: `PositionReconciler` in `bot.execution.reconciler`. Compares local positions (from RiskManager) with exchange balances (via `get_balance()`). Runs every N cycles in live mode only. Config: `reconciliation_enabled`, `reconciliation_interval_cycles`, `reconciliation_auto_fix` (all hot-reloadable).
+- **Reconciliation endpoint**: `GET /api/reconciliation` returns last result from `_bot_state["reconciliation"]`. Dashboard state updated by `_maybe_reconcile()` in `main.py`.
 
 ---
 
@@ -375,4 +377,46 @@ Started: 2026-02-22
   - asyncio.Lock ensures token accounting is thread-safe for concurrent coroutines
   - Dashboard state uses `rate_limits=None` when not configured to avoid cluttering /api/status response
   - Test count baseline: 1677 passing as of V4-009
+---
+
+## 2026-02-22 - V4-010
+- Added position reconciliation to sync local state with exchange
+- Files created:
+  - src/bot/execution/reconciler.py (PositionReconciler, ReconciliationResult, PositionDiscrepancy, DiscrepancyType)
+  - tests/execution/test_reconciler.py (38 tests)
+- Files modified:
+  - src/bot/config.py:
+    - Added `reconciliation_enabled` (default True), `reconciliation_interval_cycles` (default 10), `reconciliation_auto_fix` (default False)
+    - Added SETTINGS_METADATA entries for all three (all hot-reloadable, requires_restart=False)
+  - src/bot/execution/__init__.py:
+    - Added PositionReconciler, ReconciliationResult, PositionDiscrepancy, DiscrepancyType to exports
+  - src/bot/main.py:
+    - Added `_reconciler` field to TradingBot, initialized in `initialize()` when reconciliation_enabled
+    - Added `_maybe_reconcile()` method: runs every N cycles in live mode only
+    - Added `_apply_reconciliation_fixes()` for auto-fix mode
+    - Reconciliation updates dashboard state, broadcasts alert via WebSocket, sends Telegram notification
+  - src/bot/dashboard/app.py:
+    - Added `reconciliation` key to `_bot_state` dict
+    - Added GET /api/reconciliation endpoint returning last reconciliation result
+- Features:
+  - PositionReconciler compares local positions (from RiskManager) against exchange balances (via get_balance())
+  - For spot trading: base currency extracted from symbol (e.g., "BTC/USDT" → "BTC") and compared with exchange balance
+  - ReconciliationResult: matched (list of symbols), local_only, exchange_only, qty_mismatch (lists of PositionDiscrepancy)
+  - Configurable tolerance_pct (default 1%) — quantities within tolerance are considered matching
+  - Quote currencies (USDT, USD, BUSD, USDC, etc.) excluded from exchange_only detection
+  - Dust balances (< 1e-8) ignored
+  - Paper mode: reconciliation skipped entirely (no exchange to compare against)
+  - Exchange errors: caught gracefully, result.error set, no discrepancies reported
+  - Auto-fix option: removes local-only positions, adjusts qty mismatches to match exchange
+  - Discrepancies trigger: structured log warning, Telegram alert, WebSocket broadcast_alert
+  - All three config settings are hot-reloadable via settings panel
+- Tests: 1714 passing (1676 existing + 38 new — 1 pre-existing test_config failure), ruff clean
+- **Learnings for future iterations:**
+  - get_balance() returns {currency: amount} for spot — positions must be inferred from base currency
+  - Tolerance comparison needs careful floating point handling — avoid exact boundary tests
+  - Paper mode skip is critical — PaperPortfolio doesn't use real exchange, reconciliation would always fail
+  - Reconciliation runs at start of cycle (after data collection, before strategy analysis) for clean state
+  - Dashboard state key `reconciliation` stores last result as dict (from to_dict())
+  - Auto-fix modifies RiskManager, PositionManager, and PortfolioRiskManager in sync
+  - Test count baseline: 1714 passing as of V4-010
 ---

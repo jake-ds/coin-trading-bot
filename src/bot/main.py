@@ -21,6 +21,7 @@ from bot.exchanges.rate_limiter import DEFAULT_EXCHANGE_LIMITS, RateLimiter
 from bot.execution.engine import ExecutionEngine
 from bot.execution.paper_portfolio import PaperPortfolio
 from bot.execution.position_manager import ExitType, PositionManager
+from bot.execution.reconciler import PositionReconciler
 from bot.execution.resilient import ResilientExchange
 from bot.execution.smart_executor import SmartExecutor
 from bot.models import OrderSide, SignalAction, TradingSignal
@@ -67,6 +68,7 @@ class TradingBot:
         self._strategy_tracker: StrategyTracker | None = None
         self._portfolio_risk: PortfolioRiskManager | None = None
         self._order_book_analyzer: OrderBookAnalyzer | None = None
+        self._reconciler: PositionReconciler | None = None
         self._cycle_lock: asyncio.Lock = asyncio.Lock()
         self._cycle_count: int = 0
         self._total_cycle_duration: float = 0.0
@@ -173,6 +175,12 @@ class TradingBot:
                 paper_trading=is_paper,
                 paper_portfolio=self._paper_portfolio,
                 smart_executor=smart_exec,
+            )
+
+        # Initialize position reconciler (for live trading)
+        if self._settings.reconciliation_enabled:
+            self._reconciler = PositionReconciler(
+                auto_fix=self._settings.reconciliation_auto_fix,
             )
 
         # Initialize WebSocket feed (if enabled and exchanges available)
@@ -561,6 +569,9 @@ class TradingBot:
         # Collect data
         if self._collector:
             await self._collector.collect_once()
+
+        # Position reconciliation (live mode only, every N cycles)
+        await self._maybe_reconcile()
 
         recent_trades = []
 
@@ -1075,6 +1086,96 @@ class TradingBot:
                 "take_profit": pos.tp2_price,
             })
         return positions
+
+    async def _maybe_reconcile(self) -> None:
+        """Run position reconciliation if due and in live mode."""
+        # Skip in paper mode — no exchange to reconcile against
+        if self._settings.trading_mode == TradingMode.PAPER:
+            return
+
+        if not self._reconciler:
+            return
+
+        if not self._settings.reconciliation_enabled:
+            return
+
+        # Only run every N cycles
+        interval = self._settings.reconciliation_interval_cycles
+        if interval <= 0 or (self._cycle_count % interval) != 0:
+            return
+
+        if not self._exchanges:
+            return
+
+        # Build local positions from risk manager
+        local_positions: dict[str, dict] = {}
+        if self._risk_manager:
+            for symbol in list(self._risk_manager._open_positions.keys()):
+                pos = self._risk_manager.get_position(symbol)
+                if pos:
+                    local_positions[symbol] = pos
+
+        # Reconcile against first exchange
+        exchange = self._exchanges[0]
+        result = await self._reconciler.reconcile(exchange, local_positions)
+
+        # Update dashboard state
+        dashboard_module.update_state(
+            reconciliation=result.to_dict(),
+        )
+
+        # Alert on discrepancies
+        if result.has_discrepancies:
+            alert_msg = self._reconciler.format_alert_message(result)
+
+            # Broadcast alert via WebSocket
+            try:
+                from bot.dashboard.app import broadcast_alert
+                await broadcast_alert(alert_msg, severity="warning")
+            except Exception:
+                logger.debug("ws_reconciliation_alert_error", exc_info=True)
+
+            # Send Telegram notification
+            if self._telegram:
+                await self._telegram.send_message(alert_msg)
+
+            # Auto-fix: update local state to match exchange
+            if self._reconciler.auto_fix and self._risk_manager:
+                self._apply_reconciliation_fixes(result)
+
+    def _apply_reconciliation_fixes(self, result) -> None:
+        """Apply auto-fix corrections from reconciliation result."""
+        if not self._risk_manager:
+            return
+
+        for d in result.local_only:
+            # Position exists locally but not on exchange — remove local
+            logger.warning(
+                "reconciliation_auto_fix_remove",
+                symbol=d.symbol,
+                local_qty=d.local_qty,
+            )
+            self._risk_manager.remove_position(d.symbol)
+            if self._position_manager:
+                self._position_manager.remove_position(d.symbol)
+            if self._portfolio_risk:
+                self._portfolio_risk.remove_position(d.symbol)
+
+        for d in result.qty_mismatch:
+            # Quantity mismatch — update local to match exchange
+            logger.warning(
+                "reconciliation_auto_fix_qty",
+                symbol=d.symbol,
+                local_qty=d.local_qty,
+                exchange_qty=d.exchange_qty,
+            )
+            pos = self._risk_manager.get_position(d.symbol)
+            if pos:
+                entry_price = pos.get("entry_price", 0)
+                self._risk_manager.remove_position(d.symbol)
+                self._risk_manager.add_position(
+                    d.symbol, d.exchange_qty, entry_price
+                )
 
     async def _maybe_save_portfolio_snapshot(self) -> None:
         """Save portfolio snapshot every 10 cycles for equity curve tracking."""

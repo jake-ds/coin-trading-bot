@@ -207,7 +207,7 @@
         "All existing Python tests pass, ruff check passes"
       ],
       "priority": 10,
-      "passes": false,
+      "passes": true,
       "notes": "Drift between local and exchange state is the #1 cause of live trading bugs."
     },
     {
