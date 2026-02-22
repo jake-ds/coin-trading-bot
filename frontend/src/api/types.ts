@@ -22,6 +22,10 @@ export interface MetricsResponse {
 
 export interface TradesResponse {
   trades: Trade[]
+  total: number
+  page: number
+  limit: number
+  total_pages: number
 }
 
 export interface Trade {
@@ -30,6 +34,24 @@ export interface Trade {
   side: 'BUY' | 'SELL'
   quantity: number
   price: number
+  pnl?: number
+  strategy?: string
+}
+
+export interface Position {
+  symbol: string
+  quantity: number
+  entry_price: number
+  current_price: number
+  unrealized_pnl: number
+  stop_loss: number
+  take_profit: number
+  opened_at?: string
+  strategy?: string
+}
+
+export interface PositionsResponse {
+  positions: Position[]
 }
 
 export interface StrategiesResponse {
@@ -66,5 +88,5 @@ export interface WsStatusPayload {
   regime: string | null
   trades: Trade[]
   strategy_stats: Record<string, StrategyStats>
-  open_positions: unknown[]
+  open_positions: Position[]
 }

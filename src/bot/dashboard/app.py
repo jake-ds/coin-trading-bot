@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import structlog
-from fastapi import APIRouter, FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, FastAPI, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -94,9 +94,39 @@ async def get_status():
 
 
 @api_router.get("/trades")
-async def get_trades():
-    """Get recent trades."""
-    return {"trades": _bot_state["trades"][-50:]}
+async def get_trades(
+    page: int = Query(1, ge=1, description="Page number"),
+    limit: int = Query(20, ge=1, le=100, description="Items per page"),
+    symbol: str | None = Query(None, description="Filter by symbol"),
+):
+    """Get trades with pagination and optional symbol filter."""
+    all_trades = _bot_state["trades"]
+
+    # Apply symbol filter
+    if symbol:
+        all_trades = [t for t in all_trades if t.get("symbol") == symbol]
+
+    total = len(all_trades)
+
+    # Reverse for newest-first, then paginate
+    reversed_trades = list(reversed(all_trades))
+    start = (page - 1) * limit
+    end = start + limit
+    page_trades = reversed_trades[start:end]
+
+    return {
+        "trades": page_trades,
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "total_pages": max(1, (total + limit - 1) // limit),
+    }
+
+
+@api_router.get("/positions")
+async def get_positions():
+    """Get current open positions with SL/TP info."""
+    return {"positions": _bot_state["open_positions"]}
 
 
 @api_router.get("/metrics")

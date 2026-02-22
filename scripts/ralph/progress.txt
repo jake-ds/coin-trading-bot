@@ -124,3 +124,39 @@ Started: 2026-02-22
   - Test fixtures must clear ws_manager._connections to prevent cross-test interference
   - Test count baseline: 1516 tests passing as of V4-003
 ---
+
+## 2026-02-22 - V4-004
+- Built Trades and Positions pages with live updates via WebSocket
+- Files created:
+  - frontend/src/pages/Positions.tsx (open positions table with PnL, SL/TP, duration)
+  - frontend/src/pages/Trades.tsx (full trade history with pagination, sorting, CSV export)
+  - frontend/src/components/common/Toast.tsx (toast notification with auto-dismiss and animation)
+  - tests/dashboard/test_v4_004_trades_positions.py (17 tests)
+- Files modified:
+  - src/bot/dashboard/app.py:
+    - Added pagination to /api/trades (page, limit, symbol query params, newest-first ordering)
+    - Added /api/positions endpoint (alias for open_positions data)
+    - Added Query import from FastAPI
+  - frontend/src/api/types.ts:
+    - Added Position interface, PositionsResponse interface
+    - Updated TradesResponse with pagination fields (total, page, limit, total_pages)
+    - Added optional pnl and strategy fields to Trade interface
+    - Typed open_positions as Position[] in WsStatusPayload
+  - frontend/src/App.tsx:
+    - Added Positions nav item and route
+    - Added Toast component with trade event notifications from WebSocket
+    - Toast shows BUY/SELL with symbol and price on 'trade' WS events
+- Features:
+  - Positions page: table with symbol, qty, entry/current price, color-coded unrealized PnL (with % and absolute), SL, TP, duration held
+  - Trades page: sortable table (click column headers), pagination with 20/page, symbol filter, CSV export
+  - Toast notifications: popup on new trade events, auto-dismiss after 5s, slide-in animation
+  - Both pages update in real-time via WebSocket (status_update and trade events)
+  - Empty state messages when no positions/trades
+  - Responsive dark theme matching existing design
+- Tests: 1533 passing (1516 existing + 17 new), ruff clean, frontend builds clean
+- **Learnings for future iterations:**
+  - Adding new query params to existing endpoints with defaults preserves backward compatibility
+  - The /api/positions endpoint is a cleaner alias for /api/open-positions (both remain)
+  - WebSocket trade events trigger page refresh from server for pagination consistency
+  - Test count baseline: 1533 tests passing as of V4-004
+---
