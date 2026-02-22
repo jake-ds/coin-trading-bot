@@ -1,5 +1,11 @@
 """Quantitative finance utilities for statistical trading."""
 
+from bot.quant.portfolio import (
+    efficient_frontier,
+    max_sharpe_portfolio,
+    min_variance_portfolio,
+    risk_parity_portfolio,
+)
 from bot.quant.risk_metrics import (
     calmar_ratio,
     cornish_fisher_var,
@@ -31,11 +37,15 @@ __all__ = [
     "classify_volatility_regime",
     "cornish_fisher_var",
     "cvar",
+    "efficient_frontier",
     "engle_granger_cointegration",
     "estimate_ou_params",
     "historical_var",
     "information_ratio",
+    "max_sharpe_portfolio",
+    "min_variance_portfolio",
     "parametric_var",
+    "risk_parity_portfolio",
     "rolling_ols_hedge_ratio",
     "sortino_ratio",
 ]
