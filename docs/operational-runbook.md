@@ -63,14 +63,33 @@ If any criterion fails, the report shows NO-GO with details on which criteria fa
 
 1. Paper trading validation returns GO
 2. Review the validation report: win rate, Sharpe, drawdown
-3. Set conservative risk parameters initially:
+3. Set a real dashboard password: `DASHBOARD_PASSWORD=your-secure-password`
+4. Configure stop-loss: `STOP_LOSS_PCT=5.0` (required for live mode)
+5. Configure daily loss limit: `DAILY_LOSS_LIMIT_PCT=3.0` (required for live mode)
+6. Set conservative risk parameters initially:
    ```
    MAX_POSITION_SIZE_PCT=3.0
-   DAILY_LOSS_LIMIT_PCT=2.0
    MAX_CONCURRENT_POSITIONS=3
    ```
-4. Ensure Telegram notifications are configured
-5. Verify Binance API key permissions (spot trading only, no withdrawal)
+7. Ensure Telegram notifications are configured
+8. Verify Binance API key permissions (spot trading only, no withdrawal)
+
+### Automated Pre-flight Checks
+
+When `TRADING_MODE=live`, the bot runs 8 pre-flight checks before starting:
+
+| Check | Status | Description |
+|-------|--------|-------------|
+| API Key Validity | FAIL if bad | Tests exchange connection |
+| Sufficient Balance | FAIL if < $100 | Verifies USD balance |
+| Symbol Availability | FAIL if missing | Verifies trading pairs exist |
+| Rate Limit Configured | WARN if off | Checks rate limiter is enabled |
+| Stop-Loss Configured | FAIL if 0 | Requires stop_loss_pct > 0 |
+| Daily Loss Limit | FAIL if 0 | Requires daily_loss_limit_pct > 0 |
+| Password Changed | WARN if default | Checks dashboard auth is enabled |
+| Paper Validation | WARN if missing | Checks for GO validation report |
+
+Any FAIL check prevents startup. WARN checks allow startup with alerts.
 
 ### Switch to Live
 
@@ -84,10 +103,38 @@ BINANCE_TESTNET=false
 - Monitor closely for the first 24 hours
 - Check the dashboard frequently
 - Verify orders are filling correctly
+- Check position reconciliation results (`GET /api/reconciliation`)
 - Compare live results with paper trading expectations
 - Gradually increase position sizes after confirming stability
 
-## Handling Emergencies
+## Emergency Procedures
+
+### Emergency Stop (Kill Switch)
+
+**Via Dashboard API:**
+```bash
+# Stop trading immediately (keeps positions open)
+curl -X POST http://localhost:8000/api/emergency/stop \
+  -H "Authorization: Bearer $TOKEN"
+
+# Close all positions and stop
+curl -X POST http://localhost:8000/api/emergency/close-all \
+  -H "Authorization: Bearer $TOKEN"
+
+# Resume trading after emergency
+curl -X POST http://localhost:8000/api/emergency/resume \
+  -H "Authorization: Bearer $TOKEN"
+
+# Check current emergency state
+curl http://localhost:8000/api/emergency \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+**Via Telegram:**
+- `/stop` - Halt trading, cancel pending orders
+- `/closeall` - Halt trading and close all positions at market
+- `/resume` - Resume trading after emergency stop
+- `/status` - Check bot status, positions, and emergency state
 
 ### Exchange API Down
 
@@ -181,13 +228,27 @@ docker-compose down
 
 ## Useful API Endpoints
 
+All data endpoints require JWT authentication when `DASHBOARD_PASSWORD` is set.
+
 | Endpoint | Description |
 |----------|-------------|
-| `GET /` | Dashboard HTML page |
 | `GET /health` | Health check (for Docker/monitoring) |
-| `GET /status` | Bot status (running/stopped) |
-| `GET /trades` | Recent trades list |
-| `GET /metrics` | Performance metrics |
-| `GET /portfolio` | Current portfolio state |
-| `GET /strategies` | Strategy status and stats |
-| `POST /strategies/{name}/toggle` | Enable/disable a strategy |
+| `GET /api/status` | Bot status (running/stopped) |
+| `GET /api/trades` | Recent trades list (paginated) |
+| `GET /api/portfolio` | Current portfolio state |
+| `GET /api/positions` | Open positions |
+| `GET /api/strategies` | Strategy status and stats |
+| `POST /api/strategies/{name}/toggle` | Enable/disable a strategy |
+| `GET /api/analytics` | Performance analytics |
+| `GET /api/settings` | Current configuration |
+| `PUT /api/settings` | Update settings (hot-reload) |
+| `GET /api/audit` | Audit log (filterable) |
+| `POST /api/emergency/stop` | Emergency stop |
+| `POST /api/emergency/close-all` | Emergency close all |
+| `POST /api/emergency/resume` | Resume after emergency |
+| `GET /api/emergency` | Emergency state |
+| `GET /api/preflight` | Pre-flight check results |
+| `GET /api/reconciliation` | Position reconciliation results |
+| `POST /api/auth/login` | Login (returns JWT) |
+| `POST /api/auth/refresh` | Refresh access token |
+| `WebSocket /api/ws` | Real-time updates |

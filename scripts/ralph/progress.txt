@@ -601,3 +601,50 @@ Started: 2026-02-22
   - Import ordering matters for ruff — use `ruff check --fix` to auto-sort
   - Test count baseline: 1865 passing as of V4-014
 ---
+
+## 2026-02-22 - V4-015
+- Final build pipeline, docs, and verification
+- Files modified:
+  - Makefile:
+    - Added `build` target: runs frontend-build, verifies static/index.html exists, verifies Python package imports
+    - Added `verify` target: runs lint + test
+  - Dockerfile:
+    - Updated to 3-stage multi-stage build:
+      1. `frontend-builder` (node:20-slim): npm ci + npm run build
+      2. `builder` (python:3.11-slim): pip install requirements + editable install
+      3. Runtime (python:3.11-slim): copies Python deps + source + built frontend assets
+    - Added HEALTHCHECK with Python urllib
+    - Added default ENV: TRADING_MODE=paper, LOG_LEVEL=INFO, DATABASE_URL, DASHBOARD_PORT=8000, NODE_ENV=production
+  - docker-compose.yml:
+    - Added NODE_ENV=production environment variable
+  - README.md:
+    - Comprehensive rewrite with all V4 features listed
+    - Updated architecture tree with all V4 modules (exchanges/rate_limiter, execution/preflight, execution/reconciler, monitoring/audit, dashboard/auth, dashboard/websocket)
+    - Added API endpoints table (20+ endpoints including auth, emergency, audit, preflight, reconciliation, settings, WebSocket)
+    - Added live trading checklist (10 steps from paper validation to monitoring)
+    - Added links to all docs: strategies, configuration, backtesting, risk-management, operational-runbook, dashboard, live-trading
+    - Added Docker deployment section with build/logs/healthcheck commands
+    - Added frontend development section with Vite dev server
+  - docs/operational-runbook.md:
+    - Added Emergency Procedures section with API curl and Telegram command examples
+    - Added Automated Pre-flight Checks table (8 checks: API key, balance, symbols, rate limit, stop-loss, daily loss, password, validation)
+    - Updated API endpoints table with all V4 endpoints
+  - docs/dashboard.md (NEW):
+    - Dashboard pages guide: Overview (portfolio metrics, regime, cycle stats), Positions (open positions with PnL), Trades (history with pagination, CSV export), Strategies (toggle, charts, auto-disable warnings), Analytics (equity curve, drawdown, monthly heatmap), Settings (hot-reload), Login
+    - Real-time updates via WebSocket with connection indicator
+    - Emergency controls description
+    - Frontend development instructions (Vite dev, production build)
+  - docs/live-trading.md (NEW):
+    - Step-by-step guide: prerequisites → paper validation → safety params → secure dashboard → Telegram → exchange config → switch mode → pre-flight checks → monitor first 24h
+    - Pre-flight checks table (8 checks with required/recommended status)
+    - Emergency procedures (stop, close-all, resume via API and Telegram)
+    - Common issues section (rate limiting, position discrepancies, strategy auto-disable)
+    - Scaling up guidance (gradually increase sizes, add symbols, enable strategies)
+- Verification:
+  - All 1865 tests passing (1 pre-existing test_config::test_defaults failure from .env leak)
+  - ruff check clean on src/ and tests/
+  - Makefile build target verified
+  - Dockerfile multi-stage build structure verified
+  - All documentation cross-referenced and consistent
+- Test count baseline: 1865 passing as of V4-015
+---

@@ -14,6 +14,7 @@ services:
       - TRADING_MODE=${TRADING_MODE:-paper}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - DATABASE_URL=sqlite+aiosqlite:///data/trading.db
+      - NODE_ENV=production
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 30s
