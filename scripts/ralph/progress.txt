@@ -17,7 +17,8 @@ Started: 2026년 2월 22일 일요일 00시 13분 50초 KST
 - **Telegram error notifications**: Now send full `traceback.format_exc()` instead of just `str(e)` — tests should check `"Traceback" in error_msg` and `"error text" in error_msg`
 - **TrendFilter pattern**: Create `TrendFilter` in `initialize()`. In `_trading_cycle()`, fetch candles for `trend_timeframe` (default "4h"), call `get_trend(symbol, candles)` → pass `trend_direction` to `ensemble.vote()`. Trend errors are caught gracefully (trend_direction stays None). Tests that use MagicMock candles won't trigger trend filter because `ta.trend.ADXIndicator` fails on mocks — caught by try/except.
 - **Ensemble trend filtering**: `vote()` accepts optional `trend_direction` param. BUY rejected if BEARISH, SELL rejected if BULLISH. Conflict detection runs BEFORE trend filter. NEUTRAL and None allow all signals through.
-- **Test count baseline**: 733 tests passing as of V2-018
+- **Test count baseline**: 1178 tests passing as of V2-027
+- **Backtest CLI pattern**: `python -m bot.backtest` uses `__main__.py` with `build_parser()` → `async_main(args)` → `run_backtest(args)`. `_import_strategies()` populates registry before strategy lookup. `SKIP_STRATEGIES = {"arbitrage", "dca", "funding_rate"}` — these need special data beyond OHLCV. `calculate_profit_factor()` = gross_profit / gross_loss from SELL trades. Multi-strategy CSV prepends `strategy` column.
 - **WebSocketFeed pattern**: `websocket_enabled` defaults to `False` in config for backward compat. In `initialize()`, `_init_ws_feed()` creates WebSocketFeed only if `websocket_enabled=True` AND exchanges exist. Uses first exchange. Start via `asyncio.ensure_future(feed.start())`. Stop via `await feed.stop()` in shutdown. WS support auto-detected via `ccxt_exchange.has['watchTicker']`.
 - **WebSocket price in exit checks**: In `_trading_cycle()`, prefer `ws_feed.get_latest_price(symbol)` over candle close for faster stop-loss checks. Falls back to `store.get_candles()` when WS price is None.
 - **WS mock pattern**: Mock the adapter chain: `exchange._exchange._exchange` = ccxt exchange with `has` dict. Use `AsyncMock(side_effect=...)` for `watch_ticker`/`watch_ohlcv`. Block with `asyncio.sleep(100)` to simulate long-running WS streams. For REST fallback tests, mock `exchange.get_ticker`. Always add `mock_feed.stop = AsyncMock()` on mock feeds injected into bot for shutdown compatibility.
@@ -847,4 +848,31 @@ Started: 2026년 2월 22일 일요일 00시 13분 50초 KST
   - Strategy toggle uses StrategyRegistry.is_active/enable/disable — requires registry reference set via set_strategy_registry()
   - Portfolio snapshots every 10 cycles is a good balance between data resolution and storage efficiency
   - _build_open_positions prefers WS feed price for current_price (real-time), falls back to highest_price_since_entry
+---
+
+## 2026-02-22 - V2-027: Comprehensive backtesting CLI with strategy comparison
+- **Implemented:**
+  - New CLI entry point `python -m bot.backtest` via `src/bot/backtest/__main__.py`
+  - argparse with options: `--strategy` (name or 'all'), `--symbol`, `--timeframe`, `--start-date`, `--end-date`, `--initial-capital`, `--fee-pct`, `--slippage-pct`, `--stop-loss-pct`, `--take-profit-pct`, `--output-json`, `--output-csv`, `--database-url`
+  - When `--strategy=all`, runs all registered strategies that work with standard OHLCV data (skips arbitrage, dca, funding_rate)
+  - Comparison table output: columns for Strategy, Total Return %, Sharpe Ratio, Max Drawdown %, Win Rate %, Total Trades, Profit Factor — sorted by Sharpe ratio descending
+  - Profit factor calculation: gross_profit / gross_loss (handles no-trade, no-loss, no-profit edge cases)
+  - Single strategy output: detailed summary with all metrics
+  - JSON export: single result or comparison array, sorted by Sharpe
+  - CSV export: single strategy trade log or multi-strategy with strategy column
+  - Data loading from DataStore with date range filtering (limit 10000 candles)
+  - Auto-imports all strategy modules to populate registry
+  - Graceful error handling: strategy errors during backtest are caught, other strategies still run
+  - Both sync `main()` and async `async_main()` entry points
+- **Files created:**
+  - `src/bot/backtest/__main__.py` — CLI entry point with all functions
+  - `tests/backtest/test_v2_027_backtest_cli.py` — 41 tests
+- **Tests:** 1178 tests passing (1137 previous + 41 new), ruff check passes
+- **Learnings for future iterations:**
+  - Strategies needing special data (arbitrage=multi-exchange, dca=time intervals, funding_rate=funding data) must be skipped in generic OHLCV backtesting
+  - ruff I001 import sorting: imports inside functions must be alphabetically sorted too
+  - `argparse` works well with `asyncio.run()` wrapper for async backtest execution
+  - `calculate_profit_factor` must handle edge cases: no trades (0.0), all wins (inf), all losses (0.0)
+  - Multi-strategy CSV needs an extra `strategy` column prepended to identify which strategy each trade belongs to
+  - Test count baseline: 1178 tests passing as of V2-027
 ---
