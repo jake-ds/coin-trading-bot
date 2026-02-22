@@ -134,6 +134,22 @@ export interface AnalyticsStats {
   win_rate: number
 }
 
+export interface AuthStatusResponse {
+  auth_enabled: boolean
+  dev_mode: boolean
+}
+
+export interface LoginResponse {
+  access_token: string
+  refresh_token: string
+  token_type: string
+}
+
+export interface RefreshResponse {
+  access_token: string
+  token_type: string
+}
+
 export interface WsStatusPayload {
   status: string
   started_at: string | null
@@ -152,4 +168,55 @@ export interface WsStatusPayload {
   trades: Trade[]
   strategy_stats: Record<string, StrategyStats>
   open_positions: Position[]
+  cycle_log_latest: CycleLogEntry | null
+}
+
+// Cycle Log types
+export interface StrategySignalEntry {
+  name: string
+  action: string
+  confidence: number
+}
+
+export interface EnsembleResult {
+  action: string
+  confidence: number
+  agreement: number
+  reason: string | null
+  agreeing_strategies: string[]
+}
+
+export interface RiskCheckResult {
+  passed: boolean
+  reason: string | null
+  stage: string
+}
+
+export interface CycleOrderInfo {
+  symbol: string
+  side: string
+  quantity: number
+  price: number
+}
+
+export interface CycleSymbolDetail {
+  price: number
+  regime: string | null
+  trend: string | null
+  strategies: StrategySignalEntry[]
+  ensemble: EnsembleResult
+  risk_check: RiskCheckResult | null
+  final_action: string
+  order: CycleOrderInfo | null
+}
+
+export interface CycleLogEntry {
+  cycle_num: number
+  timestamp: string
+  duration_ms: number | null
+  symbols: Record<string, CycleSymbolDetail>
+}
+
+export interface CycleLogResponse {
+  cycle_log: CycleLogEntry[]
 }

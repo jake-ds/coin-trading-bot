@@ -133,6 +133,11 @@ class Settings(BaseSettings):
         default_factory=lambda: ["http://localhost", "http://localhost:8000"]
     )
 
+    # Dashboard authentication (JWT)
+    dashboard_username: str = "admin"
+    dashboard_password: str = "changeme"
+    jwt_secret: str = ""
+
     # Symbols to trade
     symbols: list[str] = Field(default_factory=lambda: ["BTC/USDT"])
 

@@ -8,19 +8,26 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import structlog
-from fastapi import APIRouter, FastAPI, Query, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, FastAPI, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
+from bot.dashboard.auth import (
+    blacklist_refresh_token,
+    create_access_token,
+    create_refresh_token,
+    is_auth_enabled,
+    validate_access_token,
+    validate_refresh_token,
+    verify_credentials,
+)
 from bot.dashboard.websocket import ws_manager
 
 logger = structlog.get_logger()
 
 app = FastAPI(title="Coin Trading Bot Dashboard")
-
-# API router — all data endpoints live under /api/*
-api_router = APIRouter(prefix="/api")
 
 # CORS configuration — allowed_origins can be overridden via configure_cors()
 _default_origins = ["http://localhost", "http://localhost:8000", "http://localhost:5173"]
@@ -57,16 +64,99 @@ _bot_state = {
     "equity_curve": [],
     "open_positions": [],
     "regime": None,
+    "cycle_log": [],
 }
 
 # Reference to strategy_registry — set by main.py via set_strategy_registry()
 _strategy_registry = None
+
+# Reference to settings — set by main.py via set_settings()
+_settings = None
 
 
 def set_strategy_registry(registry) -> None:
     """Set the strategy registry reference for toggle endpoint."""
     global _strategy_registry
     _strategy_registry = registry
+
+
+def set_settings(settings) -> None:
+    """Set the settings reference for auth and config endpoints."""
+    global _settings
+    _settings = settings
+
+
+def get_settings():
+    """Get the current settings object."""
+    return _settings
+
+
+# ---------------------------------------------------------------------------
+# Auth request/response models
+# ---------------------------------------------------------------------------
+
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+class RefreshRequest(BaseModel):
+    refresh_token: str
+
+
+# ---------------------------------------------------------------------------
+# Auth dependency — skipped when auth is disabled (password='changeme')
+# ---------------------------------------------------------------------------
+
+
+async def require_auth(request: Request) -> str | None:
+    """Validate JWT token on protected routes. Returns username or None.
+
+    Auth is disabled when dashboard_password='changeme', allowing all requests.
+    """
+    if _settings is None or not is_auth_enabled(_settings):
+        return None  # Auth disabled — allow all
+
+    auth_header = request.headers.get("authorization", "")
+    if not auth_header.startswith("Bearer "):
+        return None  # Will be checked by routes that need it
+
+    token = auth_header[7:]
+    username = validate_access_token(_settings, token)
+    return username
+
+
+async def require_auth_strict(request: Request) -> str:
+    """Strict auth: returns 401 if auth is enabled and token is invalid."""
+    if _settings is None or not is_auth_enabled(_settings):
+        return "anonymous"
+
+    auth_header = request.headers.get("authorization", "")
+    if not auth_header.startswith("Bearer "):
+        raise _auth_error()
+
+    token = auth_header[7:]
+    username = validate_access_token(_settings, token)
+    if username is None:
+        raise _auth_error()
+    return username
+
+
+def _auth_error():
+    """Create an HTTP 401 exception."""
+    from fastapi import HTTPException
+
+    return HTTPException(
+        status_code=401,
+        detail="Not authenticated",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
+# API router — all data endpoints live under /api/*
+# Protected by require_auth_strict (no-op when auth is disabled)
+api_router = APIRouter(prefix="/api", dependencies=[Depends(require_auth_strict)])
 
 
 def get_state() -> dict:
@@ -77,6 +167,93 @@ def get_state() -> dict:
 def update_state(**kwargs) -> None:
     """Update the bot state."""
     _bot_state.update(kwargs)
+
+
+# ---------------------------------------------------------------------------
+# Auth endpoints (under /api/auth/ — no auth required)
+# ---------------------------------------------------------------------------
+
+auth_router = APIRouter(prefix="/api/auth")
+
+
+@auth_router.post("/login")
+async def login(body: LoginRequest):
+    """Authenticate and return JWT tokens."""
+    if _settings is None:
+        return JSONResponse(
+            status_code=500,
+            content={"detail": "Settings not configured"},
+        )
+
+    if not is_auth_enabled(_settings):
+        return JSONResponse(
+            status_code=400,
+            content={"detail": "Auth is disabled (default password). "
+                     "Set DASHBOARD_PASSWORD to enable."},
+        )
+
+    if not verify_credentials(_settings, body.username, body.password):
+        logger.warning("auth_login_failed", username=body.username)
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "Invalid credentials"},
+        )
+
+    access_token = create_access_token(_settings, body.username)
+    refresh_token = create_refresh_token(_settings, body.username)
+    logger.info("auth_login_success", username=body.username)
+    return {
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "token_type": "bearer",
+    }
+
+
+@auth_router.post("/refresh")
+async def refresh(body: RefreshRequest):
+    """Refresh an access token using a refresh token."""
+    if _settings is None:
+        return JSONResponse(
+            status_code=500,
+            content={"detail": "Settings not configured"},
+        )
+
+    username = validate_refresh_token(_settings, body.refresh_token)
+    if username is None:
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "Invalid or expired refresh token"},
+        )
+
+    access_token = create_access_token(_settings, username)
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+    }
+
+
+@auth_router.post("/logout")
+async def logout(body: RefreshRequest):
+    """Invalidate a refresh token (logout)."""
+    if _settings is None:
+        return {"success": True}
+
+    blacklist_refresh_token(_settings, body.refresh_token)
+    logger.info("auth_logout")
+    return {"success": True}
+
+
+@auth_router.get("/status")
+async def auth_status():
+    """Check if authentication is enabled and current auth state."""
+    enabled = _settings is not None and is_auth_enabled(_settings)
+    return {
+        "auth_enabled": enabled,
+        "dev_mode": not enabled,
+    }
+
+
+app.include_router(auth_router)
 
 
 # ---------------------------------------------------------------------------
@@ -173,6 +350,12 @@ async def get_open_positions():
 async def get_regime():
     """Get current market regime."""
     return {"regime": _bot_state["regime"]}
+
+
+@api_router.get("/cycle-log")
+async def get_cycle_log():
+    """Get cycle decision log (last 50 cycles)."""
+    return {"cycle_log": _bot_state["cycle_log"]}
 
 
 @api_router.get("/analytics")
@@ -318,6 +501,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
 def _build_full_state_payload() -> dict:
     """Build a complete state payload for WebSocket broadcast."""
+    cycle_log = _bot_state.get("cycle_log", [])
     return {
         "status": _bot_state["status"],
         "started_at": _bot_state["started_at"],
@@ -328,6 +512,7 @@ def _build_full_state_payload() -> dict:
         "trades": _bot_state["trades"][-50:],
         "strategy_stats": _bot_state["strategy_stats"],
         "open_positions": _bot_state["open_positions"],
+        "cycle_log_latest": cycle_log[-1] if cycle_log else None,
     }
 
 

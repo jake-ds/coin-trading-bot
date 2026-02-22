@@ -142,7 +142,7 @@
         "All existing Python tests pass (auth disabled in test mode), ruff check passes"
       ],
       "priority": 7,
-      "passes": false,
+      "passes": true,
       "notes": "Auth disabled by default for dev convenience. Enable by setting a real password."
     },
     {

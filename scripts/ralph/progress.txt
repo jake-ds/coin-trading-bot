@@ -11,7 +11,10 @@ Started: 2026-02-22
 - **Dashboard state**: Module-level dict in bot.dashboard.app. Test fixtures must reset all fields.
 - **API endpoints**: V4 moves to /api/* prefix. /health stays at root for Docker healthcheck.
 - **Frontend build**: npm run build outputs to src/bot/dashboard/static/. FastAPI serves as SPA.
-- **Auth**: JWT via python-jose. Disabled when dashboard_password='changeme'.
+- **Auth**: JWT via python-jose. Disabled when dashboard_password='changeme'. Auth router at `/api/auth/*` (no auth dependency). Protected API router has `Depends(require_auth_strict)`.
+- **Auth testing**: Test fixtures must call `set_settings(None)` and `auth_module.clear_blacklist()` in setup/teardown.
+- **Auth tokens**: Access token (1h), refresh token (7d with jti for blacklisting). In-memory blacklist via `_refresh_blacklist` set.
+- **Frontend auth**: `AuthProvider` wraps app in main.tsx. `useAuth()` hook. `getAccessToken()` for axios interceptor. Tokens stored in module-level variables (not localStorage).
 - **Baseline**: 1494 tests passing on V3 branch (V2 + V3 complete).
 - **API Router**: All API endpoints use `api_router = APIRouter(prefix="/api")`. Legacy HTML at `/legacy`.
 - **Test URL prefix**: All test HTTP calls use `/api/` prefix (e.g., `/api/status`, `/api/trades`). `/health` stays at root.
@@ -233,4 +236,58 @@ Started: 2026-02-22
   - Monthly returns computed by grouping equity curve by YYYY-MM and comparing first/last value per month
   - Sortino ratio only uses downside deviation (negative returns), unlike Sharpe which uses total std dev
   - Test count baseline: 1578 tests passing as of V4-006
+---
+
+## 2026-02-22 - V4-007
+- Added JWT authentication with login page
+- Files created:
+  - src/bot/dashboard/auth.py (JWT token creation/verification, blacklist, credential validation)
+  - frontend/src/hooks/useAuth.ts (AuthProvider context, login/logout/refresh, getAccessToken)
+  - frontend/src/components/common/ProtectedRoute.tsx (redirects to /login when auth enabled)
+  - tests/dashboard/test_v4_007_auth.py (39 tests)
+- Files modified:
+  - src/bot/dashboard/app.py:
+    - Added auth imports and models (LoginRequest, RefreshRequest)
+    - Added require_auth_strict dependency on api_router (no-op when auth disabled)
+    - Added auth_router at /api/auth/* (login, refresh, logout, status) — no auth dependency
+    - Added set_settings() and get_settings() for settings reference
+  - src/bot/config.py:
+    - Added dashboard_username (default 'admin'), dashboard_password (default 'changeme'), jwt_secret
+  - frontend/src/api/client.ts:
+    - Added request interceptor to attach Authorization: Bearer token
+    - Updated 401 handler to skip redirect for /auth/ endpoints
+  - frontend/src/api/types.ts:
+    - Added AuthStatusResponse, LoginResponse, RefreshResponse interfaces
+  - frontend/src/pages/Login.tsx:
+    - Full login form with username/password, error display, loading state
+    - Redirects to / on successful login, redirects to / if auth disabled
+  - frontend/src/App.tsx:
+    - Wrapped main content in ProtectedRoute component
+    - Added dev mode warning banner when auth disabled
+    - Added Logout button in nav when auth enabled
+  - frontend/src/main.tsx:
+    - Wrapped App in AuthProvider
+  - pyproject.toml, requirements.txt:
+    - Added python-jose[cryptography]>=3.3.0
+  - .env.example:
+    - Added DASHBOARD_USERNAME, DASHBOARD_PASSWORD, JWT_SECRET
+- Features:
+  - JWT auth with python-jose: access token (1h), refresh token (7d)
+  - Auth disabled by default when dashboard_password='changeme' (all existing tests unaffected)
+  - When auth enabled: all /api/* routes require valid Bearer token (401 otherwise)
+  - /api/auth/* endpoints exempt from auth (login, refresh, logout, status)
+  - /health endpoint always accessible (root level, not on api_router)
+  - In-memory refresh token blacklist for logout
+  - React: tokens stored in memory (not localStorage for security)
+  - React: axios interceptor adds token to all requests
+  - React: ProtectedRoute redirects to /login when auth enabled but not authenticated
+  - Dev mode warning banner shown when auth is disabled
+- Tests: 1617 collected, 1616 passing (1578 existing + 39 new — 1 pre-existing test_config failure), ruff clean, frontend builds clean
+- **Learnings for future iterations:**
+  - Auth dependency on api_router level (`dependencies=[Depends(require_auth_strict)]`) applies to ALL routes on that router
+  - Auth router must be separate from api_router to avoid circular dependency requirement
+  - `require_auth_strict` must be defined BEFORE `api_router = APIRouter(...)` (Python evaluation order)
+  - `set_settings(None)` in test fixture teardown prevents auth state leaking between tests
+  - Pre-existing test_config::test_defaults failure (unrelated to auth) — caused by .env.example being loaded
+  - Test count baseline: 1617 collected, 1616 passing as of V4-007
 ---

@@ -6,10 +6,13 @@ import Positions from './pages/Positions'
 import Strategies from './pages/Strategies'
 import Analytics from './pages/Analytics'
 import Settings from './pages/Settings'
+import CycleLog from './pages/CycleLog'
 import Login from './pages/Login'
 import ConnectionIndicator from './components/common/ConnectionIndicator'
+import ProtectedRoute from './components/common/ProtectedRoute'
 import Toast, { type ToastMessage } from './components/common/Toast'
 import { useWebSocket } from './hooks/useWebSocket'
+import { useAuth } from './hooks/useAuth'
 import type { Trade } from './api/types'
 
 const navItems = [
@@ -18,6 +21,7 @@ const navItems = [
   { path: '/trades', label: 'Trades' },
   { path: '/strategies', label: 'Strategies' },
   { path: '/analytics', label: 'Analytics' },
+  { path: '/cycle-log', label: 'Cycle Log' },
   { path: '/settings', label: 'Settings' },
 ]
 
@@ -26,6 +30,7 @@ const WS_URL = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${win
 function App() {
   const location = useLocation()
   const { connected, data: wsMessage } = useWebSocket(WS_URL)
+  const { isAuthenticated, authEnabled, logout, username } = useAuth()
   const [toasts, setToasts] = useState<ToastMessage[]>([])
 
   const dismissToast = useCallback((id: string) => {
@@ -57,42 +62,62 @@ function App() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-900 text-gray-100">
-      <Toast toasts={toasts} onDismiss={dismissToast} />
-      <nav className="bg-gray-800 border-b border-gray-700 px-6 py-3">
-        <div className="flex items-center justify-between max-w-7xl mx-auto">
-          <div className="flex items-center gap-4">
-            <h1 className="text-xl font-bold text-white">Trading Bot</h1>
-            <ConnectionIndicator connected={connected} />
+    <ProtectedRoute>
+      <div className="min-h-screen bg-gray-900 text-gray-100">
+        <Toast toasts={toasts} onDismiss={dismissToast} />
+
+        {/* Dev mode warning banner */}
+        {authEnabled === false && (
+          <div className="bg-yellow-900/50 border-b border-yellow-700 px-6 py-2 text-center text-sm text-yellow-300">
+            Auth disabled (dev mode). Set DASHBOARD_PASSWORD to enable authentication.
           </div>
-          <div className="flex gap-4">
-            {navItems.map((item) => (
-              <Link
-                key={item.path}
-                to={item.path}
-                className={`px-3 py-1.5 rounded text-sm transition-colors ${
-                  location.pathname === item.path
-                    ? 'bg-blue-600 text-white'
-                    : 'text-gray-300 hover:text-white hover:bg-gray-700'
-                }`}
-              >
-                {item.label}
-              </Link>
-            ))}
+        )}
+
+        <nav className="bg-gray-800 border-b border-gray-700 px-6 py-3">
+          <div className="flex items-center justify-between max-w-7xl mx-auto">
+            <div className="flex items-center gap-4">
+              <h1 className="text-xl font-bold text-white">Trading Bot</h1>
+              <ConnectionIndicator connected={connected} />
+            </div>
+            <div className="flex items-center gap-4">
+              {navItems.map((item) => (
+                <Link
+                  key={item.path}
+                  to={item.path}
+                  className={`px-3 py-1.5 rounded text-sm transition-colors ${
+                    location.pathname === item.path
+                      ? 'bg-blue-600 text-white'
+                      : 'text-gray-300 hover:text-white hover:bg-gray-700'
+                  }`}
+                >
+                  {item.label}
+                </Link>
+              ))}
+              {authEnabled && isAuthenticated && (
+                <button
+                  onClick={logout}
+                  className="px-3 py-1.5 rounded text-sm text-gray-300 hover:text-white hover:bg-gray-700 transition-colors"
+                  title={username ? `Logged in as ${username}` : undefined}
+                >
+                  Logout
+                </button>
+              )}
+            </div>
           </div>
-        </div>
-      </nav>
-      <main className="max-w-7xl mx-auto px-6 py-6">
-        <Routes>
-          <Route path="/" element={<Dashboard />} />
-          <Route path="/positions" element={<Positions />} />
-          <Route path="/trades" element={<Trades />} />
-          <Route path="/strategies" element={<Strategies />} />
-          <Route path="/analytics" element={<Analytics />} />
-          <Route path="/settings" element={<Settings />} />
-        </Routes>
-      </main>
-    </div>
+        </nav>
+        <main className="max-w-7xl mx-auto px-6 py-6">
+          <Routes>
+            <Route path="/" element={<Dashboard />} />
+            <Route path="/positions" element={<Positions />} />
+            <Route path="/trades" element={<Trades />} />
+            <Route path="/strategies" element={<Strategies />} />
+            <Route path="/analytics" element={<Analytics />} />
+            <Route path="/cycle-log" element={<CycleLog />} />
+            <Route path="/settings" element={<Settings />} />
+          </Routes>
+        </main>
+      </div>
+    </ProtectedRoute>
   )
 }
 
