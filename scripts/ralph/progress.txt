@@ -542,7 +542,12 @@ Started: 2026년 2월 22일 일요일 00시 13분 50초 KST
 - **TWAP**: `should_use_twap()` checks if order value > `twap_volume_threshold_pct` (default 5%) of avg_daily_volume. `create_twap_plan()` splits quantity into equal chunks. `execute_twap()` executes each chunk with fresh ticker prices and interval sleeps.
 - **FillMetrics**: Tracks maker vs taker fills, volumes, fees. `maker_ratio` = maker_fills / total_fills. `to_dict()` for serialization.
 - **Order model constraint**: Market orders must have `price=0` per Pydantic validator. Test helpers must set `order_price = 0 if order_type == OrderType.MARKET else price`.
-- **Test count baseline**: 817 tests passing as of V2-020
+- **Test count baseline**: 853 tests passing as of V2-021
+- **BacktestEngine SL/TP pattern**: New constructor params `stop_loss_pct`, `take_profit_pct`, `trailing_stop_pct` default to 0 (disabled) for backward compat. Exit conditions checked on every candle BEFORE strategy signal: TP on candle high (checked first), SL on candle low. `highest_price_since_entry` starts at `entry_price` (not candle.high). `TradeLog.exit_reason` tracks "stop_loss", "take_profit", "trailing_stop", "strategy".
+- **Dynamic slippage pattern**: `dynamic_slippage=True` + `base_slippage_pct` + `avg_daily_volume` → `slippage = base * (1 + order_value / avg_volume)`. Defaults to static `slippage_pct` when disabled.
+- **Walk-forward pattern**: `walk_forward(strategy_factory, data, train_ratio, n_windows)` — factory creates fresh strategy per window; capital carries across windows via new BacktestEngine instances.
+- **BacktestResult export**: `to_json()` returns full result; `to_csv()` returns trade log. Both always available on any result.
+- **Test count baseline (old)**: 817 tests passing as of V2-020
 - **ML V2 CV accuracy pattern**: With 200 noisy candles the default `min_cv_accuracy=0.55` is NOT met. Existing tests that need the model to actually train must pass `min_cv_accuracy=0.0` to the constructor. New tests that verify the threshold behavior should use `min_cv_accuracy=0.99` (impossibly high).
 - **CalibratedClassifierCV pattern**: Wrapping `GradientBoostingClassifier` with `CalibratedClassifierCV(cv=TimeSeriesSplit(...))` gives calibrated probabilities. Falls back to raw GB if calibration fails (e.g., too few samples for the CV splits).
 - **Feature importances from calibrated model**: Access via `model.calibrated_classifiers_[0].estimator.feature_importances_` (not directly on CalibratedClassifierCV).
@@ -603,4 +608,33 @@ Started: 2026년 2월 22일 일요일 00시 13분 50초 KST
   - `_compute_features` start index changed from `max(lookback, 14)` to `max(lookback, 20)` for rolling 20-period stats
   - `glob` module used for versioned model file cleanup — no external dependency
   - Walk-forward retrain resets `_candles_since_train` to 0 after training; `analyze()` increments by 1 after each prediction
+---
+
+## 2026-02-22 - V2-021: Realistic backtesting: walk-forward, dynamic slippage, stop-loss enforcement
+- **Implemented:**
+  - Stop-loss enforcement: on every candle, checks if candle low breached stop-loss price → sells at SL price (not close)
+  - Take-profit enforcement: on every candle, checks if candle high reached take-profit price → sells at TP price (not close)
+  - TP checked before SL when both could trigger on same candle (price likely reached TP high before SL low)
+  - Trailing stop: tracks highest price since entry, adjusts stop-loss upward; only activates after price moves above entry_price
+  - Dynamic slippage model: `slippage = base_slippage_pct * (1 + order_value / avg_daily_volume)` — larger orders get more slippage
+  - Walk-forward mode: `walk_forward(strategy_factory, data, train_ratio, n_windows)` splits data into train/test windows, carries capital across windows
+  - `BacktestResult` enhanced with: `equity_curve` (list of portfolio values), `drawdown_curve` (% drawdown at each point), `monthly_returns` (dict keyed by YYYY-MM)
+  - `BacktestEngine.compare(strategies, data)` runs multiple strategies and returns results sorted by Sharpe ratio descending
+  - `BacktestResult.to_json()` exports full result as JSON string
+  - `BacktestResult.to_csv()` exports trade log as CSV string
+  - `TradeLog` enhanced with `exit_reason` field: "stop_loss", "take_profit", "trailing_stop", "strategy", or ""
+  - All new parameters default to 0/False for backward compatibility with existing tests
+- **Files modified:**
+  - `src/bot/backtest/engine.py` — full V2 rewrite with SL/TP/trailing enforcement, dynamic slippage, walk-forward, equity/drawdown/monthly, compare, export
+  - `src/bot/backtest/__init__.py` — exported TradeLog
+- **Files created:**
+  - `tests/backtest/test_v2_021_realistic_backtest.py` — 36 new tests (backward compat, SL enforcement, TP enforcement, trailing stop, dynamic slippage, equity/drawdown, monthly returns, walk-forward, compare, export, integration)
+- **Tests:** 853 tests passing (817 previous + 36 new), ruff check passes
+- **Learnings for future iterations:**
+  - `highest_price_since_entry` should start at `entry_price` (not `candle.high`) to match PositionManager pattern — prevents trailing stop from activating prematurely on the buy candle's high
+  - TP checked before SL in `_check_exit_conditions`: when both conditions are met on same candle, TP at high likely happened before SL at low
+  - Dynamic slippage formula: `base * (1 + order_value / avg_daily_volume)` — simple linear scaling with volume ratio
+  - Walk-forward capital carry-over: create a new BacktestEngine per window with `initial_capital=previous_window_final_value`
+  - Backward compat: all new constructor params (stop_loss_pct, take_profit_pct, trailing_stop_pct, dynamic_slippage) default to 0/False so existing tests work unchanged
+  - Test count baseline: 853 tests passing as of V2-021
 ---

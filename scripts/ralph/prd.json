@@ -407,7 +407,7 @@
         "All existing tests pass (update for new behavior), ruff check passes"
       ],
       "priority": 21,
-      "passes": false,
+      "passes": true,
       "notes": "Current backtest doesn't enforce stop-loss at all, making results unrealistic"
     },
     {
