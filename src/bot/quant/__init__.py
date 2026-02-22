@@ -17,12 +17,18 @@ from bot.quant.statistics import (
     estimate_ou_params,
     rolling_ols_hedge_ratio,
 )
+from bot.quant.volatility import (
+    GARCHModel,
+    classify_volatility_regime,
+)
 
 __all__ = [
+    "GARCHModel",
     "adf_test",
     "calmar_ratio",
     "calculate_half_life",
     "calculate_zscore",
+    "classify_volatility_regime",
     "cornish_fisher_var",
     "cvar",
     "engle_granger_cointegration",
