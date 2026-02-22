@@ -21,6 +21,9 @@ Started: 2026-02-22
 - **WebSocket**: `ws_manager` singleton in `bot.dashboard.websocket`. Broadcast helpers in `bot.dashboard.app`. Rate-limited to 1/s via token-bucket debounce. `broadcast_immediate` for critical events.
 - **WebSocket endpoint**: `/api/ws` registered directly on `app` (not via api_router). Sends full state payload on connect.
 - **React hooks**: Custom hooks go in `frontend/src/hooks/`. `useWebSocket` provides `{ connected, data, lastUpdate }` with auto-reconnect.
+- **Recharts**: Use `recharts` for React charts. Tooltip formatters need `any` types due to recharts TS limitations.
+- **Strategy stats**: `StrategyStats.to_dict()` includes `disabled_reason` and `pnl_history` (last 50 trade PnLs).
+- **Toggle with positions**: `/api/strategies/{name}/toggle` checks for open positions; use `?force=true` to bypass.
 
 ---
 
@@ -159,4 +162,37 @@ Started: 2026-02-22
   - The /api/positions endpoint is a cleaner alias for /api/open-positions (both remain)
   - WebSocket trade events trigger page refresh from server for pagination consistency
   - Test count baseline: 1533 tests passing as of V4-004
+---
+
+## 2026-02-22 - V4-005
+- Built Strategy management page with live toggle, stats, and charts
+- Files created:
+  - tests/dashboard/test_v4_005_strategy_management.py (19 tests)
+- Files modified:
+  - src/bot/monitoring/strategy_tracker.py:
+    - Added `disabled_reason` field to StrategyStats (stored on auto-disable, cleared on re-enable)
+    - Added `pnl_history` (last 50 trade PnLs) to `to_dict()` for mini charts
+  - src/bot/dashboard/app.py:
+    - Enhanced GET /api/strategies to merge `active` status from registry
+    - Enhanced POST /api/strategies/{name}/toggle: checks for open positions before disabling
+    - Added `force` query param to bypass open position check
+    - Returns `has_open_positions`, `open_position_count`, `warning` when blocked
+  - frontend/package.json: added recharts dependency
+  - frontend/src/api/types.ts: enhanced StrategyStats with new fields, added ToggleResponse type
+  - frontend/src/pages/Strategies.tsx: full implementation with:
+    - Strategy cards with toggle switch (green/gray), stats grid (PnL, win rate, trades, consec. losses, Sharpe, profit factor)
+    - Per-strategy mini chart: cumulative PnL line chart using recharts (last 50 trades)
+    - Strategy comparison bar chart: all strategies side-by-side by total PnL (green/red bars)
+    - Auto-disabled strategies: yellow warning badge with reason text
+    - Confirmation dialog before disabling strategy with open positions
+    - Optimistic UI update on toggle
+    - WebSocket real-time updates with polling fallback
+    - Loading skeleton states, error states, empty state
+- Tests: 1552 passing (1533 existing + 19 new), ruff clean, frontend builds clean
+- **Learnings for future iterations:**
+  - recharts Tooltip `formatter` and `labelFormatter` props have loose TS types — use `any` to avoid type errors
+  - Adding fields to `to_dict()` is backward compatible — existing tests only check for fields they care about
+  - Query params with defaults preserve backward compatibility for existing toggle tests
+  - Open positions check uses `strategy` field on position dicts — positions without `strategy` field won't match
+  - Test count baseline: 1552 tests passing as of V4-005
 ---

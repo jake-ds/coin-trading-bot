@@ -143,8 +143,17 @@ async def get_portfolio():
 
 @api_router.get("/strategies")
 async def get_strategies():
-    """Get per-strategy performance stats."""
-    return {"strategies": _bot_state["strategy_stats"]}
+    """Get per-strategy performance stats with active status from registry."""
+    stats = _bot_state["strategy_stats"]
+    # Merge active status from registry if available
+    if _strategy_registry is not None:
+        enriched = {}
+        for name, s in stats.items():
+            entry = dict(s) if isinstance(s, dict) else s
+            entry["active"] = _strategy_registry.is_active(name)
+            enriched[name] = entry
+        return {"strategies": enriched}
+    return {"strategies": stats}
 
 
 @api_router.get("/equity-curve")
@@ -190,7 +199,10 @@ async def get_garch_metrics():
 
 
 @api_router.post("/strategies/{name}/toggle")
-async def toggle_strategy(name: str):
+async def toggle_strategy(
+    name: str,
+    force: bool = Query(False, description="Force disable"),
+):
     """Toggle a strategy's active state (enable/disable)."""
     if _strategy_registry is None:
         return {"error": "Strategy registry not available", "success": False}
@@ -200,6 +212,27 @@ async def toggle_strategy(name: str):
         return {"error": f"Strategy '{name}' not found", "success": False}
 
     if _strategy_registry.is_active(name):
+        # Check for open positions when disabling
+        if not force:
+            open_positions = _bot_state.get("open_positions", [])
+            strategy_positions = [
+                p for p in open_positions
+                if p.get("strategy") == name
+            ]
+            if strategy_positions:
+                count = len(strategy_positions)
+                return {
+                    "name": name,
+                    "active": True,
+                    "success": False,
+                    "has_open_positions": True,
+                    "open_position_count": count,
+                    "warning": (
+                        f"Strategy '{name}' has {count} "
+                        f"open position(s). "
+                        f"Use force=true to disable anyway."
+                    ),
+                }
         _strategy_registry.disable(name)
         new_state = "disabled"
     else:

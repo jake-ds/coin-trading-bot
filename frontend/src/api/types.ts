@@ -62,9 +62,25 @@ export interface StrategyStats {
   total_pnl: number
   win_rate: number
   total_trades: number
+  wins: number
+  losses: number
+  avg_pnl: number
   consecutive_losses: number
   active: boolean
-  sharpe_ratio?: number
+  sharpe_ratio: number
+  profit_factor: number
+  disabled: boolean
+  disabled_reason: string | null
+  pnl_history: number[]
+}
+
+export interface ToggleResponse {
+  name: string
+  active: boolean
+  success: boolean
+  has_open_positions?: boolean
+  open_position_count?: number
+  warning?: string
 }
 
 export interface RegimeResponse {

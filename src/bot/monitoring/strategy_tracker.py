@@ -28,6 +28,7 @@ class StrategyStats:
         self.disabled: bool = False
         self.disabled_at: float | None = None
         self.disabled_regime: MarketRegime | None = None
+        self.disabled_reason: str | None = None
 
     @property
     def win_rate(self) -> float:
@@ -79,6 +80,8 @@ class StrategyStats:
             "sharpe_ratio": round(self.sharpe_ratio, 4),
             "profit_factor": round(self.profit_factor, 4),
             "disabled": self.disabled,
+            "disabled_reason": self.disabled_reason,
+            "pnl_history": [round(p, 4) for p in self.trade_pnls[-50:]],
         }
 
 
@@ -202,6 +205,7 @@ class StrategyTracker:
             stats.disabled = True
             stats.disabled_at = time.time()
             stats.disabled_regime = self._current_regime
+            stats.disabled_reason = reason
 
             # Actually disable in the registry
             if self._registry:
@@ -270,6 +274,7 @@ class StrategyTracker:
         stats.disabled = False
         stats.disabled_at = None
         stats.disabled_regime = None
+        stats.disabled_reason = None
         stats.consecutive_losses = 0
 
         if self._registry:
