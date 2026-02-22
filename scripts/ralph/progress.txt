@@ -801,4 +801,50 @@ Started: 2026년 2월 22일 일요일 00시 13분 50초 KST
   - Direction-specific modifiers: BUY and SELL have opposite reactions to imbalance — use separate methods not one general modifier
   - ruff I001 import sorting: third-party (`pytest`) and first-party (`bot.*`) need proper separation; use `# noqa: I001` if needed
   - Test count baseline: 1220 tests passing as of V2-025
+  - **Dashboard state new fields**: `equity_curve` (list), `open_positions` (list), `regime` (str|None) — all default to empty/None. Test fixtures that reset dashboard state must include these three new fields.
+  - **set_strategy_registry pattern**: Call `dashboard_module.set_strategy_registry(strategy_registry)` in `initialize()` to enable the `/strategies/{name}/toggle` endpoint. Tests that need toggle use `set_strategy_registry(mock_registry)`.
+  - **Portfolio snapshot every 10 cycles**: `_maybe_save_portfolio_snapshot()` checks `_cycle_count % 10 == 0` (skip cycle 0). Saves to DataStore AND appends to `equity_curve` in dashboard state. Keeps last 500 points.
+  - **Open positions builder**: `_build_open_positions()` reads from `PositionManager.positions`, prefers WS feed price for current_price, falls back to `highest_price_since_entry`.
+  - **Chart.js CDN**: Uses `https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js` — no local file needed.
+  - **Python 3.10 f-string restriction**: Backslash escapes (`\"`) NOT allowed inside f-string expressions. Extract values to variables before the f-string.
+  - **Test count baseline**: 1137 tests passing as of V2-026
+---
+
+## 2026-02-22 - V2-026: Enhanced dashboard with real-time charts and equity curve
+- **Implemented:**
+  - Added Chart.js CDN to dashboard HTML for lightweight charting
+  - Equity curve chart: portfolio value over time with line chart (auto-refreshing every 30s)
+  - Trade markers on chart: green triangles for BUYs, red inverted triangles for SELLs, mapped to equity curve by timestamp
+  - Per-strategy performance bar chart: green bars for positive PnL, red for negative
+  - Current open positions table: symbol, qty, entry price, current price, unrealized PnL, stop-loss, take-profit
+  - Market regime indicator badge (color-coded: green=TRENDING_UP, red=TRENDING_DOWN, yellow=RANGING, purple=HIGH_VOLATILITY)
+  - Active strategy list with enable/disable toggle buttons (POST /strategies/{name}/toggle)
+  - API endpoint: GET /equity-curve returns time-series equity data
+  - API endpoint: GET /open-positions returns current positions with SL/TP
+  - API endpoint: GET /regime returns current market regime
+  - API endpoint: POST /strategies/{name}/toggle enables/disables strategies via StrategyRegistry
+  - Portfolio snapshot saved every 10 cycles to DataStore via `save_portfolio_snapshot()`
+  - DataStore: added `get_portfolio_snapshots()` for querying time-series snapshot data
+  - Dashboard state expanded with: equity_curve, open_positions, regime fields
+  - `set_strategy_registry()` function wired from main.py during initialize()
+  - `_current_regime` tracked on TradingBot for dashboard display
+  - HTML-escaped all dynamic data in new UI elements
+- **Files modified:**
+  - `src/bot/dashboard/app.py` — major expansion: 4 new endpoints, enhanced HTML with Chart.js, regime badge, positions table, strategy toggles, helper functions
+  - `src/bot/data/store.py` — added `get_portfolio_snapshots()` method
+  - `src/bot/main.py` — added `_current_regime`, `_build_open_positions()`, `_maybe_save_portfolio_snapshot()`, wired `set_strategy_registry()`, dashboard state includes equity_curve/positions/regime
+  - `tests/dashboard/test_app.py` — updated reset_state fixture with new fields
+  - `tests/test_v2_022_strategy_tracker.py` — updated reset fixture with new fields
+  - `tests/test_v2_023_portfolio_risk.py` — updated reset fixture with new fields
+- **Files created:**
+  - `tests/dashboard/test_v2_026_enhanced_dashboard.py` — 55 tests (endpoints, HTML content, helper functions, state management, DataStore snapshots)
+  - `tests/test_v2_026_dashboard_wiring.py` — 12 tests (open positions builder, snapshot saving, regime tracking, registry wiring)
+- **Tests:** 1137 tests passing (1070 previous + 67 new), ruff check passes
+- **Learnings for future iterations:**
+  - Python 3.10 f-strings do NOT support backslash escapes inside expressions — extract values first
+  - Dashboard state additions require updating ALL test fixtures that reset dashboard state (found in 3 files)
+  - Chart.js CDN version pinned (4.4.1) for stability
+  - Strategy toggle uses StrategyRegistry.is_active/enable/disable — requires registry reference set via set_strategy_registry()
+  - Portfolio snapshots every 10 cycles is a good balance between data resolution and storage efficiency
+  - _build_open_positions prefers WS feed price for current_price (real-time), falls back to highest_price_since_entry
 ---

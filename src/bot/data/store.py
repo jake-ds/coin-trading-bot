@@ -262,3 +262,29 @@ class DataStore:
                 "balances": json.loads(record.balances_json),
                 "positions": json.loads(record.positions_json),
             }
+
+    async def get_portfolio_snapshots(
+        self,
+        start: datetime | None = None,
+        end: datetime | None = None,
+        limit: int = 500,
+    ) -> list[dict]:
+        """Get portfolio snapshots as time-series data for equity curve charting."""
+        async with self._session_factory() as session:
+            stmt = select(PortfolioSnapshot)
+            if start:
+                stmt = stmt.where(PortfolioSnapshot.timestamp >= start)
+            if end:
+                stmt = stmt.where(PortfolioSnapshot.timestamp <= end)
+            stmt = stmt.order_by(PortfolioSnapshot.timestamp.desc()).limit(limit)
+
+            result = await session.execute(stmt)
+            records = result.scalars().all()
+            return [
+                {
+                    "timestamp": r.timestamp.isoformat() if r.timestamp else "",
+                    "total_value": r.total_value,
+                    "unrealized_pnl": r.unrealized_pnl,
+                }
+                for r in reversed(records)
+            ]

@@ -60,6 +60,7 @@ class TradingBot:
         self._cycle_count: int = 0
         self._total_cycle_duration: float = 0.0
         self._last_cycle_time: float | None = None
+        self._current_regime = None
 
     async def initialize(self) -> None:
         """Initialize all bot components."""
@@ -167,6 +168,9 @@ class TradingBot:
 
         # Start dashboard server as background task
         self._start_dashboard()
+
+        # Provide strategy registry to dashboard for toggle endpoint
+        dashboard_module.set_strategy_registry(strategy_registry)
 
         # Import strategies to trigger registration
         self._load_strategies()
@@ -421,6 +425,7 @@ class TradingBot:
                         >= self._regime_detector.required_history_length
                     ):
                         regime = self._regime_detector.detect(candles)
+                        self._current_regime = regime
                         for strategy in active_strategies:
                             strategy.adapt_to_regime(regime)
                         # Update strategy tracker with regime
@@ -714,19 +719,98 @@ class TradingBot:
                                 )
                     break
 
+        # Build open positions data for dashboard
+        open_positions = self._build_open_positions()
+
+        # Save portfolio snapshot every 10 cycles for equity curve
+        await self._maybe_save_portfolio_snapshot()
+
         # Update dashboard state after each cycle
         strategy_stats = (
             self._strategy_tracker.get_all_stats()
             if self._strategy_tracker
             else {}
         )
+
+        # Get current regime string for dashboard
+        current_regime = (
+            self._current_regime.value
+            if self._current_regime
+            else None
+        )
+
         dashboard_module.update_state(
             status="running",
             trades=dashboard_module.get_state()["trades"] + recent_trades,
             metrics=dashboard_module.get_state()["metrics"],
             portfolio=dashboard_module.get_state()["portfolio"],
             strategy_stats=strategy_stats,
+            open_positions=open_positions,
+            regime=current_regime,
+            equity_curve=dashboard_module.get_state().get("equity_curve", []),
         )
+
+    def _build_open_positions(self) -> list[dict]:
+        """Build open positions list for dashboard display."""
+        positions = []
+        if not self._position_manager:
+            return positions
+        for symbol, pos in self._position_manager.positions.items():
+            current_price = pos.highest_price_since_entry
+            # Try to get latest price from WS feed
+            if self._ws_feed:
+                ws_price = self._ws_feed.get_latest_price(symbol)
+                if ws_price:
+                    current_price = ws_price
+            unrealized_pnl = (current_price - pos.entry_price) * pos.quantity
+            positions.append({
+                "symbol": symbol,
+                "quantity": pos.quantity,
+                "entry_price": pos.entry_price,
+                "current_price": current_price,
+                "unrealized_pnl": round(unrealized_pnl, 2),
+                "stop_loss": pos.stop_loss_price,
+                "take_profit": pos.tp2_price,
+            })
+        return positions
+
+    async def _maybe_save_portfolio_snapshot(self) -> None:
+        """Save portfolio snapshot every 10 cycles for equity curve tracking."""
+        if self._cycle_count == 0 or self._cycle_count % 10 != 0:
+            return
+        if not self._store:
+            return
+
+        total_value = 10000.0
+        unrealized_pnl = 0.0
+
+        if self._paper_portfolio:
+            total_value = self._paper_portfolio.total_value
+            unrealized_pnl = self._paper_portfolio.unrealized_pnl
+        elif self._risk_manager:
+            total_value = (
+                self._risk_manager._current_portfolio_value or 10000.0
+            )
+
+        try:
+            await self._store.save_portfolio_snapshot(
+                total_value=total_value,
+                unrealized_pnl=unrealized_pnl,
+            )
+            # Update equity curve in dashboard state
+            eq_curve = dashboard_module.get_state().get("equity_curve", [])
+            from datetime import datetime, timezone
+
+            eq_curve.append({
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "total_value": total_value,
+            })
+            # Keep only last 500 points
+            if len(eq_curve) > 500:
+                eq_curve = eq_curve[-500:]
+            dashboard_module.update_state(equity_curve=eq_curve)
+        except Exception:
+            logger.warning("portfolio_snapshot_save_error", exc_info=True)
 
     async def _execute_exit(
         self,

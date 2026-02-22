@@ -49,6 +49,9 @@ def reset_dashboard_state():
             "last_cycle_time": None,
         },
         strategy_stats={},
+        equity_curve=[],
+        open_positions=[],
+        regime=None,
     )
 
 
