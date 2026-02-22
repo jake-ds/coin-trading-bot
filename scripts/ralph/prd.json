@@ -41,7 +41,7 @@
         "All existing Python tests pass, ruff check passes"
       ],
       "priority": 2,
-      "passes": false,
+      "passes": true,
       "notes": "First visual page. Keep it clean and minimal."
     },
     {

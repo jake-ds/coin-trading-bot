@@ -53,3 +53,30 @@ Started: 2026-02-22
   - Legacy dashboard at /legacy preserves backward compatibility for test assertions
   - Test count baseline: 1494 tests passing as of V4-001
 ---
+
+## 2026-02-22 - V4-002
+- Built Dashboard overview page with portfolio metrics, status, and regime display
+- Files created:
+  - frontend/src/components/common/StatusBadge.tsx (running/stopped badge with pulse animation)
+  - frontend/src/components/common/MetricCard.tsx (reusable metric display card)
+  - frontend/src/components/common/RegimeBadge.tsx (color-coded market regime badge)
+  - frontend/src/components/common/PortfolioSummary.tsx (portfolio value + return display)
+  - frontend/src/components/common/Skeleton.tsx (loading skeleton components)
+- Files modified:
+  - frontend/src/pages/Dashboard.tsx (full implementation with data fetching)
+- Features:
+  - Fetches /api/status, /api/portfolio, /api/metrics, /api/regime on mount via Promise.allSettled
+  - Auto-refresh every 10 seconds via useEffect interval
+  - Loading skeleton states (PortfolioSummarySkeleton, MetricCardSkeleton)
+  - Error state with styled error message
+  - Responsive grid: 1 col mobile, 2 cols tablet, 3 cols desktop
+  - Dark theme by default (bg-gray-800/900 cards, gray-700 borders)
+  - Color-coded metrics: green=positive, red=negative, amber=warning
+  - Regime badge colors: green=trending up, red=trending down, amber=ranging, purple=volatile
+  - Cycle info panel: cycle count, avg duration, last cycle time
+- Tests: 1494 passing (no Python changes), ruff clean, frontend builds clean
+- **Learnings for future iterations:**
+  - Promise.allSettled is better than Promise.all for dashboard — partial data is better than no data
+  - Components in frontend/src/components/common/ for reuse across pages
+  - No Python backend changes needed — all endpoints already existed from V3
+---
