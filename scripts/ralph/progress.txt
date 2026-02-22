@@ -92,3 +92,16 @@ Started: 2026-02-22
   - Constant price data causes statsmodels adfuller to raise ValueError — always use non-constant test data
   - Test count baseline: 1381 tests passing as of V3-009
 ---
+
+## 2026-02-22 - V3-010
+- Created src/bot/strategies/quant/momentum_factor.py with MomentumFactorStrategy
+  - Cross-timeframe momentum factor using weighted z-score composite
+  - Computes momentum = short MA / long MA - 1, then z-scores across window
+  - Combines multiple timeframes (1h: 0.2, 4h: 0.3, 1d: 0.5) into single composite z-score
+  - Regime adaptation: 1.3x multiplier in TRENDING, 0.5x in RANGING
+  - Falls back to provided ohlcv_data as "1h" if no multi_timeframe_candles kwarg
+- Created tests/strategies/quant/test_momentum_factor.py (15 tests)
+- Tests: 1396 passing (1381 + 15 new)
+- **Learnings for future iterations:**
+  - Test count baseline: 1396 tests passing as of V3-010
+---
