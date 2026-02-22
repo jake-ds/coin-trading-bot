@@ -217,16 +217,16 @@ class TradingBot:
         dashboard_module.set_trading_bot(self)
         dashboard_module.set_audit_logger(self._audit_logger)
 
-        # Connect engine manager to dashboard (if engine mode enabled)
-        if self._engine_manager:
-            dashboard_module.set_engine_manager(self._engine_manager)
-
         # Import strategies to trigger registration
         self._load_strategies()
 
         # Initialize multi-engine system (if enabled)
         if self._settings.engine_mode:
             self._init_engine_mode()
+
+        # Connect engine manager to dashboard (after init)
+        if self._engine_manager:
+            dashboard_module.set_engine_manager(self._engine_manager)
 
         logger.info(
             "bot_initialized",
