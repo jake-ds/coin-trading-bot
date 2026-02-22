@@ -203,7 +203,7 @@
         "All existing tests pass, ruff check passes"
       ],
       "priority": 10,
-      "passes": false,
+      "passes": true,
       "notes": "Experiments use synthetic/mock data for now (no real exchange data needed). Cointegration uses statsmodels (already in dependencies). ATR calculation can use simple numpy. Keep experiments self-contained — they should work with just a price array input."
     },
     {

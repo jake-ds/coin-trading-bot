@@ -144,3 +144,23 @@ Started: 2026년 2월 23일 월요일 01시 08분 44초 KST
   - Single clip + normalize NEVER enforces hard max cap (needs N>=7 engines for that)
   - EngineManager.settings is optional; _get_engine_params() reads settings fields by prefix matching engine name
 ---
+
+## 2026-02-23 - V5-010
+- **Implemented**: Research framework — base module, experiments, and backtest runner
+- **Files created**:
+  - `src/bot/research/__init__.py` — exports ResearchTask, ResearchReport
+  - `src/bot/research/base.py` — ResearchTask ABC with run_experiment(), apply_findings(), target_engine
+  - `src/bot/research/report.py` — ResearchReport dataclass with to_dict()
+  - `src/bot/research/backtest_runner.py` — SimpleBacktestRunner with BacktestResult
+  - `src/bot/research/experiments/__init__.py` — exports all 4 experiments
+  - `src/bot/research/experiments/volatility_regime.py` — ATR-based volatility regime detection
+  - `src/bot/research/experiments/cointegration.py` — Engle-Granger cointegration test
+  - `src/bot/research/experiments/optimal_grid.py` — grid spacing optimization via simulation
+  - `src/bot/research/experiments/funding_prediction.py` — funding rate pattern analysis
+  - `tests/research/test_research.py` — 31 tests
+- **Tests added**: 31
+- **Learnings for future iterations:**
+  - numpy bool (np.True_) is not Python True for identity checks — use bool() conversion
+  - statsmodels coint() returns numpy scalars, must convert for dict storage
+  - Each experiment generates synthetic data via np.random.default_rng(seed) for reproducibility
+---
