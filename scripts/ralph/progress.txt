@@ -60,3 +60,13 @@ Started: 2026년 2월 23일 월요일 01시 08분 44초 KST
   - /api/engines/{name}/params dynamically reads Settings fields using SETTINGS_METADATA prefix matching
   - Frontend types use optional fields (?) for new metadata to maintain backward compat
 ---
+
+## 2026-02-23 - V5-004
+- **Implemented**: Engine role cards with descriptions in frontend
+- **Files modified**:
+  - `frontend/src/pages/Engines.tsx` — added collapsible description section with role name (KR/EN), how-it-works, tracked symbols as chips, key parameters with current values, cost info. Lazy-fetches `/api/engines/{name}/params` on first expand.
+- **Tests**: Frontend builds successfully, all 1959 Python tests pass (same 3 pre-existing failures)
+- **Learnings for future iterations:**
+  - stat_arb symbols come as nested arrays (pairs) — handle both `string[]` and `string[][]` in display
+  - Use lazy param fetching to avoid unnecessary API calls until user expands the section
+---

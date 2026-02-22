@@ -76,7 +76,7 @@
         "All existing Python tests pass, ruff check passes"
       ],
       "priority": 4,
-      "passes": false,
+      "passes": true,
       "notes": "This is a frontend-only change (plus reading data from the /api/engines endpoint updated in V5-003). No new Python tests needed."
     },
     {
