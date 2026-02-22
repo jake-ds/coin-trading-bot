@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any
 
 import structlog
 
-from bot.engines.base import BaseEngine, EngineCycleResult
+from bot.engines.base import BaseEngine, DecisionStep, EngineCycleResult
 
 if TYPE_CHECKING:
     from bot.config import Settings
@@ -68,29 +68,73 @@ class CrossExchangeArbEngine(BaseEngine):
         cycle_start = datetime.now(timezone.utc)
         actions: list[dict] = []
         signals: list[dict] = []
+        decisions: list[DecisionStep] = []
         pnl_update = 0.0
 
         if len(self._exchanges) < 2:
+            decisions.append(DecisionStep(
+                label="거래소 확인",
+                observation=f"연결된 거래소 {len(self._exchanges)}개",
+                threshold="최소 2개 거래소 필요",
+                result="SKIP - 거래소 부족",
+                category="skip",
+            ))
             return EngineCycleResult(
                 engine_name=self.name,
                 cycle_num=self._cycle_count + 1,
                 timestamp=cycle_start.isoformat(),
                 duration_ms=0.0,
                 metadata={"error": "need_at_least_2_exchanges"},
+                decisions=decisions,
             )
 
         for symbol in self._symbols:
             spread_info = await self._check_spread(symbol)
             if spread_info is None:
+                decisions.append(DecisionStep(
+                    label=f"{symbol} 가격 비교",
+                    observation="가격 조회 실패",
+                    threshold=f"최소 스프레드 {self._min_spread_pct}%",
+                    result="SKIP - 가격 조회 실패",
+                    category="skip",
+                ))
                 continue
 
             signals.append(spread_info)
+            spread_abs = abs(spread_info["spread_pct"])
 
-            if abs(spread_info["spread_pct"]) >= self._min_spread_pct:
+            decisions.append(DecisionStep(
+                label=f"{symbol} 거래소간 스프레드",
+                observation=(
+                    f"{spread_info['exchange_a']}: ${spread_info['price_a']:,.2f} | "
+                    f"{spread_info['exchange_b']}: ${spread_info['price_b']:,.2f} | "
+                    f"스프레드: {spread_info['spread_pct']:+.4f}%"
+                ),
+                threshold=f"최소 스프레드 >= {self._min_spread_pct}%",
+                result="",  # filled below
+                category="evaluate",
+            ))
+
+            if spread_abs >= self._min_spread_pct:
                 arb_result = await self._execute_arb(symbol, spread_info)
                 if arb_result:
                     actions.append(arb_result)
                     pnl_update += arb_result.get("profit", 0)
+                    decisions[-1].result = (
+                        f"ARB - 매수@{arb_result['buy_exchange']} "
+                        f"매도@{arb_result['sell_exchange']}, "
+                        f"수익: ${arb_result['profit']:.4f}"
+                    )
+                    decisions[-1].category = "execute"
+                else:
+                    decisions[-1].result = "SKIP - 차익거래 실행 실패"
+                    decisions[-1].category = "skip"
+            else:
+                decisions[-1].result = (
+                    f"NO ACTION - 스프레드 {spread_abs:.4f}% < "
+                    f"최소 {self._min_spread_pct}%"
+                )
+                decisions[-1].category = "skip"
 
         return EngineCycleResult(
             engine_name=self.name,
@@ -104,6 +148,7 @@ class CrossExchangeArbEngine(BaseEngine):
             metadata={
                 "total_arb_pnl": round(self._arb_pnl + pnl_update, 2),
             },
+            decisions=decisions,
         )
 
     async def _check_spread(self, symbol: str) -> dict[str, Any] | None:

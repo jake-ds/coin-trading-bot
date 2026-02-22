@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 import structlog
 
-from bot.engines.base import BaseEngine, EngineCycleResult
+from bot.engines.base import BaseEngine, DecisionStep, EngineCycleResult
 
 if TYPE_CHECKING:
     from bot.config import Settings
@@ -67,6 +67,7 @@ class StatisticalArbEngine(BaseEngine):
         cycle_start = datetime.now(timezone.utc)
         actions: list[dict] = []
         signals: list[dict] = []
+        decisions: list[DecisionStep] = []
         pnl_update = 0.0
 
         # Update price caches
@@ -76,6 +77,7 @@ class StatisticalArbEngine(BaseEngine):
             if len(pair) != 2:
                 continue
             sym_a, sym_b = pair[0], pair[1]
+            pair_label = f"{sym_a}/{sym_b}"
 
             prices_a = self._price_cache.get(sym_a, [])
             prices_b = self._price_cache.get(sym_b, [])
@@ -83,11 +85,18 @@ class StatisticalArbEngine(BaseEngine):
             min_len = min(len(prices_a), len(prices_b))
             if min_len < self._lookback:
                 signals.append({
-                    "pair": f"{sym_a}/{sym_b}",
+                    "pair": pair_label,
                     "status": "insufficient_data",
                     "available": min_len,
                     "required": self._lookback,
                 })
+                decisions.append(DecisionStep(
+                    label=f"{pair_label} 데이터 충분성",
+                    observation=f"가용 데이터 {min_len}개 / 필요 {self._lookback}개",
+                    threshold=f"최소 {self._lookback}개 가격 데이터 필요",
+                    result=f"SKIP - 데이터 부족 ({min_len}/{self._lookback})",
+                    category="skip",
+                ))
                 continue
 
             # Use last N prices
@@ -98,10 +107,17 @@ class StatisticalArbEngine(BaseEngine):
             corr = float(np.corrcoef(a, b)[0, 1]) if len(a) > 1 else 0.0
             if abs(corr) < self._min_correlation:
                 signals.append({
-                    "pair": f"{sym_a}/{sym_b}",
+                    "pair": pair_label,
                     "status": "low_correlation",
                     "correlation": round(corr, 4),
                 })
+                decisions.append(DecisionStep(
+                    label=f"{pair_label} 상관관계",
+                    observation=f"상관계수 {corr:.4f}",
+                    threshold=f"최소 상관계수 >= {self._min_correlation}",
+                    result=f"SKIP - 상관관계 부족 ({abs(corr):.4f} < {self._min_correlation})",
+                    category="skip",
+                ))
                 continue
 
             # Calculate ratio and z-score
@@ -115,13 +131,28 @@ class StatisticalArbEngine(BaseEngine):
             pair_key = f"{sym_a}|{sym_b}"
 
             signals.append({
-                "pair": f"{sym_a}/{sym_b}",
+                "pair": pair_label,
                 "status": "active",
                 "correlation": round(corr, 4),
                 "zscore": round(float(zscore), 4),
                 "ratio": round(float(ratio[-1]), 6),
                 "mean_ratio": round(mean, 6),
             })
+
+            decisions.append(DecisionStep(
+                label=f"{pair_label} Z-Score 분석",
+                observation=(
+                    f"상관계수 {corr:.4f}, Z-Score {float(zscore):.4f}, "
+                    f"비율 {float(ratio[-1]):.6f} (평균 {mean:.6f})"
+                ),
+                threshold=(
+                    f"진입: |z| >= {self._entry_zscore} | "
+                    f"청산: |z| <= {self._exit_zscore} | "
+                    f"손절: |z| >= {self._stop_zscore}"
+                ),
+                result="",  # filled below
+                category="evaluate",
+            ))
 
             # Check existing positions for exit
             if pair_key in self._positions:
@@ -130,6 +161,16 @@ class StatisticalArbEngine(BaseEngine):
                 if exit_result:
                     pnl_update += exit_result.get("pnl", 0)
                     actions.append(exit_result)
+                    decisions[-1].result = (
+                        f"EXIT - {exit_result['reason']}, "
+                        f"PnL: {exit_result['pnl']:.4f}"
+                    )
+                    decisions[-1].category = "execute"
+                else:
+                    decisions[-1].result = (
+                        f"HOLD - 포지션 유지 (진입 z: {pos.get('entry_zscore', 0):.4f})"
+                    )
+                    decisions[-1].category = "decide"
                 continue
 
             # Check for new entry
@@ -139,6 +180,19 @@ class StatisticalArbEngine(BaseEngine):
                 )
                 if entry:
                     actions.append(entry)
+                    decisions[-1].result = (
+                        f"ENTRY - {entry['side_a']}_{entry['side_b']}, "
+                        f"Z-Score {float(zscore):.4f}"
+                    )
+                    decisions[-1].category = "execute"
+                else:
+                    decisions[-1].result = (
+                        f"HOLD - Z-Score {float(zscore):.4f}, 진입 기준 미달"
+                    )
+                    decisions[-1].category = "skip"
+            else:
+                decisions[-1].result = "SKIP - 포지션 한도 초과"
+                decisions[-1].category = "skip"
 
         return EngineCycleResult(
             engine_name=self.name,
@@ -150,6 +204,7 @@ class StatisticalArbEngine(BaseEngine):
             signals=signals,
             pnl_update=pnl_update,
             metadata={"pairs_monitored": len(self._pairs)},
+            decisions=decisions,
         )
 
     # ------------------------------------------------------------------

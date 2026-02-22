@@ -8,6 +8,7 @@ import Analytics from './pages/Analytics'
 import Settings from './pages/Settings'
 import CycleLog from './pages/CycleLog'
 import Engines from './pages/Engines'
+import EngineDetail from './pages/EngineDetail'
 import Login from './pages/Login'
 import ConnectionIndicator from './components/common/ConnectionIndicator'
 import ProtectedRoute from './components/common/ProtectedRoute'
@@ -111,6 +112,7 @@ function App() {
           <Routes>
             <Route path="/" element={<Dashboard />} />
             <Route path="/engines" element={<Engines />} />
+            <Route path="/engines/:name" element={<EngineDetail />} />
             <Route path="/positions" element={<Positions />} />
             <Route path="/trades" element={<Trades />} />
             <Route path="/strategies" element={<Strategies />} />

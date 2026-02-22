@@ -8,7 +8,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 import structlog
 
@@ -29,6 +29,26 @@ class EngineStatus(str, Enum):
 
 
 @dataclass
+class DecisionStep:
+    """A single step in an engine's decision-making process."""
+
+    label: str        # e.g. "BTC/USDT 펀딩비 체크"
+    observation: str  # e.g. "펀딩비 0.0004 (48.2% 연환산), 스프레드 0.02%"
+    threshold: str    # e.g. "진입 기준: rate >= 0.0003, spread <= 0.5%"
+    result: str       # e.g. "OPEN - 기준 충족, 델타중립 포지션 오픈"
+    category: str = "evaluate"  # evaluate | decide | execute | skip
+
+    def to_dict(self) -> dict[str, str]:
+        return {
+            "label": self.label,
+            "observation": self.observation,
+            "threshold": self.threshold,
+            "result": self.result,
+            "category": self.category,
+        }
+
+
+@dataclass
 class EngineCycleResult:
     """Result of a single engine cycle."""
 
@@ -41,6 +61,21 @@ class EngineCycleResult:
     signals: list[dict] = field(default_factory=list)
     pnl_update: float = 0.0
     metadata: dict = field(default_factory=dict)
+    decisions: list[DecisionStep] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "engine_name": self.engine_name,
+            "cycle_num": self.cycle_num,
+            "timestamp": self.timestamp,
+            "duration_ms": self.duration_ms,
+            "actions_taken": self.actions_taken,
+            "positions": self.positions,
+            "signals": self.signals,
+            "pnl_update": self.pnl_update,
+            "metadata": self.metadata,
+            "decisions": [d.to_dict() for d in self.decisions],
+        }
 
 
 class BaseEngine(ABC):
@@ -73,6 +108,7 @@ class BaseEngine(ABC):
         self._positions: dict[str, dict[str, Any]] = {}
         self._cycle_history: list[EngineCycleResult] = []
         self._error_message: str | None = None
+        self._on_cycle_complete: Callable[[EngineCycleResult], Any] | None = None
 
     # ------------------------------------------------------------------
     # Abstract interface — subclasses must implement
@@ -135,6 +171,12 @@ class BaseEngine(ABC):
     @property
     def error_message(self) -> str | None:
         return self._error_message
+
+    def set_on_cycle_complete(
+        self, callback: Callable[[EngineCycleResult], Any] | None
+    ) -> None:
+        """Register a callback invoked after each successful cycle."""
+        self._on_cycle_complete = callback
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -217,6 +259,19 @@ class BaseEngine(ABC):
                     self._cycle_history.append(result)
                     if len(self._cycle_history) > 50:
                         self._cycle_history = self._cycle_history[-50:]
+
+                    # Notify callback
+                    if self._on_cycle_complete is not None:
+                        try:
+                            ret = self._on_cycle_complete(result)
+                            if asyncio.iscoroutine(ret):
+                                await ret
+                        except Exception:
+                            logger.debug(
+                                "on_cycle_complete_error",
+                                engine=self.name,
+                                exc_info=True,
+                            )
 
                     logger.debug(
                         "engine_cycle_complete",

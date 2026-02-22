@@ -128,40 +128,14 @@ class EngineManager:
             all_results.extend(engine.cycle_history)
         # Sort by timestamp and return as dicts
         all_results.sort(key=lambda r: r.timestamp)
-        return [
-            {
-                "engine_name": r.engine_name,
-                "cycle_num": r.cycle_num,
-                "timestamp": r.timestamp,
-                "duration_ms": r.duration_ms,
-                "actions_taken": r.actions_taken,
-                "positions": r.positions,
-                "signals": r.signals,
-                "pnl_update": r.pnl_update,
-                "metadata": r.metadata,
-            }
-            for r in all_results[-100:]  # last 100 across all engines
-        ]
+        return [r.to_dict() for r in all_results[-100:]]
 
     def get_engine_cycle_log(self, name: str) -> list[dict]:
         """Get cycle log for a specific engine."""
         engine = self._engines.get(name)
         if engine is None:
             return []
-        return [
-            {
-                "engine_name": r.engine_name,
-                "cycle_num": r.cycle_num,
-                "timestamp": r.timestamp,
-                "duration_ms": r.duration_ms,
-                "actions_taken": r.actions_taken,
-                "positions": r.positions,
-                "signals": r.signals,
-                "pnl_update": r.pnl_update,
-                "metadata": r.metadata,
-            }
-            for r in engine.cycle_history
-        ]
+        return [r.to_dict() for r in engine.cycle_history]
 
     def get_engine_positions(self, name: str) -> list[dict]:
         """Get current positions for a specific engine."""
