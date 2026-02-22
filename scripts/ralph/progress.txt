@@ -929,3 +929,18 @@ Started: 2026년 2월 22일 일요일 00시 13분 50초 KST
 - Tests: 1335 passing (1319 + 16 new)
 - **All 5 quant math modules now complete.** Test count baseline: 1335
 ---
+
+## 2026-02-22 - V3-007
+- Created src/bot/data/pair_data.py with PairDataProvider class plus utility functions
+  - PairDataProvider: get_aligned_closes_from_candles (sync), get_aligned_closes (async from DataStore)
+  - compute_spread, compute_log_returns, compute_correlation_matrix
+- Updated src/bot/data/__init__.py to export PairDataProvider
+- Created tests/data/test_pair_data.py (17 tests)
+  - Aligned closes: full overlap, partial overlap, empty input, no overlap, type checks
+  - Async store fetching and missing data handling
+  - Spread, log returns, correlation matrix (perfect, single, windowed, insufficient)
+- Tests: 1352 passing (1335 + 17 new)
+- **Learnings for future iterations:**
+  - PairDataProvider uses int(timestamp.timestamp()) as alignment key — works for hourly+ timeframes
+  - compute_correlation_matrix returns 0.0 for series with < 5 data points
+---
