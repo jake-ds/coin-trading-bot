@@ -70,3 +70,18 @@ Started: 2026년 2월 23일 월요일 01시 08분 44초 KST
   - stat_arb symbols come as nested arrays (pairs) — handle both `string[]` and `string[][]` in display
   - Use lazy param fetching to avoid unnecessary API calls until user expands the section
 ---
+
+## 2026-02-23 - V5-005
+- **Implemented**: EngineTracker — performance tracking and metrics
+- **Files created**:
+  - `src/bot/engines/tracker.py` — TradeRecord, EngineMetrics dataclasses + EngineTracker class with record_trade(), record_cycle(), get_metrics(), get_all_metrics(), get_pnl_history()
+  - `tests/engines/test_tracker.py` — 36 comprehensive tests covering metrics, Sharpe, drawdown, PnL history, window filtering
+- **Files modified**:
+  - `src/bot/engines/__init__.py` — added EngineTracker to exports
+- **Tests added**: 36
+- **Learnings for future iterations:**
+  - Sharpe annualization: mean/std * sqrt(365*24) assuming hourly returns
+  - Max drawdown only tracks from positive peaks (all-loss sequences have 0 drawdown)
+  - profit_factor = 0 when no losses (guard against div-by-zero, not infinity)
+  - Window filtering uses exit_time for trade age calculation
+---
