@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 import structlog
+
+from bot.engines.tracker import EngineTracker, TradeRecord
 
 if TYPE_CHECKING:
     from bot.engines.base import BaseEngine, EngineCycleResult
@@ -25,6 +28,7 @@ class EngineManager:
         self._portfolio_manager = portfolio_manager
         self._engines: dict[str, BaseEngine] = {}
         self._tasks: dict[str, asyncio.Task] = {}
+        self.tracker = EngineTracker()
 
     # ------------------------------------------------------------------
     # Registration
@@ -35,6 +39,15 @@ class EngineManager:
         if engine.name in self._engines:
             raise ValueError(f"Engine '{engine.name}' is already registered")
         self._engines[engine.name] = engine
+        # Wire up tracker to record every cycle
+        existing_cb = engine._on_cycle_complete
+
+        def _on_cycle(result: EngineCycleResult) -> None:
+            self._record_cycle_to_tracker(engine.name, result)
+            if existing_cb is not None:
+                return existing_cb(result)
+
+        engine.set_on_cycle_complete(_on_cycle)
         logger.info("engine_registered", engine=engine.name)
 
     def get_engine(self, name: str) -> BaseEngine | None:
@@ -109,6 +122,42 @@ class EngineManager:
             return False
         await engine.resume()
         return True
+
+    # ------------------------------------------------------------------
+    # Tracker integration
+    # ------------------------------------------------------------------
+
+    def _record_cycle_to_tracker(
+        self, engine_name: str, result: EngineCycleResult
+    ) -> None:
+        """Record cycle and extract trade records from cycle result."""
+        self.tracker.record_cycle(engine_name, result)
+
+        # Extract trades from actions_taken (PnL-bearing actions)
+        if result.pnl_update != 0 and result.actions_taken:
+            for action in result.actions_taken:
+                pnl = action.get("pnl", action.get("profit", 0))
+                if pnl == 0:
+                    continue
+                cost = action.get("cost", 0)
+                gross = action.get("gross_pnl", action.get("gross_profit", pnl + cost))
+                symbol = action.get("symbol", action.get("pair", "unknown"))
+
+                trade = TradeRecord(
+                    engine_name=engine_name,
+                    symbol=symbol,
+                    side=action.get("side", action.get("action", "unknown")),
+                    entry_price=action.get("entry_price", action.get("price_a", 0)),
+                    exit_price=action.get("exit_price", action.get("exit_zscore", 0)),
+                    quantity=action.get("quantity", action.get("qty", 0)),
+                    pnl=gross,
+                    cost=cost,
+                    net_pnl=pnl,
+                    entry_time=action.get("entry_time", result.timestamp),
+                    exit_time=action.get("exit_time", datetime.now(timezone.utc).isoformat()),
+                    hold_time_seconds=action.get("hold_time_seconds", 0),
+                )
+                self.tracker.record_trade(engine_name, trade)
 
     # ------------------------------------------------------------------
     # Status

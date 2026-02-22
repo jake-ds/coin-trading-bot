@@ -303,3 +303,33 @@ export interface EnginePositionsResponse {
   engine: string
   positions: Record<string, unknown>[]
 }
+
+// V5-006: Performance tracking types
+export interface EngineMetrics {
+  total_trades: number
+  winning_trades: number
+  losing_trades: number
+  win_rate: number
+  total_pnl: number
+  avg_profit_per_trade: number
+  sharpe_ratio: number
+  max_drawdown: number
+  profit_factor: number
+  avg_hold_time_min: number
+  cost_ratio: number
+  best_trade: number
+  worst_trade: number
+  total_cost: number
+}
+
+export interface PerformanceSummary {
+  engines: Record<string, EngineMetrics>
+  totals: {
+    total_pnl: number
+    total_trades: number
+    overall_sharpe: number
+    overall_win_rate: number
+    total_cost: number
+  }
+  window_hours: number
+}

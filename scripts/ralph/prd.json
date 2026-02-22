@@ -118,7 +118,7 @@
         "All existing tests pass, ruff check passes"
       ],
       "priority": 6,
-      "passes": false,
+      "passes": true,
       "notes": "The tracker is instantiated in EngineManager, not passed in from outside. Keep coupling minimal."
     },
     {

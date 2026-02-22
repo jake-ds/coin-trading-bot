@@ -85,3 +85,18 @@ Started: 2026년 2월 23일 월요일 01시 08분 44초 KST
   - profit_factor = 0 when no losses (guard against div-by-zero, not infinity)
   - Window filtering uses exit_time for trade age calculation
 ---
+
+## 2026-02-23 - V5-006
+- **Implemented**: Tracker integration + performance API endpoints
+- **Files modified**:
+  - `src/bot/engines/manager.py` — added EngineTracker instance, wired cycle callback via register(), _record_cycle_to_tracker() extracts TradeRecords from cycle results
+  - `src/bot/dashboard/app.py` — added GET /api/engines/{name}/metrics, GET /api/performance/summary, performance data in WebSocket broadcasts
+  - `frontend/src/api/types.ts` — added EngineMetrics and PerformanceSummary interfaces
+- **Files created**:
+  - `tests/engines/test_tracker_integration.py` — 11 tests for manager integration + API endpoints
+- **Tests added**: 11
+- **Learnings for future iterations:**
+  - EngineManager.register() wraps existing callback to preserve it while adding tracker recording
+  - Trade extraction from actions_taken uses common keys (pnl/profit, cost, symbol/pair)
+  - Performance summary aggregates Sharpe as simple average across engines
+---
