@@ -10,6 +10,7 @@ from bot.models import SignalAction, TradingSignal
 from bot.strategies.base import BaseStrategy
 
 if TYPE_CHECKING:
+    from bot.data.order_book import OrderBookAnalysis, OrderBookAnalyzer
     from bot.strategies.trend_filter import TrendDirection
 
 logger = structlog.get_logger()
@@ -26,9 +27,11 @@ class SignalEnsemble:
         self,
         min_agreement: int = 2,
         strategy_weights: dict[str, float] | None = None,
+        order_book_analyzer: OrderBookAnalyzer | None = None,
     ):
         self._min_agreement = min_agreement
         self._strategy_weights = strategy_weights or {}
+        self._order_book_analyzer = order_book_analyzer
 
     @property
     def min_agreement(self) -> int:
@@ -80,6 +83,7 @@ class SignalEnsemble:
         signals: list[TradingSignal],
         symbol: str,
         trend_direction: TrendDirection | None = None,
+        order_book_analysis: OrderBookAnalysis | None = None,
     ) -> TradingSignal:
         """Combine signals into a single decision via weighted voting.
 
@@ -95,10 +99,15 @@ class SignalEnsemble:
         - SELL signals are rejected when trend is BULLISH.
         - NEUTRAL trend allows all signals through.
 
+        Order book modifier (when order_book_analysis is provided):
+        - BUY confidence multiplied by buy-specific order book modifier.
+        - SELL confidence multiplied by sell-specific order book modifier.
+
         Args:
             signals: List of signals from different strategies.
             symbol: Trading pair symbol.
             trend_direction: Optional higher-timeframe trend direction.
+            order_book_analysis: Optional order book analysis for confidence modification.
 
         Returns:
             A single TradingSignal representing the ensemble decision.
@@ -167,6 +176,18 @@ class SignalEnsemble:
             }
             if trend_direction is not None:
                 metadata["trend"] = trend_direction.value
+            # Apply order book confidence modifier for BUY
+            if order_book_analysis is not None and self._order_book_analyzer:
+                ob_modifier = (
+                    self._order_book_analyzer.get_buy_confidence_modifier(
+                        order_book_analysis
+                    )
+                )
+                confidence = min(confidence * ob_modifier, 1.0)
+                metadata["order_book_modifier"] = round(ob_modifier, 4)
+                metadata["imbalance_ratio"] = round(
+                    order_book_analysis.imbalance_ratio, 4
+                )
             logger.info(
                 "ensemble_buy",
                 symbol=symbol,
@@ -193,6 +214,18 @@ class SignalEnsemble:
             }
             if trend_direction is not None:
                 metadata["trend"] = trend_direction.value
+            # Apply order book confidence modifier for SELL
+            if order_book_analysis is not None and self._order_book_analyzer:
+                ob_modifier = (
+                    self._order_book_analyzer.get_sell_confidence_modifier(
+                        order_book_analysis
+                    )
+                )
+                confidence = min(confidence * ob_modifier, 1.0)
+                metadata["order_book_modifier"] = round(ob_modifier, 4)
+                metadata["imbalance_ratio"] = round(
+                    order_book_analysis.imbalance_ratio, 4
+                )
             logger.info(
                 "ensemble_sell",
                 symbol=symbol,

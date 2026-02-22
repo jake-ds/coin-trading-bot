@@ -10,6 +10,7 @@ import structlog
 from bot.config import Settings, TradingMode, load_settings
 from bot.dashboard import app as dashboard_module
 from bot.data.collector import DataCollector
+from bot.data.order_book import OrderBookAnalyzer
 from bot.data.store import DataStore
 from bot.data.websocket_feed import WebSocketFeed
 from bot.exchanges.factory import ExchangeFactory
@@ -54,6 +55,7 @@ class TradingBot:
         self._ws_feed: WebSocketFeed | None = None
         self._strategy_tracker: StrategyTracker | None = None
         self._portfolio_risk: PortfolioRiskManager | None = None
+        self._order_book_analyzer: OrderBookAnalyzer | None = None
         self._cycle_lock: asyncio.Lock = asyncio.Lock()
         self._cycle_count: int = 0
         self._total_cycle_duration: float = 0.0
@@ -99,10 +101,14 @@ class TradingBot:
             sector_map=self._settings.sector_map,
         )
 
+        # Initialize order book analyzer
+        self._order_book_analyzer = OrderBookAnalyzer()
+
         # Initialize signal ensemble voting system
         self._signal_ensemble = SignalEnsemble(
             min_agreement=self._settings.signal_min_agreement,
             strategy_weights=self._settings.strategy_weights,
+            order_book_analyzer=self._order_book_analyzer,
         )
 
         # Initialize trend filter for higher-timeframe confirmation
@@ -455,13 +461,32 @@ class TradingBot:
                         exc_info=True,
                     )
 
+            # Analyze order book for confidence modification
+            ob_analysis = None
+            if self._order_book_analyzer and self._exchanges:
+                try:
+                    ob_analysis = (
+                        await self._order_book_analyzer.fetch_and_analyze(
+                            self._exchanges[0], symbol
+                        )
+                    )
+                except Exception:
+                    logger.warning(
+                        "order_book_analysis_error",
+                        symbol=symbol,
+                        exc_info=True,
+                    )
+
             # Collect signals from all strategies and vote
             if self._signal_ensemble:
                 signals = await self._signal_ensemble.collect_signals(
                     symbol, active_strategies, candles
                 )
                 signal = self._signal_ensemble.vote(
-                    signals, symbol, trend_direction=trend_direction
+                    signals,
+                    symbol,
+                    trend_direction=trend_direction,
+                    order_book_analysis=ob_analysis,
                 )
             else:
                 continue

@@ -758,4 +758,47 @@ Started: 2026년 2월 22일 일요일 00시 13분 50초 KST
   - AsyncMock return values are dicts, but `raw.get()` on AsyncMock returns another mock — convert with `dict(raw)` first
   - Strategy registry singleton may be cleared by other tests — test registration explicitly rather than relying on module-level `strategy_registry.register()` surviving
   - Test count baseline: 1017 tests passing as of V2-024
+  - **OrderBookAnalyzer pattern**: `OrderBookAnalyzer` in `data/order_book.py` wraps exchange's `get_order_book()`. Created in `initialize()`. In `_trading_cycle()`, `fetch_and_analyze(exchange, symbol)` fetches order book and returns `OrderBookAnalysis`. Analysis passed to `ensemble.vote(..., order_book_analysis=ob_analysis)`. Fetch errors caught gracefully (analysis stays None, no modification). SignalEnsemble only applies modifier when BOTH `order_book_analyzer` and `order_book_analysis` are non-None (backward compat).
+  - **Order book confidence modification**: Direction-specific modifiers: `get_buy_confidence_modifier(analysis)` for BUY signals, `get_sell_confidence_modifier(analysis)` for SELL. Imbalance > 2.0 boosts BUY, reduces SELL; imbalance < 0.5 boosts SELL, reduces BUY. Buy wall below mid-price → BUY *1.2; sell wall above → BUY *0.8 (inverse for SELL). Final confidence capped at 1.0.
+  - **Wall detection math**: With threshold 5.0x, walls must have volume > 5× average of ALL levels (bids + asks). Since wall volume inflates the average, you need ~N>12 normal levels to detect 3+ walls at default threshold. Use lower threshold (3.0x) for multi-wall scenarios.
+  - **Test count baseline**: 1220 tests passing as of V2-025
+---
+
+## 2026-02-22 - V2-025: Order book imbalance detection
+- **Implemented:**
+  - New `OrderBookAnalyzer` class in `src/bot/data/order_book.py` with full order book analysis
+  - `OrderBookAnalysis` dataclass: bid_volume, ask_volume, imbalance_ratio, walls, buy_wall_below, sell_wall_above, confidence_modifier
+  - `WallInfo` dataclass: price, volume, side, volume_ratio
+  - Imbalance calculation: total_bid_volume / total_ask_volume; handles empty and one-sided books
+  - Wall detection: flags levels with volume > `wall_threshold` (default 5.0x) average level volume
+  - Buy wall below mid-price = support signal; sell wall above mid-price = resistance signal
+  - Direction-specific modifiers: `get_buy_confidence_modifier()` and `get_sell_confidence_modifier()`
+  - Strong buying pressure (imbalance > 2.0) boosts BUY, reduces SELL; vice versa for selling pressure
+  - Wall effects: buy wall boosts BUY by 1.2x, sell wall reduces BUY by 0.8x; inverse for SELL
+  - Confidence modifier bounded by `max_confidence_boost` (default 1.5) and `min_confidence_factor` (default 0.5)
+  - `fetch_and_analyze()` async method fetches order book via exchange adapter, graceful error handling returns neutral analysis
+  - Integrated into `SignalEnsemble`: `vote()` accepts optional `order_book_analysis` param and applies direction-specific modifier
+  - Ensemble only applies modifier when BOTH `order_book_analysis` and `order_book_analyzer` are present (backward compat)
+  - Confidence after modification capped at 1.0
+  - Metadata includes `order_book_modifier` and `imbalance_ratio` when applied
+  - Wired into `main.py _trading_cycle()`: fetches order book per symbol before ensemble voting, passes analysis to `vote()`
+  - Order book fetch errors caught gracefully — analysis stays None, no modification applied
+  - Exported `OrderBookAnalyzer` from `data/__init__.py`
+- **Files created:**
+  - `src/bot/data/order_book.py` — OrderBookAnalyzer, OrderBookAnalysis, WallInfo
+  - `tests/data/test_order_book.py` — 39 unit tests (init, imbalance, walls, confidence, modifiers, price, fetch, edge cases)
+  - `tests/test_v2_025_order_book.py` — 14 integration tests (ensemble integration, backward compat)
+- **Files modified:**
+  - `src/bot/strategies/ensemble.py` — added `order_book_analyzer` param to constructor, `order_book_analysis` param to `vote()`, direction-specific confidence modification
+  - `src/bot/main.py` — import OrderBookAnalyzer, create in initialize(), pass to ensemble, fetch+analyze in _trading_cycle()
+  - `src/bot/data/__init__.py` — exported OrderBookAnalyzer
+- **Tests:** 1220 tests passing (1017 previous V2 + quant tests + 53 new), ruff check passes
+- **Learnings for future iterations:**
+  - Wall detection math: with default threshold 5.0x, you mathematically cannot have more than ~1 wall per 5 normal levels; use lower threshold (3.0x) for multi-wall scenarios
+  - Wall volume formula: `level_volume / avg_all_volumes >= threshold`; when wall volume is included in avg, it raises the average significantly
+  - Order book mid-price: `(best_bid + best_ask) / 2.0` — walls below mid = support, above mid = resistance
+  - SignalEnsemble backward compat: `order_book_analyzer=None` in constructor means `order_book_analysis` param in `vote()` is silently ignored
+  - Direction-specific modifiers: BUY and SELL have opposite reactions to imbalance — use separate methods not one general modifier
+  - ruff I001 import sorting: third-party (`pytest`) and first-party (`bot.*`) need proper separation; use `# noqa: I001` if needed
+  - Test count baseline: 1220 tests passing as of V2-025
 ---
