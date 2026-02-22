@@ -112,3 +112,19 @@ Started: 2026년 2월 23일 월요일 01시 08분 44초 KST
   - recharts Tooltip formatter needs `value: number | undefined` type for TypeScript compatibility
   - Removed LineChart/Line imports and pnlHistories state since PnL curve endpoint not ready yet
 ---
+
+## 2026-02-23 - V5-008
+- **Implemented**: ParameterTuner — automatic strategy parameter adjustment
+- **Files created**:
+  - `src/bot/engines/tuner.py` — ParamChange, TunerBounds, TUNER_CONFIG, ParameterTuner class with evaluate_and_adjust(), get_history(), apply_changes(), get_decisions()
+  - `tests/engines/test_tuner.py` — 23 tests for all adjustment scenarios, bounds, history, apply
+- **Files modified**:
+  - `src/bot/engines/__init__.py` — added ParameterTuner to exports
+- **Tests added**: 23
+- **Learnings for future iterations:**
+  - Adjustment ranges: conservative = +15%, slight conservative = +5%, aggressive = -10%
+  - "threshold" params (min_rate, entry_zscore) go UP for conservative, DOWN for aggressive
+  - "size" params (levels, lookback) go DOWN for conservative, UP for aggressive
+  - Integer params (grid_levels) rounded after adjustment
+  - 0.5 <= Sharpe < 1.0 = "steady" — no changes made
+---

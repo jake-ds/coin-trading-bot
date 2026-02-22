@@ -161,7 +161,7 @@
         "All existing tests pass, ruff check passes"
       ],
       "priority": 8,
-      "passes": false,
+      "passes": true,
       "notes": "Tuner does NOT modify engines directly — it changes Settings values via reload(), which engines read on next cycle. Max adjustment per cycle is bounded to prevent wild swings."
     },
     {
