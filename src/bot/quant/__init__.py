@@ -1,5 +1,12 @@
 """Quantitative finance utilities for statistical trading."""
 
+from bot.quant.microstructure import (
+    compute_orderbook_metrics,
+    detect_walls,
+    microprice,
+    orderbook_imbalance,
+    vwap_midprice,
+)
 from bot.quant.portfolio import (
     efficient_frontier,
     max_sharpe_portfolio,
@@ -35,17 +42,22 @@ __all__ = [
     "calculate_half_life",
     "calculate_zscore",
     "classify_volatility_regime",
+    "compute_orderbook_metrics",
     "cornish_fisher_var",
     "cvar",
+    "detect_walls",
     "efficient_frontier",
     "engle_granger_cointegration",
     "estimate_ou_params",
     "historical_var",
     "information_ratio",
     "max_sharpe_portfolio",
+    "microprice",
     "min_variance_portfolio",
+    "orderbook_imbalance",
     "parametric_var",
     "risk_parity_portfolio",
     "rolling_ols_hedge_ratio",
     "sortino_ratio",
+    "vwap_midprice",
 ]
