@@ -100,3 +100,15 @@ Started: 2026년 2월 23일 월요일 01시 08분 44초 KST
   - Trade extraction from actions_taken uses common keys (pnl/profit, cost, symbol/pair)
   - Performance summary aggregates Sharpe as simple average across engines
 ---
+
+## 2026-02-23 - V5-007
+- **Implemented**: Performance dashboard page
+- **Files created**:
+  - `frontend/src/pages/Performance.tsx` — metrics cards, cost analysis bar chart (recharts), capital allocation pie chart, loading/error/empty states, 10s auto-refresh
+- **Files modified**:
+  - `frontend/src/App.tsx` — added /performance route and nav link
+- **Tests**: Frontend builds successfully, all Python tests pass
+- **Learnings for future iterations:**
+  - recharts Tooltip formatter needs `value: number | undefined` type for TypeScript compatibility
+  - Removed LineChart/Line imports and pnlHistories state since PnL curve endpoint not ready yet
+---
