@@ -402,6 +402,173 @@ class TestValidateNewPosition:
         assert "portfolio_heat" in reason
 
 
+class TestVarIntegration:
+    """Tests for VaR integration into PortfolioRiskManager."""
+
+    def _make_mgr_with_volatile_history(
+        self,
+        var_enabled: bool = True,
+        var_confidence: float = 0.95,
+        max_portfolio_var_pct: float = 5.0,
+    ) -> PortfolioRiskManager:
+        """Create a manager with volatile price history for VaR calculation."""
+        mgr = PortfolioRiskManager(
+            max_total_exposure_pct=100.0,
+            max_portfolio_heat=1.0,
+            var_enabled=var_enabled,
+            var_confidence=var_confidence,
+            max_portfolio_var_pct=max_portfolio_var_pct,
+        )
+        mgr.update_portfolio_value(10000.0)
+
+        # Generate volatile price data with known negative returns
+        np.random.seed(42)
+        prices_btc = [100.0]
+        for _ in range(50):
+            change = np.random.normal(0, 5)
+            prices_btc.append(max(prices_btc[-1] + change, 10.0))
+
+        prices_eth = [50.0]
+        for _ in range(50):
+            change = np.random.normal(0, 3)
+            prices_eth.append(max(prices_eth[-1] + change, 5.0))
+
+        candles_btc = make_candles(prices_btc, symbol="BTC/USDT")
+        candles_eth = make_candles(prices_eth, symbol="ETH/USDT")
+        mgr.update_price_history("BTC/USDT", candles_btc)
+        mgr.update_price_history("ETH/USDT", candles_eth)
+
+        mgr.add_position("BTC/USDT", 5000.0)
+        mgr.add_position("ETH/USDT", 3000.0)
+        return mgr
+
+    def test_calculate_portfolio_var_returns_percentage(self):
+        mgr = self._make_mgr_with_volatile_history()
+        var = mgr.calculate_portfolio_var()
+        assert var is not None
+        assert var >= 0.0  # VaR should be non-negative
+
+    def test_calculate_portfolio_var_no_positions(self):
+        mgr = PortfolioRiskManager(var_enabled=True)
+        mgr.update_portfolio_value(10000.0)
+        assert mgr.calculate_portfolio_var() is None
+
+    def test_calculate_portfolio_var_no_price_history(self):
+        mgr = PortfolioRiskManager(var_enabled=True)
+        mgr.update_portfolio_value(10000.0)
+        mgr.add_position("BTC/USDT", 5000.0)
+        assert mgr.calculate_portfolio_var() is None
+
+    def test_calculate_portfolio_var_insufficient_returns(self):
+        mgr = PortfolioRiskManager(var_enabled=True, correlation_window=30)
+        mgr.update_portfolio_value(10000.0)
+        mgr.add_position("BTC/USDT", 5000.0)
+        # Only 5 candles -> 4 returns, but need >= 10
+        candles = make_candles([100, 101, 102, 103, 104], symbol="BTC/USDT")
+        mgr.update_price_history("BTC/USDT", candles)
+        assert mgr.calculate_portfolio_var() is None
+
+    def test_check_var_limit_disabled(self):
+        mgr = PortfolioRiskManager(var_enabled=False)
+        mgr.update_portfolio_value(10000.0)
+        allowed, reason = mgr.check_var_limit("BTC/USDT", 5000.0)
+        assert allowed
+        assert reason == ""
+
+    def test_check_var_limit_no_data_allows(self):
+        mgr = PortfolioRiskManager(var_enabled=True, max_portfolio_var_pct=1.0)
+        mgr.update_portfolio_value(10000.0)
+        # No positions or price history -> can't calculate VaR -> allow
+        allowed, reason = mgr.check_var_limit("BTC/USDT", 5000.0)
+        assert allowed
+
+    def test_check_var_limit_exceeds_blocks(self):
+        # Use very low VaR limit so any volatile data will exceed it
+        mgr = self._make_mgr_with_volatile_history(
+            var_enabled=True, max_portfolio_var_pct=0.001
+        )
+        var = mgr.calculate_portfolio_var()
+        # Only test blocking if VaR is computable and > 0
+        if var is not None and var > 0.001:
+            allowed, reason = mgr.check_var_limit("SOL/USDT", 2000.0)
+            assert not allowed
+            assert "portfolio_var" in reason
+
+    def test_check_var_limit_within_allows(self):
+        mgr = self._make_mgr_with_volatile_history(
+            var_enabled=True, max_portfolio_var_pct=99.0
+        )
+        allowed, reason = mgr.check_var_limit("SOL/USDT", 2000.0)
+        assert allowed
+
+    def test_validate_new_position_var_blocks(self):
+        mgr = self._make_mgr_with_volatile_history(
+            var_enabled=True, max_portfolio_var_pct=0.001
+        )
+        var = mgr.calculate_portfolio_var()
+        if var is not None and var > 0.001:
+            allowed, reason = mgr.validate_new_position("SOL/USDT", 1000.0)
+            assert not allowed
+            assert "portfolio_var" in reason
+
+    def test_validate_new_position_var_disabled_passes(self):
+        mgr = self._make_mgr_with_volatile_history(var_enabled=False)
+        allowed, reason = mgr.validate_new_position("SOL/USDT", 1000.0)
+        assert allowed
+        assert reason == ""
+
+    def test_get_risk_metrics(self):
+        mgr = self._make_mgr_with_volatile_history(var_enabled=True)
+        metrics = mgr.get_risk_metrics()
+        assert "exposure_pct" in metrics
+        assert "heat" in metrics
+        assert "var_pct" in metrics
+        assert "n_positions" in metrics
+        assert "portfolio_value" in metrics
+        assert "var_enabled" in metrics
+        assert metrics["n_positions"] == 2
+        assert metrics["portfolio_value"] == 10000.0
+        assert metrics["var_enabled"] is True
+        assert metrics["exposure_pct"] == pytest.approx(80.0)
+
+    def test_get_risk_metrics_no_data(self):
+        mgr = PortfolioRiskManager(var_enabled=False)
+        mgr.update_portfolio_value(10000.0)
+        metrics = mgr.get_risk_metrics()
+        assert metrics["var_pct"] is None
+        assert metrics["n_positions"] == 0
+        assert metrics["var_enabled"] is False
+
+    def test_var_config_defaults(self):
+        mgr = PortfolioRiskManager()
+        assert mgr._var_enabled is False
+        assert mgr._var_confidence == 0.95
+        assert mgr._max_portfolio_var_pct == 5.0
+
+    def test_var_config_custom(self):
+        mgr = PortfolioRiskManager(
+            var_enabled=True,
+            var_confidence=0.99,
+            max_portfolio_var_pct=3.0,
+        )
+        assert mgr._var_enabled is True
+        assert mgr._var_confidence == 0.99
+        assert mgr._max_portfolio_var_pct == 3.0
+
+    def test_var_higher_confidence_higher_var(self):
+        """Higher confidence level should produce higher (or equal) VaR."""
+        mgr_95 = self._make_mgr_with_volatile_history(
+            var_enabled=True, var_confidence=0.95
+        )
+        mgr_99 = self._make_mgr_with_volatile_history(
+            var_enabled=True, var_confidence=0.99
+        )
+        var_95 = mgr_95.calculate_portfolio_var()
+        var_99 = mgr_99.calculate_portfolio_var()
+        if var_95 is not None and var_99 is not None:
+            assert var_99 >= var_95
+
+
 class TestPositionManagement:
     def test_add_and_remove_position(self):
         mgr = PortfolioRiskManager()

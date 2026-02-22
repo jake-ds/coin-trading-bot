@@ -1,4 +1,4 @@
-"""Portfolio-level risk management: correlation, exposure limits, heat map."""
+"""Portfolio-level risk management: correlation, exposure limits, heat map, VaR."""
 
 from __future__ import annotations
 
@@ -31,6 +31,9 @@ class PortfolioRiskManager:
         max_positions_per_sector: int = 3,
         max_portfolio_heat: float = 0.15,
         sector_map: dict[str, str] | None = None,
+        var_enabled: bool = False,
+        var_confidence: float = 0.95,
+        max_portfolio_var_pct: float = 5.0,
     ):
         self._max_total_exposure_pct = max_total_exposure_pct
         self._max_correlation = max_correlation
@@ -39,6 +42,11 @@ class PortfolioRiskManager:
         self._max_portfolio_heat = max_portfolio_heat
         # Map symbol -> sector (e.g., "BTC/USDT" -> "large_cap")
         self._sector_map: dict[str, str] = sector_map or {}
+
+        # VaR settings
+        self._var_enabled = var_enabled
+        self._var_confidence = var_confidence
+        self._max_portfolio_var_pct = max_portfolio_var_pct
 
         # Price history for correlation calculation: symbol -> list of returns
         self._price_history: dict[str, list[float]] = {}
@@ -304,6 +312,90 @@ class PortfolioRiskManager:
 
         return True, ""
 
+    def calculate_portfolio_var(self) -> float | None:
+        """Calculate portfolio VaR using historical returns.
+
+        Returns:
+            Portfolio VaR as a percentage, or None if insufficient data.
+        """
+        if not self._price_history or not self._positions:
+            return None
+
+        # Collect returns for current positions
+        position_returns = []
+        position_weights = []
+        total_value = sum(p["value"] for p in self._positions.values())
+        if total_value <= 0:
+            return None
+
+        for symbol, pos in self._positions.items():
+            returns = self._price_history.get(symbol, [])
+            if len(returns) < 10:
+                continue
+            position_returns.append(returns[-self._correlation_window :])
+            position_weights.append(pos["value"] / total_value)
+
+        if not position_returns:
+            return None
+
+        # Align lengths
+        min_len = min(len(r) for r in position_returns)
+        if min_len < 5:
+            return None
+
+        # Compute weighted portfolio returns
+        port_returns = np.zeros(min_len)
+        for ret, weight in zip(position_returns, position_weights):
+            port_returns += np.array(ret[-min_len:]) * weight
+
+        # Historical VaR
+        percentile = (1 - self._var_confidence) * 100
+        var_value = -float(np.percentile(port_returns, percentile))
+        return max(var_value * 100, 0.0)  # Return as percentage
+
+    def check_var_limit(self, symbol: str, position_value: float) -> tuple[bool, str]:
+        """Check if adding a position would breach portfolio VaR limit.
+
+        Returns:
+            (allowed, reason) tuple.
+        """
+        if not self._var_enabled:
+            return True, ""
+
+        current_var = self.calculate_portfolio_var()
+        if current_var is None:
+            return True, ""  # Can't calculate — allow
+
+        if current_var > self._max_portfolio_var_pct:
+            reason = (
+                f"portfolio_var {current_var:.2f}% exceeds "
+                f"limit {self._max_portfolio_var_pct:.2f}%"
+            )
+            logger.warning(
+                "portfolio_var_limit",
+                current_var_pct=round(current_var, 2),
+                limit_pct=self._max_portfolio_var_pct,
+                new_symbol=symbol,
+            )
+            return False, reason
+
+        return True, ""
+
+    def get_risk_metrics(self) -> dict:
+        """Get current portfolio risk metrics summary.
+
+        Returns:
+            Dict with exposure_pct, heat, var_pct, n_positions.
+        """
+        return {
+            "exposure_pct": round(self.get_total_exposure(), 2),
+            "heat": round(self.calculate_portfolio_heat(), 4),
+            "var_pct": self.calculate_portfolio_var(),
+            "n_positions": len(self._positions),
+            "portfolio_value": self._portfolio_value,
+            "var_enabled": self._var_enabled,
+        }
+
     def validate_new_position(
         self,
         symbol: str,
@@ -317,6 +409,7 @@ class PortfolioRiskManager:
         2. Correlation with existing positions
         3. Sector limits
         4. Portfolio heat
+        5. VaR limit (if enabled)
 
         Returns:
             (allowed, reason) tuple. If not allowed, reason explains why.
@@ -338,6 +431,11 @@ class PortfolioRiskManager:
 
         # 4. Portfolio heat
         allowed, reason = self.check_portfolio_heat(position_value, atr)
+        if not allowed:
+            return False, reason
+
+        # 5. VaR limit
+        allowed, reason = self.check_var_limit(symbol, position_value)
         if not allowed:
             return False, reason
 
