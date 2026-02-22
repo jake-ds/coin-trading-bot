@@ -52,6 +52,25 @@ class TradeRecord(Base):
     filled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
+class FundingRateRecord(Base):
+    """Funding rate record for perpetual futures."""
+
+    __tablename__ = "funding_rates"
+    __table_args__ = (
+        UniqueConstraint("symbol", "timestamp", name="uq_funding_symbol_ts"),
+        Index("ix_funding_rates_symbol_timestamp", "symbol", "timestamp"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    symbol: Mapped[str] = mapped_column(String(50), index=True)
+    timestamp: Mapped[datetime] = mapped_column(DateTime, index=True)
+    funding_rate: Mapped[float] = mapped_column(Float)
+    funding_timestamp: Mapped[datetime] = mapped_column(DateTime)
+    mark_price: Mapped[float] = mapped_column(Float, default=0.0)
+    spot_price: Mapped[float] = mapped_column(Float, default=0.0)
+    spread_pct: Mapped[float] = mapped_column(Float, default=0.0)
+
+
 class PortfolioSnapshot(Base):
     """Portfolio state snapshot."""
 

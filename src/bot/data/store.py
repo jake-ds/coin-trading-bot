@@ -6,7 +6,13 @@ from datetime import datetime
 from sqlalchemy import insert, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from bot.data.models import Base, OHLCVRecord, PortfolioSnapshot, TradeRecord
+from bot.data.models import (
+    Base,
+    FundingRateRecord,
+    OHLCVRecord,
+    PortfolioSnapshot,
+    TradeRecord,
+)
 from bot.models import OHLCV, Order
 
 
@@ -150,6 +156,71 @@ class DataStore:
                     "filled_at": r.filled_at,
                 }
                 for r in records
+            ]
+
+    # --- Funding Rate Operations ---
+
+    async def save_funding_rate(
+        self,
+        symbol: str,
+        funding_rate: float,
+        funding_timestamp: datetime,
+        mark_price: float = 0.0,
+        spot_price: float = 0.0,
+        spread_pct: float = 0.0,
+    ) -> None:
+        """Save a funding rate record.
+
+        Uses INSERT OR IGNORE to skip duplicates (same symbol + timestamp).
+        """
+        async with self._session_factory() as session:
+            stmt = (
+                insert(FundingRateRecord)
+                .values(
+                    symbol=symbol,
+                    timestamp=funding_timestamp,
+                    funding_rate=funding_rate,
+                    funding_timestamp=funding_timestamp,
+                    mark_price=mark_price,
+                    spot_price=spot_price,
+                    spread_pct=spread_pct,
+                )
+                .prefix_with("OR IGNORE")
+            )
+            await session.execute(stmt)
+            await session.commit()
+
+    async def get_funding_rates(
+        self,
+        symbol: str,
+        limit: int = 100,
+        start: datetime | None = None,
+        end: datetime | None = None,
+    ) -> list[dict]:
+        """Query funding rates by symbol with optional date range."""
+        async with self._session_factory() as session:
+            stmt = select(FundingRateRecord).where(
+                FundingRateRecord.symbol == symbol
+            )
+            if start:
+                stmt = stmt.where(FundingRateRecord.timestamp >= start)
+            if end:
+                stmt = stmt.where(FundingRateRecord.timestamp <= end)
+            stmt = stmt.order_by(FundingRateRecord.timestamp.desc()).limit(limit)
+
+            result = await session.execute(stmt)
+            records = result.scalars().all()
+            return [
+                {
+                    "symbol": r.symbol,
+                    "timestamp": r.timestamp,
+                    "funding_rate": r.funding_rate,
+                    "funding_timestamp": r.funding_timestamp,
+                    "mark_price": r.mark_price,
+                    "spot_price": r.spot_price,
+                    "spread_pct": r.spread_pct,
+                }
+                for r in reversed(records)
             ]
 
     # --- Portfolio Snapshot Operations ---

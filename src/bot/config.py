@@ -90,6 +90,26 @@ class Settings(BaseSettings):
     max_portfolio_heat: float = Field(default=0.15, gt=0)
     sector_map: dict[str, str] = Field(default_factory=dict)
 
+    # Funding rate strategy
+    funding_extreme_positive_rate: float = Field(default=0.0005, ge=0)
+    funding_extreme_negative_rate: float = Field(default=-0.0003, le=0)
+    funding_confidence_scale: float = Field(default=10.0, gt=0)
+    funding_spread_threshold_pct: float = Field(default=0.5, ge=0)
+    funding_rate_history_limit: int = Field(default=50, ge=1)
+
+    # V3 Quant settings
+    var_enabled: bool = False
+    var_confidence: float = Field(default=0.95, ge=0.5, le=0.999)
+    max_portfolio_var_pct: float = Field(default=5.0, ge=0, le=100)
+    quant_pairs: list[list[str]] = Field(
+        default_factory=list
+    )  # e.g., [["BTC/USDT", "ETH/USDT"]]
+    triangular_arb_enabled: bool = False
+    rebalance_enabled: bool = False
+    rebalance_method: str = "risk_parity"
+    rebalance_threshold_pct: float = Field(default=5.0, ge=0, le=100)
+    garch_enabled: bool = False
+
     # WebSocket feed
     websocket_enabled: bool = False
     websocket_poll_interval: float = Field(default=5.0, gt=0)

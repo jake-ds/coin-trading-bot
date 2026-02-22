@@ -466,7 +466,7 @@
         "All existing tests pass, ruff check passes"
       ],
       "priority": 24,
-      "passes": false,
+      "passes": true,
       "notes": "Funding rate arbitrage is one of the most consistent crypto strategies"
     },
     {

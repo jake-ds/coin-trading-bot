@@ -713,4 +713,49 @@ Started: 2026년 2월 22일 일요일 00시 13분 50초 KST
   - ATR for heat calculation should be normalized as ATR/price ratio, not absolute ATR, since heat is proportional to volatility fraction
   - Portfolio risk check runs after individual risk_manager.validate_signal() so halted/drawdown checks happen first
   - Test count baseline: 948 tests passing as of V2-023
+  - **FundingRateMonitor pattern**: Create `FundingRateMonitor` with exchange adapter and optional DataStore. Use `update_rate()` for manual/test data. `_get_ccxt_exchange()` traverses adapter chain (ResilientExchange → Adapter → ccxt) using `getattr(exchange, "_exchange", None)` with loop detection. Use `MagicMock(spec=["name", "_exchange"])` in tests to prevent MagicMock's auto-attribute creation from infinite traversal.
+  - **FundingRateStrategy pattern**: `FundingRateStrategy` accepts funding data via kwargs (`funding_rate`, `funding_data`) or from `FundingRateMonitor` set via `set_funding_monitor()`. Kwargs take precedence over monitor. Strategy requires `required_history_length=1` since it uses funding rate data, not candle analysis. Module-level registry registration may be cleared by other tests — test registration explicitly.
+  - **structlog not logging**: All data modules use `structlog.get_logger()`, not `logging.getLogger()`. structlog supports keyword args in log calls (`logger.warning("msg", key=value)`).
+  - **Test count baseline**: 1017 tests passing as of V2-024
+---
+
+## 2026-02-22 - V2-024: Funding rate monitoring and perpetual-spot spread strategy
+- **Implemented:**
+  - New `FundingRateMonitor` class in `src/bot/data/funding.py` — fetches and tracks funding rates
+  - Fetches current funding rate via ccxt's `fetch_funding_rate` method
+  - Fetches historical funding rates via `fetch_funding_rate_history`
+  - Stores rates in memory (configurable history size) and persists to DB via DataStore
+  - `update_rate()` for manual rate injection (testing, manual feeds)
+  - `get_average_rate()` for N-period average calculation
+  - Traverses adapter chain (ResilientExchange → ExchangeAdapter → ccxt) for ccxt access
+  - New `FundingRateStrategy` class in `src/bot/strategies/technical/funding_rate.py`
+  - Signal logic: extreme positive funding (> 0.05%) = SELL; extreme negative (< -0.03%) = BUY
+  - Confidence scales with funding rate deviation magnitude
+  - Rate trend analysis: rising rates boost SELL confidence, falling rates boost BUY
+  - Spread signal enhancement: perpetual premium/discount amplifies signals
+  - Regime adaptation: disabled in HIGH_VOLATILITY (noisy funding rates)
+  - New `FundingRateRecord` SQLAlchemy model in `data/models.py` with unique constraint
+  - DataStore methods: `save_funding_rate()` (INSERT OR IGNORE) and `get_funding_rates()` (with date range, limit)
+  - Added 5 config settings: `funding_extreme_positive_rate`, `funding_extreme_negative_rate`, `funding_confidence_scale`, `funding_spread_threshold_pct`, `funding_rate_history_limit`
+  - Registered in strategy_registry; exported from `strategies/technical/__init__.py`
+  - Exported `FundingRateMonitor` from `data/__init__.py`
+- **Files created:**
+  - `src/bot/data/funding.py` — FundingRateMonitor class
+  - `src/bot/strategies/technical/funding_rate.py` — FundingRateStrategy class
+  - `tests/data/test_funding.py` — 30 tests (monitor init, update, average, fetch, history, DataStore persistence)
+  - `tests/strategies/test_v2_024_funding_rate.py` — 39 tests (signals, confidence, data dict, monitor integration, rate trend, spread, regime, metadata, config)
+- **Files modified:**
+  - `src/bot/data/models.py` — added FundingRateRecord model
+  - `src/bot/data/store.py` — added save_funding_rate() and get_funding_rates() methods
+  - `src/bot/data/__init__.py` — exported FundingRateMonitor
+  - `src/bot/strategies/technical/__init__.py` — exported FundingRateStrategy
+  - `src/bot/config.py` — added 5 funding rate settings
+- **Tests:** 1017 tests passing (948 previous + 69 new), ruff check passes on all modified files
+- **Learnings for future iterations:**
+  - MagicMock has all attributes by default — use `spec=["attr1", "attr2"]` to limit attributes and prevent infinite traversal in adapter chain patterns
+  - Use `structlog.get_logger()` not `logging.getLogger()` for consistency with codebase
+  - Use `timedelta(hours=...)` for test timestamps to avoid hour overflow (24+ hours)
+  - AsyncMock return values are dicts, but `raw.get()` on AsyncMock returns another mock — convert with `dict(raw)` first
+  - Strategy registry singleton may be cleared by other tests — test registration explicitly rather than relying on module-level `strategy_registry.register()` surviving
+  - Test count baseline: 1017 tests passing as of V2-024
 ---
