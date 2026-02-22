@@ -568,3 +568,36 @@ Started: 2026-02-22
   - AuditLogger without a store gracefully degrades to structlog-only (no exceptions)
   - Test count baseline: 1833 passing as of V4-013
 ---
+
+## 2026-02-22 - V4-014
+- Added live mode integration test validating all V4 features work together
+- Files created:
+  - tests/dashboard/test_v4_014_integration.py (32 tests)
+- Features tested:
+  - Pre-flight checks: verify all critical checks pass for properly configured live mode, FAIL blocks startup
+  - Rate limiter: throttles when burst exhausted, metrics tracked correctly
+  - Position reconciliation: detects local-only, exchange-only, and qty mismatch discrepancies; clean when matching
+  - Emergency stop/close-all/resume: full lifecycle via API (stop halts, close-all sells, resume restores)
+  - Audit trail: events persisted across multiple action types, filterable by severity, accessible via API
+  - WebSocket: broadcasts state on connect
+  - JWT auth: blocks unauthenticated requests, accepts authenticated, login/refresh/logout flow, wrong password rejected, health endpoint always accessible
+  - Settings hot-reload: safe settings applied via PUT, unsafe settings rejected, GET returns config
+  - Full lifecycle simulation: preflight -> bot start -> rate limiting -> reconciliation -> emergency stop -> resume -> audit verification -> auth check -> shutdown
+  - Cross-feature integration: audit/emergency/settings endpoints all protected by auth
+  - Preflight and reconciliation results accessible via API endpoints
+- Test patterns:
+  - SimpleNamespace for mock settings (non-Settings endpoints)
+  - Real Settings instances for settings endpoint tests (requires model_fields, reload())
+  - AsyncMock for mock exchange/bot objects
+  - Real DataStore (sqlite+aiosqlite:///:memory:) for audit trail tests
+  - httpx AsyncClient with ASGITransport for API endpoint testing
+  - starlette TestClient for WebSocket testing
+- Tests: 1865 passing (1833 existing + 32 new — 1 pre-existing test_config failure), ruff clean
+- All 32 tests run in < 1 second
+- **Learnings for future iterations:**
+  - GET /api/emergency wraps response in {"emergency": {...}}, GET /api/preflight in {"preflight": {...}}, GET /api/reconciliation in {"reconciliation": {...}}
+  - Settings GET endpoint uses "key" not "name" for setting field names
+  - SimpleNamespace doesn't have model_fields or reload() — use real Settings for settings endpoint tests
+  - Import ordering matters for ruff — use `ruff check --fix` to auto-sort
+  - Test count baseline: 1865 passing as of V4-014
+---
