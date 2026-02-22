@@ -17,6 +17,7 @@ from bot.data.order_book import OrderBookAnalyzer
 from bot.data.store import DataStore
 from bot.data.websocket_feed import WebSocketFeed
 from bot.exchanges.factory import ExchangeFactory
+from bot.exchanges.rate_limiter import DEFAULT_EXCHANGE_LIMITS, RateLimiter
 from bot.execution.engine import ExecutionEngine
 from bot.execution.paper_portfolio import PaperPortfolio
 from bot.execution.position_manager import ExitType, PositionManager
@@ -218,7 +219,12 @@ class TradingBot:
                     secret_key=self._settings.binance_secret_key,
                     testnet=self._settings.binance_testnet,
                 )
-                self._exchanges.append(ResilientExchange(adapter))
+                limiter = self._create_rate_limiter("binance")
+                self._exchanges.append(ResilientExchange(
+                    adapter,
+                    rate_limiter=limiter,
+                    rate_limit_enabled=self._settings.rate_limit_enabled,
+                ))
             except ValueError:
                 logger.warning("binance_adapter_not_available")
 
@@ -229,9 +235,31 @@ class TradingBot:
                     api_key=self._settings.upbit_api_key,
                     secret_key=self._settings.upbit_secret_key,
                 )
-                self._exchanges.append(ResilientExchange(adapter))
+                limiter = self._create_rate_limiter("upbit")
+                self._exchanges.append(ResilientExchange(
+                    adapter,
+                    rate_limiter=limiter,
+                    rate_limit_enabled=self._settings.rate_limit_enabled,
+                ))
             except ValueError:
                 logger.warning("upbit_adapter_not_available")
+
+    def _create_rate_limiter(self, exchange_name: str) -> RateLimiter | None:
+        """Create a rate limiter for the given exchange, using config overrides if set."""
+        if not self._settings.rate_limit_enabled:
+            return None
+        # Check for per-exchange overrides in config
+        overrides = self._settings.exchange_rate_limits.get(exchange_name, {})
+        defaults = DEFAULT_EXCHANGE_LIMITS.get(
+            exchange_name, {"requests_per_second": 10.0, "burst_size": 20}
+        )
+        rps = overrides.get("requests_per_second", defaults["requests_per_second"])
+        burst = int(overrides.get("burst_size", defaults["burst_size"]))
+        return RateLimiter(
+            max_requests_per_second=rps,
+            burst_size=burst,
+            name=exchange_name,
+        )
 
     def _init_ws_feed(self) -> None:
         """Initialize WebSocket feed if enabled and exchanges are available."""
@@ -992,6 +1020,12 @@ class TradingBot:
             else None
         )
 
+        # Collect rate limiter metrics from exchanges
+        rate_limits = {}
+        for exchange in self._exchanges:
+            if hasattr(exchange, "rate_limiter") and exchange.rate_limiter is not None:
+                rate_limits[exchange.name] = exchange.rate_limiter.to_dict()
+
         dashboard_module.update_state(
             status="running",
             trades=dashboard_module.get_state()["trades"] + recent_trades,
@@ -1002,6 +1036,7 @@ class TradingBot:
             regime=current_regime,
             equity_curve=dashboard_module.get_state().get("equity_curve", []),
             cycle_log=cycle_log,
+            rate_limits=rate_limits if rate_limits else None,
         )
 
         # Broadcast state to WebSocket clients after each cycle

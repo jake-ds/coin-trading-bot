@@ -186,7 +186,7 @@
         "All existing Python tests pass, ruff check passes"
       ],
       "priority": 9,
-      "passes": false,
+      "passes": true,
       "notes": "Binance will ban IPs that exceed rate limits. This is critical for live trading."
     },
     {

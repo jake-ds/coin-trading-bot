@@ -30,6 +30,9 @@ Started: 2026-02-22
 - **Recharts**: Use `recharts` for React charts. Tooltip formatters need `any` types due to recharts TS limitations.
 - **Strategy stats**: `StrategyStats.to_dict()` includes `disabled_reason` and `pnl_history` (last 50 trade PnLs).
 - **Toggle with positions**: `/api/strategies/{name}/toggle` checks for open positions; use `?force=true` to bypass.
+- **Rate limiter**: Token bucket in `bot.exchanges.rate_limiter.RateLimiter`. Per-exchange defaults in `DEFAULT_EXCHANGE_LIMITS`. `ResilientExchange` applies rate limiter BEFORE circuit breaker.
+- **Rate limit config**: `rate_limit_enabled` (default True) and `exchange_rate_limits` (dict of per-exchange overrides) in Settings.
+- **Rate limit metrics**: `RateLimitMetrics` dataclass tracks total_requests, throttled_requests, avg_wait_ms, current_rps. Exposed via `/api/status` in `rate_limits` field.
 
 ---
 
@@ -330,4 +333,46 @@ Started: 2026-02-22
   - Test factory `_make_settings(config_file="__nonexistent__")` prevents YAML override from test environment
   - PUT endpoint rejects entire request if any field is unsafe (atomic — no partial apply)
   - Test count baseline: 1646 passing as of V4-008
+---
+
+## 2026-02-22 - V4-009
+- Added exchange rate limiter with token bucket algorithm
+- Files created:
+  - src/bot/exchanges/rate_limiter.py (RateLimiter class with token bucket, RateLimitMetrics, DEFAULT_EXCHANGE_LIMITS)
+  - tests/exchanges/test_rate_limiter.py (31 tests)
+- Files modified:
+  - src/bot/config.py:
+    - Added `rate_limit_enabled` (default True) and `exchange_rate_limits` (dict) settings
+    - Added SETTINGS_METADATA entries for rate_limit_enabled (safe) and exchange_rate_limits (unsafe)
+  - src/bot/execution/resilient.py:
+    - Added rate_limiter and rate_limit_enabled parameters to ResilientExchange
+    - Rate limiter applied BEFORE circuit breaker in _call_with_breaker()
+    - Auto-creates per-exchange rate limiter from DEFAULT_EXCHANGE_LIMITS when enabled
+    - Exposed rate_limiter property
+  - src/bot/exchanges/__init__.py:
+    - Added RateLimiter to exports
+  - src/bot/main.py:
+    - Added _create_rate_limiter() method to create rate limiters from config overrides
+    - Pass rate_limiter and rate_limit_enabled to ResilientExchange in _init_exchanges()
+    - Collect rate limiter metrics from exchanges and publish to dashboard state
+  - src/bot/dashboard/app.py:
+    - GET /api/status now includes rate_limits field when available
+- Features:
+  - Token bucket algorithm: refills at max_requests_per_second rate, allows burst_size concurrent requests
+  - async acquire(): waits if no tokens available, never exceeds rate
+  - Per-exchange rate limits: Binance (20 rps, 40 burst), Upbit (10 rps, 20 burst)
+  - Config overrides via exchange_rate_limits dict for custom per-exchange limits
+  - RateLimitMetrics: tracks total_requests, throttled_requests, avg_wait_ms, current_rps
+  - Rate limit data exposed in GET /api/status response
+  - rate_limit_enabled is hot-reloadable (safe setting)
+  - All existing tests pass — ResilientExchange constructor uses default rate_limit_enabled=True with backward-compatible auto-creation
+- Tests: 1677 passing (1646 existing + 31 new — 1 pre-existing test_config failure), ruff clean
+- **Learnings for future iterations:**
+  - Rate limiter must be applied BEFORE circuit breaker — throttled waits should not trip the breaker
+  - ResilientExchange new params (rate_limiter, rate_limit_enabled) have defaults that preserve backward compatibility
+  - DEFAULT_EXCHANGE_LIMITS provides exchange-specific defaults without requiring config
+  - Token bucket refill uses time.monotonic() for precision
+  - asyncio.Lock ensures token accounting is thread-safe for concurrent coroutines
+  - Dashboard state uses `rate_limits=None` when not configured to avoid cluttering /api/status response
+  - Test count baseline: 1677 passing as of V4-009
 ---

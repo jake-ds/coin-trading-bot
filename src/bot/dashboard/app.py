@@ -265,11 +265,16 @@ app.include_router(auth_router)
 @api_router.get("/status")
 async def get_status():
     """Get bot status."""
-    return {
+    result = {
         "status": _bot_state["status"],
         "started_at": _bot_state["started_at"],
         "cycle_metrics": _bot_state["cycle_metrics"],
     }
+    # Include rate limit info if available
+    rate_limits = _bot_state.get("rate_limits")
+    if rate_limits:
+        result["rate_limits"] = rate_limits
+    return result
 
 
 @api_router.get("/trades")

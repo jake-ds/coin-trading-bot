@@ -116,6 +116,10 @@ class Settings(BaseSettings):
     validation_max_drawdown_pct: float = Field(default=15.0, ge=0, le=100)
     validation_min_trades: int = Field(default=10, ge=1)
 
+    # Rate limiting
+    rate_limit_enabled: bool = True
+    exchange_rate_limits: dict[str, dict[str, float]] = Field(default_factory=dict)
+
     # WebSocket feed
     websocket_enabled: bool = False
     websocket_poll_interval: float = Field(default=5.0, gt=0)
@@ -257,6 +261,19 @@ SETTINGS_METADATA: dict[str, dict[str, Any]] = {
         "section": "Exchange",
         "description": "Upbit secret key",
         "type": "secret",
+        "requires_restart": True,
+    },
+    # Rate limiting (safe)
+    "rate_limit_enabled": {
+        "section": "Exchange",
+        "description": "Enable API rate limiting",
+        "type": "bool",
+        "requires_restart": False,
+    },
+    "exchange_rate_limits": {
+        "section": "Exchange",
+        "description": "Per-exchange rate limit overrides (JSON)",
+        "type": "dict",
         "requires_restart": True,
     },
     # Database (unsafe)
