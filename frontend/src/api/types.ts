@@ -267,6 +267,14 @@ export interface EngineActionResponse {
   action: string
 }
 
+export interface EngineDecisionStep {
+  label: string
+  observation: string
+  threshold: string
+  result: string
+  category: 'evaluate' | 'decide' | 'execute' | 'skip'
+}
+
 export interface EngineCycleLogEntry {
   engine_name: string
   cycle_num: number
@@ -277,6 +285,7 @@ export interface EngineCycleLogEntry {
   signals: Record<string, unknown>[]
   pnl_update: number
   metadata: Record<string, unknown>
+  decisions: EngineDecisionStep[]
 }
 
 export interface EngineCycleLogResponse {

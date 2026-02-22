@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 
 export interface WebSocketMessage {
-  type: 'status_update' | 'trade' | 'position_change' | 'alert'
+  type: 'status_update' | 'trade' | 'position_change' | 'alert' | 'engine_cycle'
   payload: Record<string, unknown>
 }
 

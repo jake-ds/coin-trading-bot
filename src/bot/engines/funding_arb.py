@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any
 
 import structlog
 
-from bot.engines.base import BaseEngine, EngineCycleResult
+from bot.engines.base import BaseEngine, DecisionStep, EngineCycleResult
 
 if TYPE_CHECKING:
     from bot.config import Settings
@@ -73,43 +73,76 @@ class FundingRateArbEngine(BaseEngine):
         cycle_start = datetime.now(timezone.utc)
         actions: list[dict] = []
         signals: list[dict] = []
+        decisions: list[DecisionStep] = []
         pnl_update = 0.0
 
         for symbol in self._symbols:
             rate_info = await self._fetch_funding_rate(symbol)
             if rate_info is None:
+                decisions.append(DecisionStep(
+                    label=f"{symbol} 펀딩비 조회",
+                    observation="데이터 없음 (거래소 응답 실패)",
+                    threshold="N/A",
+                    result="SKIP - 데이터 없음",
+                    category="skip",
+                ))
                 continue
 
             funding_rate = rate_info.get("funding_rate", 0)
             spread_pct = rate_info.get("spread_pct", 0)
+            ann_pct = funding_rate * 3 * 365 * 100
 
             signals.append({
                 "symbol": symbol,
                 "funding_rate": funding_rate,
                 "spread_pct": spread_pct,
-                "annualised_pct": funding_rate * 3 * 365 * 100,
+                "annualised_pct": ann_pct,
             })
+
+            decisions.append(DecisionStep(
+                label=f"{symbol} 펀딩비 체크",
+                observation=(
+                    f"펀딩비 {funding_rate:.6f} ({ann_pct:.1f}% 연환산), "
+                    f"스프레드 {spread_pct:.4f}%"
+                ),
+                threshold=(
+                    f"진입: rate >= {self._min_funding_rate}, "
+                    f"spread <= {self._max_spread_pct}% | "
+                    f"청산: rate < {self._exit_funding_rate} "
+                    f"or spread > {self._max_spread_pct * 2}%"
+                ),
+                result="",  # filled below
+                category="evaluate",
+            ))
 
             # Check if we should close existing position
             if symbol in self._positions:
                 if self._should_close(funding_rate, spread_pct):
                     pnl = await self._close_position(symbol)
                     pnl_update += pnl
+                    reason = (
+                        "rate_below_exit"
+                        if funding_rate < self._exit_funding_rate
+                        else "spread_too_wide"
+                    )
                     actions.append({
                         "action": "close",
                         "symbol": symbol,
-                        "reason": (
-                            "rate_below_exit"
-                            if funding_rate < self._exit_funding_rate
-                            else "spread_too_wide"
-                        ),
+                        "reason": reason,
                         "pnl": pnl,
                     })
+                    decisions[-1].result = f"CLOSE - {reason}, PnL: {pnl:.4f}"
+                    decisions[-1].category = "execute"
+                else:
+                    decisions[-1].result = "HOLD - 기존 포지션 유지"
+                    decisions[-1].category = "decide"
                 continue
 
             # Check if we should open a new position
             if self._should_open(funding_rate, spread_pct):
                 if not self._has_capacity():
+                    decisions[-1].result = "SKIP - 기준 충족이나 포지션 한도 초과"
+                    decisions[-1].category = "skip"
                     continue
                 opened = await self._open_position(symbol, rate_info)
                 if opened:
@@ -117,8 +150,16 @@ class FundingRateArbEngine(BaseEngine):
                         "action": "open",
                         "symbol": symbol,
                         "funding_rate": funding_rate,
-                        "annualised_pct": funding_rate * 3 * 365 * 100,
+                        "annualised_pct": ann_pct,
                     })
+                    decisions[-1].result = "OPEN - 기준 충족, 델타중립 포지션 오픈"
+                    decisions[-1].category = "execute"
+                else:
+                    decisions[-1].result = "SKIP - 포지션 오픈 실패"
+                    decisions[-1].category = "skip"
+            else:
+                decisions[-1].result = "SKIP - 진입 기준 미달"
+                decisions[-1].category = "skip"
 
         return EngineCycleResult(
             engine_name=self.name,
@@ -133,6 +174,7 @@ class FundingRateArbEngine(BaseEngine):
                 "symbols_monitored": len(self._symbols),
                 "open_positions": len(self._positions),
             },
+            decisions=decisions,
         )
 
     # ------------------------------------------------------------------

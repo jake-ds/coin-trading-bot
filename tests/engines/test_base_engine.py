@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from bot.engines.base import BaseEngine, EngineCycleResult, EngineStatus
+from bot.engines.base import BaseEngine, DecisionStep, EngineCycleResult, EngineStatus
 from bot.engines.portfolio_manager import PortfolioManager
 
 
@@ -198,3 +198,161 @@ class TestBaseEngine:
         await engine.run()
         # Engine should have recorded the error message
         assert engine.error_message == "test error"
+
+    @pytest.mark.asyncio
+    async def test_on_cycle_complete_callback(self, pm):
+        """on_cycle_complete callback is invoked after each successful cycle."""
+        captured = []
+
+        async def callback(result):
+            captured.append(result)
+
+        results = [
+            EngineCycleResult(
+                engine_name="dummy",
+                cycle_num=1,
+                timestamp="2026-01-01T00:00:00Z",
+                duration_ms=10.0,
+            )
+        ]
+        engine = DummyEngine(pm, cycle_results=results, loop_interval=0.01)
+        engine.set_on_cycle_complete(callback)
+
+        async def stop_after():
+            await asyncio.sleep(0.05)
+            engine._running = False
+
+        asyncio.create_task(stop_after())
+        await engine.run()
+
+        assert len(captured) >= 1
+        assert captured[0].engine_name == "dummy"
+
+    @pytest.mark.asyncio
+    async def test_on_cycle_complete_sync_callback(self, pm):
+        """Sync callbacks are also supported."""
+        captured = []
+
+        def callback(result):
+            captured.append(result)
+
+        results = [
+            EngineCycleResult(
+                engine_name="dummy",
+                cycle_num=1,
+                timestamp="2026-01-01T00:00:00Z",
+                duration_ms=10.0,
+            )
+        ]
+        engine = DummyEngine(pm, cycle_results=results, loop_interval=0.01)
+        engine.set_on_cycle_complete(callback)
+
+        async def stop_after():
+            await asyncio.sleep(0.05)
+            engine._running = False
+
+        asyncio.create_task(stop_after())
+        await engine.run()
+
+        assert len(captured) >= 1
+
+    @pytest.mark.asyncio
+    async def test_on_cycle_complete_error_does_not_crash(self, pm):
+        """Callback errors are swallowed and don't crash the engine."""
+
+        async def bad_callback(result):
+            raise RuntimeError("callback boom")
+
+        results = [
+            EngineCycleResult(
+                engine_name="dummy",
+                cycle_num=1,
+                timestamp="2026-01-01T00:00:00Z",
+                duration_ms=10.0,
+            )
+        ]
+        engine = DummyEngine(pm, cycle_results=results, loop_interval=0.01)
+        engine.set_on_cycle_complete(bad_callback)
+
+        async def stop_after():
+            await asyncio.sleep(0.05)
+            engine._running = False
+
+        asyncio.create_task(stop_after())
+        await engine.run()
+        # Engine should still have completed cycles despite callback error
+        assert engine.cycle_count >= 1
+
+
+class TestDecisionStep:
+    def test_to_dict(self):
+        step = DecisionStep(
+            label="BTC/USDT 펀딩비 체크",
+            observation="펀딩비 0.0004",
+            threshold="rate >= 0.0003",
+            result="OPEN - 기준 충족",
+            category="execute",
+        )
+        d = step.to_dict()
+        assert d["label"] == "BTC/USDT 펀딩비 체크"
+        assert d["observation"] == "펀딩비 0.0004"
+        assert d["threshold"] == "rate >= 0.0003"
+        assert d["result"] == "OPEN - 기준 충족"
+        assert d["category"] == "execute"
+
+    def test_default_category(self):
+        step = DecisionStep(
+            label="test",
+            observation="obs",
+            threshold="thr",
+            result="res",
+        )
+        assert step.category == "evaluate"
+
+
+class TestEngineCycleResultToDict:
+    def test_to_dict_without_decisions(self):
+        r = EngineCycleResult(
+            engine_name="test",
+            cycle_num=1,
+            timestamp="2026-01-01T00:00:00Z",
+            duration_ms=50.0,
+            pnl_update=1.5,
+        )
+        d = r.to_dict()
+        assert d["engine_name"] == "test"
+        assert d["cycle_num"] == 1
+        assert d["duration_ms"] == 50.0
+        assert d["pnl_update"] == 1.5
+        assert d["decisions"] == []
+
+    def test_to_dict_with_decisions(self):
+        steps = [
+            DecisionStep(
+                label="step1",
+                observation="obs1",
+                threshold="thr1",
+                result="res1",
+                category="execute",
+            ),
+            DecisionStep(
+                label="step2",
+                observation="obs2",
+                threshold="thr2",
+                result="res2",
+                category="skip",
+            ),
+        ]
+        r = EngineCycleResult(
+            engine_name="test",
+            cycle_num=2,
+            timestamp="2026-01-01T00:00:00Z",
+            duration_ms=30.0,
+            decisions=steps,
+        )
+        d = r.to_dict()
+        assert len(d["decisions"]) == 2
+        assert d["decisions"][0]["category"] == "execute"
+        assert d["decisions"][1]["category"] == "skip"
+        # Verify decisions are dicts, not dataclass instances
+        assert isinstance(d["decisions"][0], dict)

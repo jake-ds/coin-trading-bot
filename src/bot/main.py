@@ -12,6 +12,7 @@ import structlog
 from bot.config import Settings, TradingMode, load_settings
 from bot.dashboard import app as dashboard_module
 from bot.dashboard.app import broadcast_state_update, broadcast_trade
+from bot.dashboard.websocket import ws_manager
 from bot.data.collector import DataCollector
 from bot.data.order_book import OrderBookAnalyzer
 from bot.data.store import DataStore
@@ -519,6 +520,18 @@ class TradingBot:
             self._engine_manager.register(engine)
         except ImportError:
             logger.debug("stat_arb_engine_not_available")
+
+        # Register cycle-complete callback for WebSocket broadcast
+        async def _broadcast_engine_cycle(result):
+            try:
+                await ws_manager.broadcast(
+                    {"type": "engine_cycle", "payload": result.to_dict()}
+                )
+            except Exception:
+                logger.debug("engine_cycle_broadcast_error", exc_info=True)
+
+        for engine in self._engine_manager.engines.values():
+            engine.set_on_cycle_complete(_broadcast_engine_cycle)
 
         logger.info(
             "engine_mode_initialized",

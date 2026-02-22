@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import { Link } from 'react-router-dom'
 import apiClient from '../api/client'
 import type { EngineInfo, EnginesResponse } from '../api/types'
 
@@ -138,7 +139,13 @@ function Engines() {
                 </div>
               )}
 
-              <div className="flex gap-2">
+              <div className="flex gap-2 items-center">
+                <Link
+                  to={`/engines/${engine.name}`}
+                  className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded text-sm text-gray-200"
+                >
+                  View Details
+                </Link>
                 {engine.status === 'stopped' && (
                   <button
                     className="px-3 py-1.5 bg-green-600 hover:bg-green-500 rounded text-sm disabled:opacity-50"

@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 
 import structlog
 
-from bot.engines.base import BaseEngine, EngineCycleResult
+from bot.engines.base import BaseEngine, DecisionStep, EngineCycleResult
 
 if TYPE_CHECKING:
     from bot.config import Settings
@@ -86,11 +86,19 @@ class GridTradingEngine(BaseEngine):
         cycle_start = datetime.now(timezone.utc)
         actions: list[dict] = []
         signals: list[dict] = []
+        decisions: list[DecisionStep] = []
         pnl_update = 0.0
 
         for symbol in self._symbols:
             price = await self._get_current_price(symbol)
             if price is None or price <= 0:
+                decisions.append(DecisionStep(
+                    label=f"{symbol} 가격 조회",
+                    observation="가격 데이터 없음",
+                    threshold="N/A",
+                    result="SKIP - 가격 조회 실패",
+                    category="skip",
+                ))
                 continue
 
             self._last_prices[symbol] = price
@@ -105,11 +113,38 @@ class GridTradingEngine(BaseEngine):
                     "center_price": price,
                     "levels": len(self._grids[symbol]),
                 })
+                decisions.append(DecisionStep(
+                    label=f"{symbol} 그리드 초기화",
+                    observation=f"현재가 ${price:,.2f}, 그리드 없음",
+                    threshold=f"간격 {self._grid_spacing_pct}%, 레벨 {self._grid_levels_count}개",
+                    result=f"INIT - {len(self._grids[symbol])}개 레벨 생성",
+                    category="execute",
+                ))
 
             # Check for fills and react
             grid_actions, grid_pnl = self._check_fills(symbol, price)
             actions.extend(grid_actions)
             pnl_update += grid_pnl
+
+            grid = self._grids.get(symbol, [])
+            filled_count = sum(1 for lvl in grid if lvl.filled)
+            buy_fills = sum(1 for a in grid_actions if a.get("action") == "grid_buy_filled")
+            sell_fills = sum(1 for a in grid_actions if a.get("action") == "grid_sell_filled")
+
+            decisions.append(DecisionStep(
+                label=f"{symbol} 그리드 체크",
+                observation=(
+                    f"현재가 ${price:,.2f}, "
+                    f"그리드 {len(grid)}개 레벨 ({filled_count}개 체결됨)"
+                ),
+                threshold=f"간격 {self._grid_spacing_pct}%",
+                result=(
+                    f"FILL - 매수 {buy_fills}건, 매도 {sell_fills}건, PnL: {grid_pnl:.4f}"
+                    if buy_fills or sell_fills
+                    else "HOLD - 체결 없음"
+                ),
+                category="execute" if buy_fills or sell_fills else "evaluate",
+            ))
 
             # Check if price is outside the grid range — reset
             if self._is_outside_range(symbol, price):
@@ -120,6 +155,13 @@ class GridTradingEngine(BaseEngine):
                     "new_center": price,
                     "reason": "price_outside_range",
                 })
+                decisions.append(DecisionStep(
+                    label=f"{symbol} 범위 이탈 체크",
+                    observation=f"현재가 ${price:,.2f}가 그리드 범위 밖",
+                    threshold="가격이 그리드 최소/최대 범위 이내",
+                    result=f"RESET - 새 중심가 ${price:,.2f}로 그리드 재설정",
+                    category="execute",
+                ))
 
         return EngineCycleResult(
             engine_name=self.name,
@@ -136,6 +178,7 @@ class GridTradingEngine(BaseEngine):
             metadata={
                 "total_grid_levels": sum(len(g) for g in self._grids.values()),
             },
+            decisions=decisions,
         )
 
     # ------------------------------------------------------------------
