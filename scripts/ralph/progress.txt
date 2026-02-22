@@ -105,3 +105,33 @@ Started: 2026-02-22
 - **Learnings for future iterations:**
   - Test count baseline: 1396 tests passing as of V3-010
 ---
+
+## 2026-02-22 - V3-011
+- Created src/bot/strategies/quant/volatility_breakout.py with VolatilityBreakoutStrategy
+  - GARCH-based volatility breakout: BUY/SELL when realized vol >> forecasted vol
+  - Direction determined by sign of recent returns (positive = BUY, negative = SELL)
+  - Dynamic stop-loss from GARCH forecast included in metadata
+  - Confidence capped at 1.0, scaled by vol_ratio / (2 * breakout_multiplier)
+  - Graceful fallback to HOLD on GARCH fit failure or insufficient data
+- Created tests/strategies/quant/test_volatility_breakout.py (14 tests)
+- Tests: 1410 passing (1396 + 14 new)
+- **Learnings for future iterations:**
+  - Near-constant data causes GARCH to fail gracefully (DataScaleWarning) — good for testing fallback path
+  - Test count baseline: 1410 tests passing as of V3-011
+---
+
+## 2026-02-22 - V3-012
+- Created src/bot/strategies/quant/triangular_arb.py with TriangularArbStrategy
+  - Graph-based triangular arbitrage detecting 3-leg cycles across currency pairs
+  - Builds directed graph from ticker bid/ask prices (quote->base buy, base->quote sell)
+  - Searches all combinations of base_currencies for profitable 3-node cycles
+  - Net profit accounts for 3x taker fees: (1 - fee_rate)^3
+  - BUY signal when net profit > min_profit_pct, HOLD otherwise
+  - Confidence scaled by profit_pct / (min_profit_pct * 5), capped at 1.0
+- Created tests/strategies/quant/test_triangular_arb.py (17 tests)
+- Tests: 1427 passing (1410 + 17 new)
+- **Learnings for future iterations:**
+  - Triangular arb needs carefully constructed test tickers to guarantee arb exists (use bid=ask for simplicity)
+  - Pairs that don't form a triangle (e.g., all X/USDT) correctly return no cycle
+  - Test count baseline: 1427 tests passing as of V3-012
+---
