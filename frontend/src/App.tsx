@@ -4,6 +4,7 @@ import Dashboard from './pages/Dashboard'
 import Trades from './pages/Trades'
 import Positions from './pages/Positions'
 import Strategies from './pages/Strategies'
+import Analytics from './pages/Analytics'
 import Settings from './pages/Settings'
 import Login from './pages/Login'
 import ConnectionIndicator from './components/common/ConnectionIndicator'
@@ -16,6 +17,7 @@ const navItems = [
   { path: '/positions', label: 'Positions' },
   { path: '/trades', label: 'Trades' },
   { path: '/strategies', label: 'Strategies' },
+  { path: '/analytics', label: 'Analytics' },
   { path: '/settings', label: 'Settings' },
 ]
 
@@ -86,6 +88,7 @@ function App() {
           <Route path="/positions" element={<Positions />} />
           <Route path="/trades" element={<Trades />} />
           <Route path="/strategies" element={<Strategies />} />
+          <Route path="/analytics" element={<Analytics />} />
           <Route path="/settings" element={<Settings />} />
         </Routes>
       </main>

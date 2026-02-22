@@ -2,8 +2,9 @@
 
 import asyncio
 import html
+import math
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import structlog
@@ -172,6 +173,42 @@ async def get_open_positions():
 async def get_regime():
     """Get current market regime."""
     return {"regime": _bot_state["regime"]}
+
+
+@api_router.get("/analytics")
+async def get_analytics(
+    range: str = Query("all", description="Date range: 7d, 30d, 90d, all"),
+):
+    """Get performance analytics: equity curve, drawdown, monthly returns, stats."""
+    equity_curve = _bot_state.get("equity_curve", [])
+    trades = _bot_state.get("trades", [])
+    metrics = _bot_state.get("metrics", {})
+
+    # Filter by date range
+    filtered_curve = _filter_by_range(equity_curve, range)
+    filtered_trades = _filter_by_range(trades, range)
+
+    # Compute drawdown series from equity curve
+    drawdown_series = _compute_drawdown_series(filtered_curve)
+
+    # Map trade markers to equity curve
+    trade_markers = _compute_trade_markers(filtered_trades, filtered_curve)
+
+    # Compute monthly returns
+    monthly_returns = _compute_monthly_returns(equity_curve)
+
+    # Compute extended stats from trade PnLs
+    trade_pnls = [t.get("pnl", 0) for t in trades if "pnl" in t]
+    stats = _compute_analytics_stats(metrics, trade_pnls)
+
+    return {
+        "equity_curve": filtered_curve,
+        "drawdown": drawdown_series,
+        "trade_markers": trade_markers,
+        "monthly_returns": monthly_returns,
+        "stats": stats,
+        "range": range,
+    }
 
 
 @api_router.get("/quant/risk-metrics")
@@ -834,3 +871,166 @@ def _build_strategies_list_html(strategy_stats: dict) -> str:
         )
 
     return "\n".join(items)
+
+
+# ---------------------------------------------------------------------------
+# Analytics helper functions
+# ---------------------------------------------------------------------------
+
+
+def _filter_by_range(data: list[dict], range_str: str) -> list[dict]:
+    """Filter a list of dicts with 'timestamp' by date range."""
+    if range_str == "all" or not data:
+        return data
+
+    days_map = {"7d": 7, "30d": 30, "90d": 90}
+    days = days_map.get(range_str)
+    if days is None:
+        return data
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    cutoff_str = cutoff.isoformat()
+
+    filtered = []
+    for item in data:
+        ts = item.get("timestamp", "")
+        if ts >= cutoff_str:
+            filtered.append(item)
+    return filtered
+
+
+def _compute_drawdown_series(equity_curve: list[dict]) -> list[dict]:
+    """Compute drawdown percentage series from equity curve."""
+    if not equity_curve:
+        return []
+
+    series = []
+    peak = 0.0
+    for point in equity_curve:
+        value = point.get("total_value", 0)
+        if value > peak:
+            peak = value
+        dd_pct = ((peak - value) / peak * 100) if peak > 0 else 0.0
+        series.append({
+            "timestamp": point.get("timestamp", ""),
+            "drawdown_pct": round(dd_pct, 2),
+        })
+    return series
+
+
+def _compute_trade_markers(
+    trades: list[dict], equity_curve: list[dict]
+) -> list[dict]:
+    """Map trades to equity curve positions for chart overlay."""
+    if not trades or not equity_curve:
+        return []
+
+    eq_timestamps = [p.get("timestamp", "") for p in equity_curve]
+    markers = []
+
+    for trade in trades:
+        trade_ts = str(trade.get("timestamp", ""))
+        side = str(trade.get("side", "")).upper()
+        if side not in ("BUY", "SELL"):
+            continue
+
+        best_idx = _find_closest_index(trade_ts, eq_timestamps)
+        if best_idx is not None and best_idx < len(equity_curve):
+            markers.append({
+                "timestamp": equity_curve[best_idx].get("timestamp", ""),
+                "value": equity_curve[best_idx].get("total_value", 0),
+                "side": side,
+                "symbol": trade.get("symbol", ""),
+                "price": trade.get("price", 0),
+            })
+
+    return markers
+
+
+def _compute_monthly_returns(equity_curve: list[dict]) -> list[dict]:
+    """Compute monthly return percentages from equity curve."""
+    if len(equity_curve) < 2:
+        return []
+
+    # Group equity curve by year-month, take first and last value per month
+    monthly: dict[str, dict] = {}
+    for point in equity_curve:
+        ts = point.get("timestamp", "")
+        value = point.get("total_value", 0)
+        # Extract YYYY-MM from ISO timestamp
+        month_key = ts[:7] if len(ts) >= 7 else ""
+        if not month_key:
+            continue
+        if month_key not in monthly:
+            monthly[month_key] = {"first": value, "last": value}
+        else:
+            monthly[month_key]["last"] = value
+
+    results = []
+    for month_key in sorted(monthly.keys()):
+        data = monthly[month_key]
+        first_val = data["first"]
+        last_val = data["last"]
+        ret_pct = (
+            ((last_val - first_val) / first_val * 100) if first_val > 0 else 0.0
+        )
+        results.append({
+            "month": month_key,
+            "return_pct": round(ret_pct, 2),
+        })
+
+    return results
+
+
+def _compute_analytics_stats(
+    metrics: dict, trade_pnls: list[float]
+) -> dict:
+    """Compute extended analytics stats including Sortino ratio."""
+    sharpe = metrics.get("sharpe_ratio", 0.0)
+    max_dd = metrics.get("max_drawdown_pct", 0.0)
+    win_rate = metrics.get("win_rate", 0.0)
+    total_return = metrics.get("total_return_pct", 0.0)
+    total_trades = metrics.get("total_trades", 0)
+    winning_trades = metrics.get("winning_trades", 0)
+    losing_trades = metrics.get("losing_trades", 0)
+
+    # Profit factor
+    gross_profit = sum(p for p in trade_pnls if p > 0)
+    gross_loss = abs(sum(p for p in trade_pnls if p < 0))
+    profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else 0.0
+
+    # Average trade PnL
+    avg_trade_pnl = (
+        sum(trade_pnls) / len(trade_pnls) if trade_pnls else 0.0
+    )
+
+    # Best and worst trade
+    best_trade = max(trade_pnls) if trade_pnls else 0.0
+    worst_trade = min(trade_pnls) if trade_pnls else 0.0
+
+    # Sortino ratio (uses only downside deviation)
+    sortino = 0.0
+    if len(trade_pnls) > 1:
+        mean_return = sum(trade_pnls) / len(trade_pnls)
+        downside_returns = [r for r in trade_pnls if r < 0]
+        if downside_returns:
+            downside_sq = sum(r ** 2 for r in downside_returns) / len(trade_pnls)
+            downside_dev = math.sqrt(downside_sq)
+            sortino = (
+                mean_return / downside_dev if downside_dev > 0 else 0.0
+            )
+
+    return {
+        "sharpe_ratio": round(sharpe, 4),
+        "sortino_ratio": round(sortino, 4),
+        "max_drawdown_pct": round(max_dd, 2),
+        "profit_factor": round(profit_factor, 2),
+        "avg_trade_pnl": round(avg_trade_pnl, 2),
+        "best_trade": round(best_trade, 2),
+        "worst_trade": round(worst_trade, 2),
+        "total_return_pct": round(total_return, 2),
+        "total_trades": total_trades,
+        "winning_trades": winning_trades,
+        "losing_trades": losing_trades,
+        "win_rate": round(win_rate, 2),
+    }

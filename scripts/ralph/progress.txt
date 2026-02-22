@@ -196,3 +196,41 @@ Started: 2026-02-22
   - Open positions check uses `strategy` field on position dicts — positions without `strategy` field won't match
   - Test count baseline: 1552 tests passing as of V4-005
 ---
+
+## 2026-02-22 - V4-006
+- Built equity curve and performance analytics page with interactive charts
+- Files created:
+  - frontend/src/pages/Analytics.tsx (full analytics page with equity curve, drawdown, monthly heatmap, stats sidebar)
+  - tests/dashboard/test_v4_006_analytics.py (26 tests)
+- Files modified:
+  - src/bot/dashboard/app.py:
+    - Added GET /api/analytics endpoint with date range filtering (7d, 30d, 90d, all)
+    - Returns equity_curve, drawdown series, trade_markers, monthly_returns, and stats
+    - Computes Sortino ratio, profit factor, avg/best/worst trade PnL from trade history
+    - Added helper functions: _filter_by_range, _compute_drawdown_series, _compute_trade_markers, _compute_monthly_returns, _compute_analytics_stats
+  - frontend/src/api/types.ts:
+    - Added AnalyticsResponse, EquityPoint, DrawdownPoint, TradeMarker, MonthlyReturn, AnalyticsStats interfaces
+  - frontend/src/App.tsx:
+    - Added Analytics nav item and /analytics route
+- Features:
+  - Interactive equity curve chart (recharts LineChart) with BUY/SELL markers (green/red ReferenceDots)
+  - Brush component for zoom/scroll on equity curve when > 20 data points
+  - Drawdown chart (recharts AreaChart) with red filled area, reversed Y-axis
+  - Monthly returns heatmap: grouped by year, color-coded cells (green=positive, red=negative, intensity scales with magnitude)
+  - Date range selector buttons (7d, 30d, 90d, All Time) with active state highlighting
+  - Key stats sidebar: Total Return, Sharpe, Sortino, Max Drawdown, Profit Factor, Win Rate, Total Trades, Avg/Best/Worst Trade
+  - Stats color-coded: green for positive, red for negative
+  - Loading skeleton states, error states, empty data states
+  - Data fetched on mount and on date range change (not WebSocket — historical data)
+  - Dark theme consistent with existing pages
+- Tests: 1578 passing (1552 existing + 26 new), ruff clean, frontend builds clean
+- **Learnings for future iterations:**
+  - recharts Tooltip `labelFormatter` requires `any` type due to ReactNode TS definition — same pattern as Strategies page
+  - `ReferenceDot` is the right recharts component for trade marker overlays (simpler than scatter datasets)
+  - `Brush` component provides free zoom/scroll — add it conditionally for large datasets
+  - AreaChart with `reversed` Y-axis domain works well for drawdown visualization
+  - Date range filtering uses simple ISO string comparison (lexicographic sort = chronological for ISO)
+  - Monthly returns computed by grouping equity curve by YYYY-MM and comparing first/last value per month
+  - Sortino ratio only uses downside deviation (negative returns), unlike Sharpe which uses total std dev
+  - Test count baseline: 1578 tests passing as of V4-006
+---

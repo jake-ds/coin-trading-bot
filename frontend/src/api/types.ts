@@ -87,6 +87,53 @@ export interface RegimeResponse {
   regime: string | null
 }
 
+export interface AnalyticsResponse {
+  equity_curve: EquityPoint[]
+  drawdown: DrawdownPoint[]
+  trade_markers: TradeMarker[]
+  monthly_returns: MonthlyReturn[]
+  stats: AnalyticsStats
+  range: string
+}
+
+export interface EquityPoint {
+  timestamp: string
+  total_value: number
+}
+
+export interface DrawdownPoint {
+  timestamp: string
+  drawdown_pct: number
+}
+
+export interface TradeMarker {
+  timestamp: string
+  value: number
+  side: 'BUY' | 'SELL'
+  symbol: string
+  price: number
+}
+
+export interface MonthlyReturn {
+  month: string
+  return_pct: number
+}
+
+export interface AnalyticsStats {
+  sharpe_ratio: number
+  sortino_ratio: number
+  max_drawdown_pct: number
+  profit_factor: number
+  avg_trade_pnl: number
+  best_trade: number
+  worst_trade: number
+  total_return_pct: number
+  total_trades: number
+  winning_trades: number
+  losing_trades: number
+  win_rate: number
+}
+
 export interface WsStatusPayload {
   status: string
   started_at: string | null
