@@ -741,6 +741,136 @@ app.include_router(api_router)
 
 
 # ---------------------------------------------------------------------------
+# Engine management endpoints (under /api/engines)
+# ---------------------------------------------------------------------------
+
+# Reference to EngineManager — set by main.py via set_engine_manager()
+_engine_manager = None
+
+
+def set_engine_manager(manager) -> None:
+    """Set the EngineManager reference for engine control endpoints."""
+    global _engine_manager
+    _engine_manager = manager
+
+
+def get_engine_manager():
+    """Get the current EngineManager reference."""
+    return _engine_manager
+
+
+engine_router = APIRouter(
+    prefix="/api/engines", dependencies=[Depends(require_auth_strict)]
+)
+
+
+@engine_router.get("")
+async def list_engines():
+    """List all engines with status."""
+    if _engine_manager is None:
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "Engine mode not enabled"},
+        )
+    return _engine_manager.get_status()
+
+
+@engine_router.post("/{name}/start")
+async def start_engine(name: str):
+    """Start a specific engine."""
+    if _engine_manager is None:
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "Engine mode not enabled"},
+        )
+    success = await _engine_manager.start_engine(name)
+    if not success:
+        return JSONResponse(
+            status_code=404,
+            content={"detail": f"Engine '{name}' not found or already running"},
+        )
+    return {"success": True, "engine": name, "action": "started"}
+
+
+@engine_router.post("/{name}/stop")
+async def stop_engine(name: str):
+    """Stop a specific engine."""
+    if _engine_manager is None:
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "Engine mode not enabled"},
+        )
+    success = await _engine_manager.stop_engine(name)
+    if not success:
+        return JSONResponse(
+            status_code=404,
+            content={"detail": f"Engine '{name}' not found"},
+        )
+    return {"success": True, "engine": name, "action": "stopped"}
+
+
+@engine_router.post("/{name}/pause")
+async def pause_engine(name: str):
+    """Pause a specific engine."""
+    if _engine_manager is None:
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "Engine mode not enabled"},
+        )
+    success = await _engine_manager.pause_engine(name)
+    if not success:
+        return JSONResponse(
+            status_code=404,
+            content={"detail": f"Engine '{name}' not found"},
+        )
+    return {"success": True, "engine": name, "action": "paused"}
+
+
+@engine_router.post("/{name}/resume")
+async def resume_engine(name: str):
+    """Resume a paused engine."""
+    if _engine_manager is None:
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "Engine mode not enabled"},
+        )
+    success = await _engine_manager.resume_engine(name)
+    if not success:
+        return JSONResponse(
+            status_code=404,
+            content={"detail": f"Engine '{name}' not found"},
+        )
+    return {"success": True, "engine": name, "action": "resumed"}
+
+
+@engine_router.get("/{name}/cycle-log")
+async def engine_cycle_log(name: str):
+    """Get cycle log for a specific engine."""
+    if _engine_manager is None:
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "Engine mode not enabled"},
+        )
+    logs = _engine_manager.get_engine_cycle_log(name)
+    return {"engine": name, "cycle_log": logs}
+
+
+@engine_router.get("/{name}/positions")
+async def engine_positions(name: str):
+    """Get current positions for a specific engine."""
+    if _engine_manager is None:
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "Engine mode not enabled"},
+        )
+    positions = _engine_manager.get_engine_positions(name)
+    return {"engine": name, "positions": positions}
+
+
+app.include_router(engine_router)
+
+
+# ---------------------------------------------------------------------------
 # WebSocket endpoint (at /api/ws — registered directly on app)
 # ---------------------------------------------------------------------------
 

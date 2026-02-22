@@ -16,6 +16,8 @@ from bot.data.collector import DataCollector
 from bot.data.order_book import OrderBookAnalyzer
 from bot.data.store import DataStore
 from bot.data.websocket_feed import WebSocketFeed
+from bot.engines.manager import EngineManager
+from bot.engines.portfolio_manager import PortfolioManager
 from bot.exchanges.factory import ExchangeFactory
 from bot.exchanges.rate_limiter import DEFAULT_EXCHANGE_LIMITS, RateLimiter
 from bot.execution.engine import ExecutionEngine
@@ -73,6 +75,8 @@ class TradingBot:
         self._reconciler: PositionReconciler | None = None
         self._preflight_checker: PreFlightChecker | None = None
         self._audit_logger: AuditLogger = AuditLogger()
+        self._portfolio_mgr: PortfolioManager | None = None
+        self._engine_manager: EngineManager | None = None
         self._cycle_lock: asyncio.Lock = asyncio.Lock()
         self._cycle_count: int = 0
         self._total_cycle_duration: float = 0.0
@@ -213,8 +217,16 @@ class TradingBot:
         dashboard_module.set_trading_bot(self)
         dashboard_module.set_audit_logger(self._audit_logger)
 
+        # Connect engine manager to dashboard (if engine mode enabled)
+        if self._engine_manager:
+            dashboard_module.set_engine_manager(self._engine_manager)
+
         # Import strategies to trigger registration
         self._load_strategies()
+
+        # Initialize multi-engine system (if enabled)
+        if self._settings.engine_mode:
+            self._init_engine_mode()
 
         logger.info(
             "bot_initialized",
@@ -439,6 +451,120 @@ class TradingBot:
             "average_cycle_duration": round(avg_duration, 4),
             "last_cycle_time": self._last_cycle_time,
         }
+
+    def _init_engine_mode(self) -> None:
+        """Initialize the multi-engine portfolio manager and engine manager."""
+        capital = self._settings.engine_total_capital
+        if self._paper_portfolio:
+            capital = self._paper_portfolio.total_value
+
+        self._portfolio_mgr = PortfolioManager(
+            total_capital=capital,
+            engine_allocations=self._settings.engine_allocations,
+            max_drawdown_pct=self._settings.engine_max_drawdown_pct,
+        )
+        self._engine_manager = EngineManager(self._portfolio_mgr)
+
+        is_paper = self._settings.trading_mode == TradingMode.PAPER
+
+        # Register enabled engines
+        try:
+            from bot.engines.funding_arb import FundingRateArbEngine
+
+            engine = FundingRateArbEngine(
+                portfolio_manager=self._portfolio_mgr,
+                exchanges=self._exchanges,
+                paper_mode=is_paper,
+                settings=self._settings,
+            )
+            self._engine_manager.register(engine)
+        except ImportError:
+            logger.debug("funding_arb_engine_not_available")
+
+        try:
+            from bot.engines.grid_trading import GridTradingEngine
+
+            engine = GridTradingEngine(
+                portfolio_manager=self._portfolio_mgr,
+                exchanges=self._exchanges,
+                paper_mode=is_paper,
+                settings=self._settings,
+            )
+            self._engine_manager.register(engine)
+        except ImportError:
+            logger.debug("grid_trading_engine_not_available")
+
+        try:
+            from bot.engines.cross_exchange_arb import CrossExchangeArbEngine
+
+            engine = CrossExchangeArbEngine(
+                portfolio_manager=self._portfolio_mgr,
+                exchanges=self._exchanges,
+                paper_mode=is_paper,
+                settings=self._settings,
+            )
+            self._engine_manager.register(engine)
+        except ImportError:
+            logger.debug("cross_exchange_arb_engine_not_available")
+
+        try:
+            from bot.engines.stat_arb import StatisticalArbEngine
+
+            engine = StatisticalArbEngine(
+                portfolio_manager=self._portfolio_mgr,
+                exchanges=self._exchanges,
+                paper_mode=is_paper,
+                settings=self._settings,
+            )
+            self._engine_manager.register(engine)
+        except ImportError:
+            logger.debug("stat_arb_engine_not_available")
+
+        logger.info(
+            "engine_mode_initialized",
+            engines=list(self._engine_manager.engines.keys()),
+            total_capital=capital,
+        )
+
+    async def _run_engine_mode(self) -> None:
+        """Run the multi-engine system — each engine runs its own async loop."""
+        if not self._engine_manager:
+            logger.error("engine_manager_not_initialized")
+            return
+
+        self._running = True
+        logger.info("engine_mode_started")
+
+        await self._engine_manager.start_all()
+
+        try:
+            while self._running:
+                if self._emergency_stopped:
+                    await asyncio.sleep(1)
+                    continue
+
+                # Global drawdown check
+                if self._portfolio_mgr and self._portfolio_mgr.is_drawdown_breached():
+                    await self.emergency_stop(reason="global_drawdown_breached")
+                    continue
+
+                # Update dashboard with engine status
+                if self._engine_manager:
+                    engine_status = self._engine_manager.get_status()
+                    pm_summary = (
+                        self._portfolio_mgr.get_summary()
+                        if self._portfolio_mgr
+                        else {}
+                    )
+                    dashboard_module.update_state(
+                        status="running",
+                        engine_status=engine_status,
+                        portfolio_manager=pm_summary,
+                    )
+
+                await asyncio.sleep(5)  # Monitor loop interval
+        finally:
+            await self._engine_manager.stop_all()
 
     async def run_trading_loop(self) -> None:
         """Run the main trading loop."""
@@ -1797,6 +1923,8 @@ async def main(args: argparse.Namespace | None = None) -> None:
         if args and args.validate:
             duration_seconds = parse_duration(args.duration)
             await bot.run_validation(duration_seconds)
+        elif bot._settings.engine_mode:
+            await bot._run_engine_mode()
         else:
             await bot.run_trading_loop()
     finally:

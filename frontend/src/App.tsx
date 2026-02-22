@@ -7,6 +7,7 @@ import Strategies from './pages/Strategies'
 import Analytics from './pages/Analytics'
 import Settings from './pages/Settings'
 import CycleLog from './pages/CycleLog'
+import Engines from './pages/Engines'
 import Login from './pages/Login'
 import ConnectionIndicator from './components/common/ConnectionIndicator'
 import ProtectedRoute from './components/common/ProtectedRoute'
@@ -17,6 +18,7 @@ import type { Trade } from './api/types'
 
 const navItems = [
   { path: '/', label: 'Dashboard' },
+  { path: '/engines', label: 'Engines' },
   { path: '/positions', label: 'Positions' },
   { path: '/trades', label: 'Trades' },
   { path: '/strategies', label: 'Strategies' },
@@ -108,6 +110,7 @@ function App() {
         <main className="max-w-7xl mx-auto px-6 py-6">
           <Routes>
             <Route path="/" element={<Dashboard />} />
+            <Route path="/engines" element={<Engines />} />
             <Route path="/positions" element={<Positions />} />
             <Route path="/trades" element={<Trades />} />
             <Route path="/strategies" element={<Strategies />} />

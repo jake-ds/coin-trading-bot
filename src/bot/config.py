@@ -90,6 +90,65 @@ class Settings(BaseSettings):
     max_portfolio_heat: float = Field(default=0.15, gt=0)
     sector_map: dict[str, str] = Field(default_factory=dict)
 
+    # ── Multi-engine system ──
+    engine_mode: bool = False  # False = legacy ensemble, True = multi-engine
+    engine_total_capital: float = Field(default=10000.0, gt=0)
+    engine_max_drawdown_pct: float = Field(default=20.0, ge=0, le=100)
+    engine_allocations: dict[str, float] = Field(
+        default_factory=lambda: {
+            "funding_rate_arb": 0.30,
+            "grid_trading": 0.25,
+            "stat_arb": 0.20,
+            "cross_exchange_arb": 0.15,
+        }
+    )
+
+    # Binance Futures
+    binance_futures_api_key: str = ""
+    binance_futures_secret_key: str = ""
+    binance_futures_testnet: bool = True
+
+    # Funding rate arbitrage engine
+    funding_arb_min_rate: float = Field(default=0.0003, ge=0)
+    funding_arb_exit_rate: float = Field(default=0.0001, ge=0)
+    funding_arb_max_spread_pct: float = Field(default=0.5, ge=0)
+    funding_arb_max_positions: int = Field(default=3, ge=1)
+    funding_arb_leverage: int = Field(default=1, ge=1)
+    funding_arb_symbols: list[str] = Field(
+        default_factory=lambda: ["BTC/USDT", "ETH/USDT"]
+    )
+
+    # Grid trading engine
+    grid_levels: int = Field(default=10, ge=2)
+    grid_spacing_pct: float = Field(default=0.5, gt=0)
+    grid_auto_range: bool = True
+    grid_range_atr_multiplier: float = Field(default=3.0, gt=0)
+    grid_max_open_orders: int = Field(default=20, ge=2)
+    grid_symbols: list[str] = Field(
+        default_factory=lambda: ["BTC/USDT", "ETH/USDT"]
+    )
+
+    # Cross-exchange arbitrage engine
+    cross_arb_min_spread_pct: float = Field(default=0.3, ge=0)
+    cross_arb_exchanges: list[str] = Field(
+        default_factory=lambda: ["binance", "upbit"]
+    )
+    cross_arb_symbols: list[str] = Field(
+        default_factory=lambda: ["BTC/USDT", "ETH/USDT"]
+    )
+    cross_arb_max_position_per_symbol: float = Field(default=1000.0, gt=0)
+    cross_arb_rebalance_threshold_pct: float = Field(default=20.0, ge=0)
+
+    # Statistical arbitrage engine
+    stat_arb_pairs: list[list[str]] = Field(
+        default_factory=lambda: [["BTC/USDT", "ETH/USDT"]]
+    )
+    stat_arb_lookback: int = Field(default=100, ge=10)
+    stat_arb_entry_zscore: float = Field(default=2.0, gt=0)
+    stat_arb_exit_zscore: float = Field(default=0.5, ge=0)
+    stat_arb_stop_zscore: float = Field(default=4.0, gt=0)
+    stat_arb_min_correlation: float = Field(default=0.7, ge=0, le=1.0)
+
     # Funding rate strategy
     funding_extreme_positive_rate: float = Field(default=0.0005, ge=0)
     funding_extreme_negative_rate: float = Field(default=-0.0003, le=0)
@@ -217,6 +276,13 @@ class Settings(BaseSettings):
 # ---------------------------------------------------------------------------
 
 SETTINGS_METADATA: dict[str, dict[str, Any]] = {
+    # Engine mode (unsafe — require restart)
+    "engine_mode": {
+        "section": "Trading",
+        "description": "Enable multi-engine autonomous trading system",
+        "type": "bool",
+        "requires_restart": True,
+    },
     # Trading (unsafe — require restart)
     "trading_mode": {
         "section": "Trading",

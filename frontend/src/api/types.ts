@@ -242,3 +242,49 @@ export interface SettingsUpdateResponse {
   changed: string[]
   previous: Record<string, unknown>
 }
+
+// Engine types (V5 multi-engine system)
+export type EngineStatusValue = 'stopped' | 'running' | 'paused' | 'error'
+
+export interface EngineInfo {
+  name: string
+  description: string
+  status: EngineStatusValue
+  cycle_count: number
+  total_pnl: number
+  allocated_capital: number
+  position_count: number
+  max_positions: number
+  loop_interval: number
+  error: string | null
+}
+
+export type EnginesResponse = Record<string, EngineInfo>
+
+export interface EngineActionResponse {
+  success: boolean
+  engine: string
+  action: string
+}
+
+export interface EngineCycleLogEntry {
+  engine_name: string
+  cycle_num: number
+  timestamp: string
+  duration_ms: number
+  actions_taken: Record<string, unknown>[]
+  positions: Record<string, unknown>[]
+  signals: Record<string, unknown>[]
+  pnl_update: number
+  metadata: Record<string, unknown>
+}
+
+export interface EngineCycleLogResponse {
+  engine: string
+  cycle_log: EngineCycleLogEntry[]
+}
+
+export interface EnginePositionsResponse {
+  engine: string
+  positions: Record<string, unknown>[]
+}
