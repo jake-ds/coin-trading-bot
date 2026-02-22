@@ -215,3 +215,17 @@ Started: 2026-02-22
   - Quant endpoints are read-only views into bot state — orchestrator populates state
   - Test count baseline: 1473 tests passing as of V3-017
 ---
+
+## 2026-02-22 - V3-018
+- Verified all test subdirectories already have __init__.py files:
+  - tests/, tests/quant/, tests/strategies/, tests/strategies/quant/
+  - tests/backtest/, tests/data/, tests/execution/, tests/risk/
+  - tests/monitoring/, tests/models/, tests/exchanges/, tests/dashboard/
+  - tests/integration/
+- Test discovery: `pytest tests/ --co` finds all 1473 tests
+- No changes needed — all __init__.py files were created during previous stories
+- Tests: 1473 passing (no change), ruff clean
+- **Learnings for future iterations:**
+  - Each V3 story already created needed __init__.py files incrementally
+  - Test count baseline: 1473 tests passing as of V3-018
+---
