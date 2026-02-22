@@ -11,6 +11,7 @@ import structlog
 
 from bot.config import Settings, TradingMode, load_settings
 from bot.dashboard import app as dashboard_module
+from bot.dashboard.app import broadcast_state_update, broadcast_trade
 from bot.data.collector import DataCollector
 from bot.data.order_book import OrderBookAnalyzer
 from bot.data.store import DataStore
@@ -899,6 +900,19 @@ class TradingBot:
             regime=current_regime,
             equity_curve=dashboard_module.get_state().get("equity_curve", []),
         )
+
+        # Broadcast state to WebSocket clients after each cycle
+        try:
+            await broadcast_state_update()
+        except Exception:
+            logger.debug("ws_broadcast_error", exc_info=True)
+
+        # Broadcast individual trade events immediately
+        for trade_info in recent_trades:
+            try:
+                await broadcast_trade(trade_info)
+            except Exception:
+                logger.debug("ws_trade_broadcast_error", exc_info=True)
 
     def _build_open_positions(self) -> list[dict]:
         """Build open positions list for dashboard display."""

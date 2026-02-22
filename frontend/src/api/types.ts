@@ -48,3 +48,23 @@ export interface StrategyStats {
 export interface RegimeResponse {
   regime: string | null
 }
+
+export interface WsStatusPayload {
+  status: string
+  started_at: string | null
+  cycle_metrics: {
+    cycle_count: number
+    average_cycle_duration: number
+    last_cycle_time: number | null
+  }
+  portfolio: {
+    balances: Record<string, number>
+    positions: unknown[]
+    total_value: number
+  }
+  metrics: Record<string, number>
+  regime: string | null
+  trades: Trade[]
+  strategy_stats: Record<string, StrategyStats>
+  open_positions: unknown[]
+}

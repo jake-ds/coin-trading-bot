@@ -62,7 +62,7 @@
         "All existing Python tests pass, ruff check passes"
       ],
       "priority": 3,
-      "passes": false,
+      "passes": true,
       "notes": "Core infrastructure for real-time UX. All subsequent pages will use this."
     },
     {

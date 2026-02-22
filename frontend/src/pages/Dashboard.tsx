@@ -1,6 +1,7 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import apiClient from '../api/client'
-import type { StatusResponse, PortfolioResponse, MetricsResponse, RegimeResponse } from '../api/types'
+import type { StatusResponse, PortfolioResponse, MetricsResponse, RegimeResponse, WsStatusPayload } from '../api/types'
+import { useWebSocket } from '../hooks/useWebSocket'
 import StatusBadge from '../components/common/StatusBadge'
 import MetricCard from '../components/common/MetricCard'
 import RegimeBadge from '../components/common/RegimeBadge'
@@ -14,6 +15,8 @@ interface DashboardData {
   regime: RegimeResponse | null
 }
 
+const WS_URL = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/api/ws`
+
 function Dashboard() {
   const [data, setData] = useState<DashboardData>({
     status: null,
@@ -23,6 +26,28 @@ function Dashboard() {
   })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  const { connected, data: wsMessage } = useWebSocket(WS_URL)
+
+  // Apply WebSocket status_update messages to dashboard data
+  useEffect(() => {
+    if (wsMessage?.type === 'status_update') {
+      const payload = wsMessage.payload as unknown as WsStatusPayload
+      setData({
+        status: {
+          status: payload.status,
+          started_at: payload.started_at,
+          cycle_metrics: payload.cycle_metrics,
+        },
+        portfolio: { portfolio: payload.portfolio },
+        metrics: { metrics: payload.metrics },
+        regime: { regime: payload.regime },
+      })
+      setLoading(false)
+      setError(null)
+    }
+  }, [wsMessage])
 
   const fetchData = useCallback(async () => {
     try {
@@ -47,11 +72,32 @@ function Dashboard() {
     }
   }, [])
 
+  // Fetch initial data on mount
   useEffect(() => {
     fetchData()
-    const interval = setInterval(fetchData, 10000)
-    return () => clearInterval(interval)
   }, [fetchData])
+
+  // Fallback to polling when WebSocket is disconnected
+  useEffect(() => {
+    if (connected) {
+      // WS connected — stop polling
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current)
+        pollingRef.current = null
+      }
+    } else {
+      // WS disconnected — start polling fallback
+      if (!pollingRef.current) {
+        pollingRef.current = setInterval(fetchData, 10000)
+      }
+    }
+    return () => {
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current)
+        pollingRef.current = null
+      }
+    }
+  }, [connected, fetchData])
 
   const metrics = data.metrics?.metrics || {}
   const portfolio = data.portfolio?.portfolio

@@ -1,15 +1,18 @@
 """FastAPI monitoring dashboard with React SPA frontend."""
 
+import asyncio
 import html
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 import structlog
-from fastapi import APIRouter, FastAPI
+from fastapi import APIRouter, FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
+
+from bot.dashboard.websocket import ws_manager
 
 logger = structlog.get_logger()
 
@@ -174,6 +177,8 @@ async def toggle_strategy(name: str):
         new_state = "enabled"
 
     logger.info("strategy_toggled", name=name, state=new_state)
+    # Broadcast strategy toggle via WebSocket
+    asyncio.ensure_future(broadcast_state_update())
     return {"name": name, "active": new_state == "enabled", "success": True}
 
 
@@ -185,6 +190,77 @@ async def api_health_check():
 
 # Include the API router
 app.include_router(api_router)
+
+
+# ---------------------------------------------------------------------------
+# WebSocket endpoint (at /api/ws — registered directly on app)
+# ---------------------------------------------------------------------------
+
+
+@app.websocket("/api/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    """WebSocket endpoint for real-time dashboard updates."""
+    await ws_manager.connect(websocket)
+    # Send current state immediately on connect
+    await ws_manager.send_personal(websocket, {
+        "type": "status_update",
+        "payload": _build_full_state_payload(),
+    })
+    try:
+        while True:
+            # Keep connection alive; client may send pings or commands
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        ws_manager.disconnect(websocket)
+    except Exception:
+        ws_manager.disconnect(websocket)
+
+
+def _build_full_state_payload() -> dict:
+    """Build a complete state payload for WebSocket broadcast."""
+    return {
+        "status": _bot_state["status"],
+        "started_at": _bot_state["started_at"],
+        "cycle_metrics": _bot_state["cycle_metrics"],
+        "portfolio": _bot_state["portfolio"],
+        "metrics": _bot_state["metrics"],
+        "regime": _bot_state["regime"],
+        "trades": _bot_state["trades"][-50:],
+        "strategy_stats": _bot_state["strategy_stats"],
+        "open_positions": _bot_state["open_positions"],
+    }
+
+
+async def broadcast_state_update() -> None:
+    """Broadcast the full dashboard state to all WebSocket clients (rate-limited)."""
+    await ws_manager.broadcast({
+        "type": "status_update",
+        "payload": _build_full_state_payload(),
+    })
+
+
+async def broadcast_trade(trade_info: dict) -> None:
+    """Broadcast a trade event immediately to all WebSocket clients."""
+    await ws_manager.broadcast_immediate({
+        "type": "trade",
+        "payload": trade_info,
+    })
+
+
+async def broadcast_position_change(positions: list[dict]) -> None:
+    """Broadcast a position change event immediately."""
+    await ws_manager.broadcast_immediate({
+        "type": "position_change",
+        "payload": {"positions": positions},
+    })
+
+
+async def broadcast_alert(message: str, severity: str = "info") -> None:
+    """Broadcast an alert event immediately."""
+    await ws_manager.broadcast_immediate({
+        "type": "alert",
+        "payload": {"message": message, "severity": severity},
+    })
 
 
 # ---------------------------------------------------------------------------

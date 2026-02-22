@@ -18,6 +18,9 @@ Started: 2026-02-22
 - **SPA fallback**: `/{full_path:path}` catch-all serves index.html. Must be defined AFTER all API routes.
 - **Frontend scaffold**: Vite + React 18 + TypeScript + Tailwind CSS 3 + react-router-dom v6.
 - **Makefile**: `make frontend-install`, `make frontend-dev`, `make frontend-build`, `make test`, `make lint`.
+- **WebSocket**: `ws_manager` singleton in `bot.dashboard.websocket`. Broadcast helpers in `bot.dashboard.app`. Rate-limited to 1/s via token-bucket debounce. `broadcast_immediate` for critical events.
+- **WebSocket endpoint**: `/api/ws` registered directly on `app` (not via api_router). Sends full state payload on connect.
+- **React hooks**: Custom hooks go in `frontend/src/hooks/`. `useWebSocket` provides `{ connected, data, lastUpdate }` with auto-reconnect.
 
 ---
 
@@ -79,4 +82,45 @@ Started: 2026-02-22
   - Promise.allSettled is better than Promise.all for dashboard — partial data is better than no data
   - Components in frontend/src/components/common/ for reuse across pages
   - No Python backend changes needed — all endpoints already existed from V3
+---
+
+## 2026-02-22 - V4-003
+- Added WebSocket real-time updates replacing polling for dashboard
+- Files created:
+  - src/bot/dashboard/websocket.py (ConnectionManager with rate-limited broadcast + immediate broadcast)
+  - frontend/src/hooks/useWebSocket.ts (auto-reconnect with exponential backoff, max 30s)
+  - frontend/src/components/common/ConnectionIndicator.tsx (green/red dot + Live/Offline label)
+  - tests/dashboard/test_websocket.py (22 tests)
+- Files modified:
+  - src/bot/dashboard/app.py:
+    - Added /api/ws WebSocket endpoint (registered directly on app, not api_router)
+    - Sends full state payload on client connect
+    - Added broadcast helpers: broadcast_state_update, broadcast_trade, broadcast_position_change, broadcast_alert
+    - Strategy toggle now triggers WebSocket broadcast
+  - src/bot/main.py:
+    - Imported broadcast_state_update and broadcast_trade
+    - Added broadcast_state_update() at end of _trading_cycle
+    - Added broadcast_trade() for each trade in recent_trades
+  - frontend/src/App.tsx:
+    - Added ConnectionIndicator next to "Trading Bot" title in header
+    - Added useWebSocket hook for connection status
+  - frontend/src/pages/Dashboard.tsx:
+    - Switched from pure polling to WebSocket with polling fallback
+    - Applies status_update messages from WS to dashboard state
+    - Falls back to 10s polling when WS disconnects
+  - frontend/src/api/types.ts:
+    - Added WsStatusPayload interface for WebSocket message typing
+- Features:
+  - WebSocket message format: { type: 'status_update'|'trade'|'position_change'|'alert', payload: {...} }
+  - Rate limiting: broadcasts debounced to max 1/second (broadcast_immediate bypasses for critical events)
+  - Auto-reconnect: exponential backoff from 1s to max 30s
+  - Connection indicator: green dot + "Live" when connected, red dot + "Offline" when disconnected
+  - Fallback: Dashboard automatically switches to 10s polling when WebSocket disconnects
+- Tests: 1516 passing (1494 existing + 22 new), ruff clean, frontend builds clean
+- **Learnings for future iterations:**
+  - WebSocket endpoint must be on `app` directly (not `api_router`) since FastAPI WS decorators use `@app.websocket()`
+  - starlette.testclient.TestClient is needed for sync WS testing; httpx AsyncClient doesn't support WS
+  - Rate limiting via debounce task (asyncio.ensure_future with delay) is simpler than token bucket for broadcast use case
+  - Test fixtures must clear ws_manager._connections to prevent cross-test interference
+  - Test count baseline: 1516 tests passing as of V4-003
 ---

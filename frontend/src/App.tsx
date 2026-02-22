@@ -4,6 +4,8 @@ import Trades from './pages/Trades'
 import Strategies from './pages/Strategies'
 import Settings from './pages/Settings'
 import Login from './pages/Login'
+import ConnectionIndicator from './components/common/ConnectionIndicator'
+import { useWebSocket } from './hooks/useWebSocket'
 
 const navItems = [
   { path: '/', label: 'Dashboard' },
@@ -12,8 +14,11 @@ const navItems = [
   { path: '/settings', label: 'Settings' },
 ]
 
+const WS_URL = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/api/ws`
+
 function App() {
   const location = useLocation()
+  const { connected } = useWebSocket(WS_URL)
 
   if (location.pathname === '/login') {
     return (
@@ -27,7 +32,10 @@ function App() {
     <div className="min-h-screen bg-gray-900 text-gray-100">
       <nav className="bg-gray-800 border-b border-gray-700 px-6 py-3">
         <div className="flex items-center justify-between max-w-7xl mx-auto">
-          <h1 className="text-xl font-bold text-white">Trading Bot</h1>
+          <div className="flex items-center gap-4">
+            <h1 className="text-xl font-bold text-white">Trading Bot</h1>
+            <ConnectionIndicator connected={connected} />
+          </div>
           <div className="flex gap-4">
             {navItems.map((item) => (
               <Link
