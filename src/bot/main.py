@@ -468,13 +468,32 @@ class TradingBot:
 
         is_paper = self._settings.trading_mode == TradingMode.PAPER
 
+        # Create Binance Futures adapter for funding rate engine
+        futures_exchanges = list(self._exchanges)
+        if self._settings.binance_api_key:
+            try:
+                from bot.exchanges.binance_futures import (
+                    BinanceFuturesAdapter,
+                )
+
+                futures_adapter = BinanceFuturesAdapter(
+                    api_key=self._settings.binance_api_key,
+                    secret_key=self._settings.binance_secret_key,
+                    testnet=self._settings.binance_testnet,
+                )
+                futures_exchanges = [futures_adapter] + list(
+                    self._exchanges
+                )
+            except Exception:
+                logger.debug("binance_futures_adapter_not_available")
+
         # Register enabled engines
         try:
             from bot.engines.funding_arb import FundingRateArbEngine
 
             engine = FundingRateArbEngine(
                 portfolio_manager=self._portfolio_mgr,
-                exchanges=self._exchanges,
+                exchanges=futures_exchanges,
                 paper_mode=is_paper,
                 settings=self._settings,
             )
