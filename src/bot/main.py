@@ -76,6 +76,10 @@ class TradingBot:
         self._total_cycle_duration: float = 0.0
         self._last_cycle_time: float | None = None
         self._current_regime = None
+        # Emergency stop state
+        self._emergency_stopped: bool = False
+        self._emergency_stopped_at: str | None = None
+        self._emergency_reason: str | None = None
         # Validation mode tracking
         self._validation_mode: bool = False
         self._validation_trade_pnls: list[float] = []
@@ -198,9 +202,10 @@ class TradingBot:
         # Start dashboard server as background task
         self._start_dashboard()
 
-        # Provide strategy registry and settings to dashboard for API endpoints
+        # Provide strategy registry, settings, and bot ref to dashboard for API endpoints
         dashboard_module.set_strategy_registry(strategy_registry)
         dashboard_module.set_settings(self._settings)
+        dashboard_module.set_trading_bot(self)
 
         # Import strategies to trigger registration
         self._load_strategies()
@@ -212,12 +217,14 @@ class TradingBot:
             symbols=self._settings.symbols,
         )
 
-        # Notify startup via Telegram
+        # Notify startup via Telegram and start command polling
         if self._telegram:
             await self._telegram.send_message(
                 f"Bot started in {self._settings.trading_mode.value} mode. "
                 f"Symbols: {', '.join(self._settings.symbols)}"
             )
+            self._register_telegram_commands()
+            await self._telegram.start_command_polling()
 
     def _init_exchanges(self) -> None:
         """Create exchange adapters from configuration, wrapped in ResilientExchange."""
@@ -310,6 +317,62 @@ class TradingBot:
         else:
             logger.debug("telegram_not_configured_skipping")
 
+    def _register_telegram_commands(self) -> None:
+        """Register Telegram bot commands for remote control."""
+        if not self._telegram:
+            return
+
+        async def cmd_stop() -> str:
+            result = await self.emergency_stop(reason="telegram_command")
+            return (
+                f"EMERGENCY STOP activated.\n"
+                f"Cancelled orders: {result['cancelled_orders']}"
+            )
+
+        async def cmd_closeall() -> str:
+            result = await self.emergency_close_all(reason="telegram_command")
+            closed = result.get("closed_positions", [])
+            lines = [f"EMERGENCY CLOSE ALL: {len(closed)} positions closed."]
+            for p in closed:
+                lines.append(
+                    f"  {p['symbol']}: qty={p['quantity']}, "
+                    f"PnL={p['pnl']:+.2f}"
+                )
+            return "\n".join(lines)
+
+        async def cmd_resume() -> str:
+            result = await self.emergency_resume()
+            if result["success"]:
+                return "Trading RESUMED."
+            return f"Cannot resume: {result.get('error', 'unknown')}"
+
+        async def cmd_status() -> str:
+            status = dashboard_module.get_state().get("status", "unknown")
+            emergency = self.emergency_state
+            portfolio = dashboard_module.get_state().get("portfolio", {})
+            total_value = portfolio.get("total_value", 0)
+            cycle = self._cycle_count
+            positions_count = len(
+                dashboard_module.get_state().get("open_positions", [])
+            )
+
+            lines = [
+                f"Bot Status: {status}",
+                f"Emergency: {'ACTIVE' if emergency['active'] else 'inactive'}",
+                f"Portfolio: ${total_value:,.2f}",
+                f"Open Positions: {positions_count}",
+                f"Cycles: {cycle}",
+            ]
+            if emergency["active"]:
+                lines.append(f"Stop Reason: {emergency['reason']}")
+                lines.append(f"Stopped At: {emergency['activated_at']}")
+            return "\n".join(lines)
+
+        self._telegram.register_command("stop", cmd_stop)
+        self._telegram.register_command("closeall", cmd_closeall)
+        self._telegram.register_command("resume", cmd_resume)
+        self._telegram.register_command("status", cmd_status)
+
     def _start_dashboard(self) -> None:
         """Start the dashboard uvicorn server as a background asyncio task."""
         try:
@@ -371,6 +434,11 @@ class TradingBot:
         logger.info("trading_loop_started")
 
         while self._running:
+            # Skip cycle if emergency stopped
+            if self._emergency_stopped:
+                await asyncio.sleep(self._settings.loop_interval_seconds)
+                continue
+
             if self._cycle_lock.locked():
                 logger.warning(
                     "trading_cycle_skipped_overlap",
@@ -1372,10 +1440,248 @@ class TradingBot:
                     )
             break
 
+    async def emergency_stop(self, reason: str = "manual") -> dict:
+        """Emergency stop: halt trading loop and cancel all pending orders.
+
+        Positions are kept open (not closed).
+        """
+        self._emergency_stopped = True
+        self._emergency_stopped_at = datetime.now(timezone.utc).isoformat()
+        self._emergency_reason = reason
+
+        logger.warning(
+            "emergency_stop_activated",
+            reason=reason,
+        )
+
+        # Cancel all pending orders
+        cancelled_orders = await self._cancel_all_pending_orders()
+
+        # Update dashboard state
+        dashboard_module.update_state(
+            emergency={
+                "active": True,
+                "activated_at": self._emergency_stopped_at,
+                "reason": reason,
+                "cancelled_orders": cancelled_orders,
+            },
+        )
+
+        # Broadcast alert via WebSocket
+        try:
+            from bot.dashboard.app import broadcast_alert
+            await broadcast_alert(
+                f"EMERGENCY STOP activated: {reason}",
+                severity="critical",
+            )
+        except Exception:
+            logger.debug("ws_emergency_alert_error", exc_info=True)
+
+        # Notify via Telegram
+        if self._telegram:
+            await self._telegram.send_message(
+                f"EMERGENCY STOP activated.\n"
+                f"Reason: {reason}\n"
+                f"Cancelled orders: {cancelled_orders}\n"
+                f"Positions kept open."
+            )
+
+        return {
+            "success": True,
+            "cancelled_orders": cancelled_orders,
+            "activated_at": self._emergency_stopped_at,
+        }
+
+    async def emergency_close_all(self, reason: str = "manual") -> dict:
+        """Emergency close: halt trading + close all open positions at market price."""
+        # First, activate emergency stop
+        await self.emergency_stop(reason=reason)
+
+        # Close all positions
+        closed_positions = await self._close_all_positions()
+
+        # Update dashboard state with close info
+        emergency_state = dashboard_module.get_state().get("emergency", {})
+        emergency_state["closed_positions"] = closed_positions
+        dashboard_module.update_state(emergency=emergency_state)
+
+        # Broadcast alert
+        try:
+            from bot.dashboard.app import broadcast_alert
+            await broadcast_alert(
+                f"EMERGENCY CLOSE ALL: {len(closed_positions)} positions closed",
+                severity="critical",
+            )
+        except Exception:
+            logger.debug("ws_emergency_close_alert_error", exc_info=True)
+
+        # Notify via Telegram
+        if self._telegram:
+            await self._telegram.send_message(
+                f"EMERGENCY CLOSE ALL executed.\n"
+                f"Closed positions: {len(closed_positions)}\n"
+                f"Reason: {reason}"
+            )
+
+        return {
+            "success": True,
+            "closed_positions": closed_positions,
+        }
+
+    async def emergency_resume(self) -> dict:
+        """Resume trading after an emergency stop."""
+        if not self._emergency_stopped:
+            return {"success": False, "error": "Not in emergency stop state"}
+
+        prev_reason = self._emergency_reason
+        self._emergency_stopped = False
+        self._emergency_stopped_at = None
+        self._emergency_reason = None
+
+        logger.info("emergency_resume", previous_reason=prev_reason)
+
+        # Update dashboard state
+        dashboard_module.update_state(
+            emergency={
+                "active": False,
+                "activated_at": None,
+                "reason": None,
+            },
+        )
+
+        # Broadcast alert
+        try:
+            from bot.dashboard.app import broadcast_alert
+            await broadcast_alert(
+                "Trading RESUMED after emergency stop",
+                severity="info",
+            )
+        except Exception:
+            logger.debug("ws_emergency_resume_alert_error", exc_info=True)
+
+        # Notify via Telegram
+        if self._telegram:
+            await self._telegram.send_message("Trading RESUMED after emergency stop.")
+
+        return {"success": True, "previous_reason": prev_reason}
+
+    @property
+    def emergency_state(self) -> dict:
+        """Return current emergency stop state."""
+        return {
+            "active": self._emergency_stopped,
+            "activated_at": self._emergency_stopped_at,
+            "reason": self._emergency_reason,
+        }
+
+    async def _cancel_all_pending_orders(self) -> int:
+        """Cancel all pending orders across all execution engines. Returns count."""
+        cancelled = 0
+        for name, engine in self._execution_engines.items():
+            for order_id, order in list(engine.pending_orders.items()):
+                try:
+                    success = await engine.cancel_order(order_id, order.symbol)
+                    if success:
+                        cancelled += 1
+                        logger.info(
+                            "emergency_order_cancelled",
+                            order_id=order_id,
+                            symbol=order.symbol,
+                        )
+                except Exception:
+                    logger.warning(
+                        "emergency_cancel_failed",
+                        order_id=order_id,
+                        exc_info=True,
+                    )
+        return cancelled
+
+    async def _close_all_positions(self) -> list[dict]:
+        """Close all open positions at market price. Returns list of closed positions."""
+        closed = []
+
+        # Get positions from risk manager
+        if not self._risk_manager:
+            return closed
+
+        symbols_to_close = list(self._risk_manager._open_positions.keys())
+        for symbol in symbols_to_close:
+            position = self._risk_manager.get_position(symbol)
+            if not position:
+                continue
+
+            qty = position["quantity"]
+            entry_price = position["entry_price"]
+
+            # Create a SELL signal to close the position
+            sell_signal = TradingSignal(
+                strategy_name="emergency_close",
+                symbol=symbol,
+                action=SignalAction.SELL,
+                confidence=1.0,
+                metadata={"exit_type": "emergency_close"},
+            )
+
+            # Execute on first available engine
+            for name, engine in self._execution_engines.items():
+                try:
+                    order = await engine.execute_signal(sell_signal, quantity=qty)
+                    if order:
+                        fill_price = order.filled_price or 0
+                        pnl = (fill_price - entry_price) * qty if fill_price > 0 else 0
+                        closed.append({
+                            "symbol": symbol,
+                            "quantity": qty,
+                            "entry_price": entry_price,
+                            "exit_price": fill_price,
+                            "pnl": round(pnl, 2),
+                        })
+
+                        # Record PnL
+                        if fill_price > 0:
+                            self._risk_manager.record_trade_pnl(pnl)
+                            if self._strategy_tracker:
+                                self._strategy_tracker.record_trade(
+                                    "emergency_close", pnl
+                                )
+
+                        # Clean up position tracking
+                        self._risk_manager.remove_position(symbol)
+                        if self._position_manager:
+                            self._position_manager.remove_position(symbol)
+                        if self._portfolio_risk:
+                            self._portfolio_risk.remove_position(symbol)
+
+                        logger.info(
+                            "emergency_position_closed",
+                            symbol=symbol,
+                            quantity=qty,
+                            pnl=round(pnl, 2),
+                        )
+                except Exception:
+                    logger.error(
+                        "emergency_close_position_failed",
+                        symbol=symbol,
+                        exc_info=True,
+                    )
+                break
+
+        # Update open positions in dashboard
+        dashboard_module.update_state(open_positions=[])
+
+        return closed
+
     async def shutdown(self) -> None:
         """Graceful shutdown."""
         logger.info("bot_shutting_down")
         self._running = False
+
+        # Stop Telegram command polling
+        if self._telegram and hasattr(self._telegram, "stop_command_polling"):
+            try:
+                await self._telegram.stop_command_polling()
+            except Exception:
+                pass
 
         # Notify shutdown via Telegram
         if self._telegram:

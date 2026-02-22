@@ -35,6 +35,10 @@ Started: 2026-02-22
 - **Rate limit metrics**: `RateLimitMetrics` dataclass tracks total_requests, throttled_requests, avg_wait_ms, current_rps. Exposed via `/api/status` in `rate_limits` field.
 - **Reconciliation**: `PositionReconciler` in `bot.execution.reconciler`. Compares local positions (from RiskManager) with exchange balances (via `get_balance()`). Runs every N cycles in live mode only. Config: `reconciliation_enabled`, `reconciliation_interval_cycles`, `reconciliation_auto_fix` (all hot-reloadable).
 - **Reconciliation endpoint**: `GET /api/reconciliation` returns last result from `_bot_state["reconciliation"]`. Dashboard state updated by `_maybe_reconcile()` in `main.py`.
+- **Pre-flight checks**: `PreFlightChecker` in `bot.execution.preflight`. Runs 8 checks during `initialize()` when `TRADING_MODE=live`. FAIL blocks startup (SystemExit), WARN allows with notifications. Results stored in `_bot_state["preflight"]`, exposed via `GET /api/preflight`.
+- **Emergency kill switch**: `TradingBot.emergency_stop()`, `emergency_close_all()`, `emergency_resume()`. API at `POST /api/emergency/{stop,close-all,resume}`, `GET /api/emergency`. Emergency state persists across cycles via `_emergency_stopped` flag. Dashboard state key `emergency` with `{active, activated_at, reason}`.
+- **Telegram commands**: `TelegramNotifier.register_command()` + `start_command_polling()`. Polling loop fetches updates every 2s. Commands: `/stop`, `/closeall`, `/resume`, `/status`. Only processes messages from configured `chat_id`.
+- **Bot ref in dashboard**: `set_trading_bot(bot)` in `bot.dashboard.app`. Emergency endpoints call bot methods directly.
 
 ---
 
@@ -419,4 +423,104 @@ Started: 2026-02-22
   - Dashboard state key `reconciliation` stores last result as dict (from to_dict())
   - Auto-fix modifies RiskManager, PositionManager, and PortfolioRiskManager in sync
   - Test count baseline: 1714 passing as of V4-010
+---
+
+## 2026-02-22 - V4-011
+- Added live trading pre-flight checks and safety gates
+- Files created:
+  - src/bot/execution/preflight.py (PreFlightChecker, CheckResult, CheckStatus, PreFlightResult)
+  - tests/execution/test_preflight.py (47 tests)
+- Files modified:
+  - src/bot/execution/__init__.py:
+    - Added PreFlightChecker, PreFlightResult, CheckResult, CheckStatus to exports
+  - src/bot/main.py:
+    - Added PreFlightChecker import
+    - Added `_preflight_checker` field to TradingBot.__init__
+    - Added `_run_preflight_checks()` method: runs all 8 checks, updates dashboard state, logs summary, raises SystemExit on FAIL
+    - Pre-flight runs in initialize() when TRADING_MODE=live (before WS feed init)
+  - src/bot/dashboard/app.py:
+    - Added `preflight` key to `_bot_state` dict
+    - Added GET /api/preflight endpoint returning last pre-flight check results
+- Features:
+  - 8 pre-flight checks:
+    1. API key validity: tests exchange connection with get_balance()
+    2. Sufficient balance: verifies USD-equivalent balance >= minimum ($100 default)
+    3. Symbol availability: verifies all configured symbols exist on exchange via get_ticker()
+    4. Rate limit headroom: checks rate_limit_enabled is True
+    5. Stop-loss configured: verifies stop_loss_pct > 0 (FAIL if not)
+    6. Daily loss limit: verifies daily_loss_limit_pct > 0 (FAIL if not)
+    7. Password changed: checks dashboard_password != 'changeme' (WARN if default)
+    8. Paper validation: checks for recent validation_report_*.json with GO recommendation (WARN if missing/NO-GO)
+  - CheckStatus enum: PASS, WARN, FAIL
+  - Any FAIL prevents bot startup in live mode (raises SystemExit)
+  - WARN allows startup with logged warnings + Telegram notification
+  - PreFlightResult.format_summary() for human-readable console output
+  - GET /api/preflight returns last result from dashboard state
+  - Pre-flight only runs in live mode (paper mode skips entirely)
+- Tests: 1761 passing (1714 existing + 47 new — 1 pre-existing test_config failure), ruff clean
+- **Learnings for future iterations:**
+  - Pre-flight checks must run AFTER exchange init but BEFORE WS feed and trading loop
+  - SystemExit is the cleanest way to prevent startup — caught by asyncio.run() cleanly
+  - Multiple USD currencies (USDT, USDC, BUSD, etc.) need summing for balance check
+  - Validation report check uses glob + sorted reverse to find latest file by name
+  - WARN for password/validation is appropriate — these are advisory, not blocking
+  - Test count baseline: 1761 passing as of V4-011
+---
+
+## 2026-02-22 - V4-012
+- Added emergency kill switch via API and Telegram commands
+- Files created:
+  - tests/dashboard/test_v4_012_emergency.py (36 tests)
+- Files modified:
+  - src/bot/main.py:
+    - Added `_emergency_stopped`, `_emergency_stopped_at`, `_emergency_reason` fields to TradingBot
+    - Added `emergency_stop()` method: sets flag, cancels pending orders, broadcasts alert, notifies Telegram
+    - Added `emergency_close_all()` method: stops + closes all positions at market, records PnL, clears position tracking
+    - Added `emergency_resume()` method: clears flag, broadcasts alert, notifies Telegram
+    - Added `emergency_state` property: returns current emergency state dict
+    - Added `_cancel_all_pending_orders()` helper: iterates all engines, cancels all pending
+    - Added `_close_all_positions()` helper: creates SELL signals for all open positions, executes, records PnL
+    - Added `_register_telegram_commands()`: registers /stop, /closeall, /resume, /status handlers
+    - Trading loop checks `_emergency_stopped` flag — skips cycles when True
+    - `initialize()` calls `set_trading_bot(self)` for dashboard API access
+    - `shutdown()` calls `stop_command_polling()` with error handling for mock compatibility
+  - src/bot/monitoring/telegram.py:
+    - Added `_commands` dict, `_polling_task`, `_polling`, `_last_update_id` fields
+    - Added `register_command(command, callback)`: stores async callback for command name
+    - Added `start_command_polling(interval)`: starts background polling task
+    - Added `stop_command_polling()`: stops polling task cleanly
+    - Added `_poll_loop(interval)`: internal polling loop
+    - Added `_process_updates()`: fetches updates from Telegram API
+    - Added `_handle_update(update)`: dispatches commands, validates chat_id, handles errors
+    - Parses commands with @botname suffix (e.g., /stop@my_bot)
+    - Unknown commands list available commands in response
+  - src/bot/dashboard/app.py:
+    - Added `_trading_bot` reference and `set_trading_bot()` / `get_trading_bot()` functions
+    - Added `emergency` key to `_bot_state` dict
+    - Added `GET /api/emergency`: returns current emergency state
+    - Added `POST /api/emergency/stop`: calls bot.emergency_stop(), returns 503 if bot unavailable
+    - Added `POST /api/emergency/close-all`: calls bot.emergency_close_all()
+    - Added `POST /api/emergency/resume`: calls bot.emergency_resume()
+    - Updated `_build_full_state_payload()` to include emergency state in WebSocket broadcasts
+- Features:
+  - Emergency stop: halts trading loop (skips cycles), cancels all pending orders, keeps positions open
+  - Emergency close-all: halts + closes all positions at market price with PnL tracking
+  - Emergency resume: clears emergency flag, resumes trading loop
+  - All emergency actions broadcast WebSocket alerts (severity: critical/info)
+  - All emergency actions send Telegram notifications
+  - API endpoints protected by auth (same as other /api/* routes)
+  - Emergency state persists across cycles via _emergency_stopped flag
+  - Telegram commands: /stop, /closeall, /resume, /status
+  - /status shows bot status, emergency state, portfolio value, open positions, cycle count
+  - Command polling validates chat_id (ignores messages from other chats)
+  - PnL recorded for each position closed during emergency
+- Tests: 1797 passing (1761 existing + 36 new — 1 pre-existing test_config failure), ruff clean
+- **Learnings for future iterations:**
+  - Tests that mock _telegram with MagicMock need shutdown() to handle non-async stop_command_polling gracefully
+  - hasattr + try/except is safest for backward-compatible method calls on potentially mocked objects
+  - set_trading_bot() follows same pattern as set_settings() and set_strategy_registry() for dashboard access
+  - Emergency state stored in both bot._emergency_stopped (for loop control) and _bot_state["emergency"] (for API/WS)
+  - Telegram Update.message.chat_id must be compared as strings since chat_id config is a string
+  - Command parsing handles @botname suffix by splitting on @ (e.g., /stop@my_bot → "stop")
+  - Test count baseline: 1797 passing as of V4-012
 ---

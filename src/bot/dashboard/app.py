@@ -68,6 +68,7 @@ _bot_state = {
     "cycle_log": [],
     "reconciliation": {},
     "preflight": {},
+    "emergency": {"active": False, "activated_at": None, "reason": None},
 }
 
 # Reference to strategy_registry — set by main.py via set_strategy_registry()
@@ -75,6 +76,9 @@ _strategy_registry = None
 
 # Reference to settings — set by main.py via set_settings()
 _settings = None
+
+# Reference to TradingBot — set by main.py via set_trading_bot()
+_trading_bot = None
 
 
 def set_strategy_registry(registry) -> None:
@@ -92,6 +96,17 @@ def set_settings(settings) -> None:
 def get_settings():
     """Get the current settings object."""
     return _settings
+
+
+def set_trading_bot(bot) -> None:
+    """Set the TradingBot reference for emergency endpoints."""
+    global _trading_bot
+    _trading_bot = bot
+
+
+def get_trading_bot():
+    """Get the current TradingBot reference."""
+    return _trading_bot
 
 
 # ---------------------------------------------------------------------------
@@ -378,6 +393,48 @@ async def get_preflight():
     return {"preflight": _bot_state.get("preflight", {})}
 
 
+@api_router.get("/emergency")
+async def get_emergency_state():
+    """Get current emergency stop state."""
+    return {"emergency": _bot_state.get("emergency", {"active": False})}
+
+
+@api_router.post("/emergency/stop")
+async def emergency_stop():
+    """Emergency stop: halt trading, cancel pending orders, keep positions open."""
+    if _trading_bot is None:
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "Trading bot not available"},
+        )
+    result = await _trading_bot.emergency_stop(reason="api_request")
+    return result
+
+
+@api_router.post("/emergency/close-all")
+async def emergency_close_all():
+    """Emergency close all: halt trading + close all positions at market price."""
+    if _trading_bot is None:
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "Trading bot not available"},
+        )
+    result = await _trading_bot.emergency_close_all(reason="api_request")
+    return result
+
+
+@api_router.post("/emergency/resume")
+async def emergency_resume():
+    """Resume trading after emergency stop."""
+    if _trading_bot is None:
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "Trading bot not available"},
+        )
+    result = await _trading_bot.emergency_resume()
+    return result
+
+
 @api_router.get("/analytics")
 async def get_analytics(
     range: str = Query("all", description="Date range: 7d, 30d, 90d, all"),
@@ -655,6 +712,7 @@ def _build_full_state_payload() -> dict:
         "strategy_stats": _bot_state["strategy_stats"],
         "open_positions": _bot_state["open_positions"],
         "cycle_log_latest": cycle_log[-1] if cycle_log else None,
+        "emergency": _bot_state.get("emergency", {"active": False}),
     }
 
 

@@ -233,7 +233,7 @@
         "All existing Python tests pass, ruff check passes"
       ],
       "priority": 11,
-      "passes": false,
+      "passes": true,
       "notes": "Never let the bot go live without basic safety checks."
     },
     {
@@ -255,7 +255,7 @@
         "All existing Python tests pass, ruff check passes"
       ],
       "priority": 12,
-      "passes": false,
+      "passes": true,
       "notes": "When something goes wrong in live trading, you need to stop FAST."
     },
     {
