@@ -265,7 +265,7 @@
         "All existing tests pass, ruff check passes"
       ],
       "priority": 17,
-      "passes": false,
+      "passes": true,
       "notes": "Reference: git show feat/v3-quant-trading-system:src/bot/dashboard/app.py (look for /quant/ routes)"
     },
     {

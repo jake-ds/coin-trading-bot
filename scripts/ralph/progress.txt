@@ -201,3 +201,17 @@ Started: 2026-02-22
   - PerformanceMetrics import needed for _empty_result() fallback
   - Test count baseline: 1465 tests passing as of V3-016
 ---
+
+## 2026-02-22 - V3-017
+- Added 4 quant endpoints to src/bot/dashboard/app.py:
+  - GET /quant/risk-metrics — VaR, CVaR, Sortino, Calmar from bot state
+  - GET /quant/correlation-matrix — symbol correlation matrix from bot state
+  - GET /quant/portfolio-optimization — optimal weights from bot state
+  - GET /quant/garch — GARCH volatility forecast from bot state
+- All endpoints use _bot_state.get() with empty dict default for backward compat
+- Updated tests/dashboard/test_app.py with 8 new tests (empty + with-data for each endpoint)
+- Tests: 1473 passing (1465 + 8 new), ruff clean
+- **Learnings for future iterations:**
+  - Quant endpoints are read-only views into bot state — orchestrator populates state
+  - Test count baseline: 1473 tests passing as of V3-017
+---

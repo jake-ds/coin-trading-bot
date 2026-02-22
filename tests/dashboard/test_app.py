@@ -113,6 +113,80 @@ class TestDashboardAPI:
         assert "RUNNING" in resp.text
 
 
+class TestQuantEndpoints:
+    @pytest.mark.asyncio
+    async def test_quant_risk_metrics_empty(self, client):
+        resp = await client.get("/quant/risk-metrics")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["risk_metrics"] == {}
+
+    @pytest.mark.asyncio
+    async def test_quant_risk_metrics_with_data(self, client):
+        update_state(quant_risk_metrics={
+            "var_95": -2.5,
+            "cvar_95": -3.1,
+            "sortino": 1.2,
+            "calmar": 0.8,
+        })
+        resp = await client.get("/quant/risk-metrics")
+        data = resp.json()
+        assert data["risk_metrics"]["var_95"] == -2.5
+        assert data["risk_metrics"]["sortino"] == 1.2
+
+    @pytest.mark.asyncio
+    async def test_correlation_matrix_empty(self, client):
+        resp = await client.get("/quant/correlation-matrix")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["correlation_matrix"] == {}
+
+    @pytest.mark.asyncio
+    async def test_correlation_matrix_with_data(self, client):
+        update_state(correlation_matrix={
+            "BTC/USDT": {"BTC/USDT": 1.0, "ETH/USDT": 0.85},
+            "ETH/USDT": {"BTC/USDT": 0.85, "ETH/USDT": 1.0},
+        })
+        resp = await client.get("/quant/correlation-matrix")
+        data = resp.json()
+        assert data["correlation_matrix"]["BTC/USDT"]["ETH/USDT"] == 0.85
+
+    @pytest.mark.asyncio
+    async def test_portfolio_optimization_empty(self, client):
+        resp = await client.get("/quant/portfolio-optimization")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["optimization"] == {}
+
+    @pytest.mark.asyncio
+    async def test_portfolio_optimization_with_data(self, client):
+        update_state(portfolio_optimization={
+            "method": "risk_parity",
+            "weights": {"BTC/USDT": 0.4, "ETH/USDT": 0.6},
+            "sharpe": 1.5,
+        })
+        resp = await client.get("/quant/portfolio-optimization")
+        data = resp.json()
+        assert data["optimization"]["method"] == "risk_parity"
+        assert data["optimization"]["weights"]["BTC/USDT"] == 0.4
+
+    @pytest.mark.asyncio
+    async def test_garch_empty(self, client):
+        resp = await client.get("/quant/garch")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["garch"] == {}
+
+    @pytest.mark.asyncio
+    async def test_garch_with_data(self, client):
+        update_state(garch_metrics={
+            "BTC/USDT": {"current_vol": 0.03, "forecast_vol": 0.025, "regime": "NORMAL"},
+        })
+        resp = await client.get("/quant/garch")
+        data = resp.json()
+        assert data["garch"]["BTC/USDT"]["current_vol"] == 0.03
+
+
 class TestStateManagement:
     def test_get_state(self):
         state = get_state()

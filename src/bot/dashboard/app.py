@@ -122,6 +122,30 @@ async def get_regime():
     return {"regime": _bot_state["regime"]}
 
 
+@app.get("/quant/risk-metrics")
+async def get_quant_risk_metrics():
+    """Get quantitative risk metrics (VaR, CVaR, Sortino, etc.)."""
+    return {"risk_metrics": _bot_state.get("quant_risk_metrics", {})}
+
+
+@app.get("/quant/correlation-matrix")
+async def get_correlation_matrix():
+    """Get correlation matrix between traded symbols."""
+    return {"correlation_matrix": _bot_state.get("correlation_matrix", {})}
+
+
+@app.get("/quant/portfolio-optimization")
+async def get_portfolio_optimization():
+    """Get current portfolio optimization results."""
+    return {"optimization": _bot_state.get("portfolio_optimization", {})}
+
+
+@app.get("/quant/garch")
+async def get_garch_metrics():
+    """Get GARCH volatility model metrics."""
+    return {"garch": _bot_state.get("garch_metrics", {})}
+
+
 @app.post("/strategies/{name}/toggle")
 async def toggle_strategy(name: str):
     """Toggle a strategy's active state (enable/disable)."""
