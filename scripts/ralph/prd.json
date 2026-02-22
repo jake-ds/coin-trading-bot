@@ -201,7 +201,7 @@
         "All existing tests pass, ruff check passes"
       ],
       "priority": 13,
-      "passes": false,
+      "passes": true,
       "notes": "Reference: git show feat/v3-quant-trading-system:src/bot/risk/portfolio_risk.py"
     },
     {
@@ -217,7 +217,7 @@
         "All existing tests pass, ruff check passes"
       ],
       "priority": 14,
-      "passes": false,
+      "passes": true,
       "notes": "Config fields already partially exist on main (from V2-028 work). Verify no conflicts."
     },
     {

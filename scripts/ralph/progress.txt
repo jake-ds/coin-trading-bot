@@ -135,3 +135,38 @@ Started: 2026-02-22
   - Pairs that don't form a triangle (e.g., all X/USDT) correctly return no cycle
   - Test count baseline: 1427 tests passing as of V3-012
 ---
+
+## 2026-02-22 - V3-013
+- Extended src/bot/risk/portfolio_risk.py with VaR integration:
+  - Added var_enabled, var_confidence, max_portfolio_var_pct constructor params (all with backward-compatible defaults)
+  - Added calculate_portfolio_var() — historical VaR using weighted portfolio returns from price_history
+  - Added check_var_limit() — blocks new positions when portfolio VaR exceeds limit (only when var_enabled=True)
+  - Added get_risk_metrics() — returns dict with exposure_pct, heat, var_pct, n_positions, portfolio_value, var_enabled
+  - Wired VaR check as step 5 in validate_new_position()
+- Updated tests/risk/test_portfolio_risk.py with 15 new VaR test cases (TestVarIntegration class):
+  - calculate_portfolio_var: returns percentage, None for no positions/history/insufficient data
+  - check_var_limit: disabled allows, no-data allows, exceeds blocks, within allows
+  - validate_new_position: VaR blocks, VaR disabled passes
+  - get_risk_metrics: all keys present, correct values
+  - Config defaults and custom config
+  - Higher confidence → higher VaR property
+- Tests: 1442 passing (1427 + 15 new)
+- **Learnings for future iterations:**
+  - VaR defaults (var_enabled=False) ensure all existing tests pass without modification
+  - Historical VaR requires >= 10 returns per position — tests must generate 11+ candles
+  - Test count baseline: 1442 tests passing as of V3-013
+---
+
+## 2026-02-22 - V3-014
+- Verified all V3 config fields already present in src/bot/config.py:
+  - var_enabled: bool = False, var_confidence: float = 0.95, max_portfolio_var_pct: float = 5.0
+  - quant_pairs: list[list[str]] = [], triangular_arb_enabled: bool = False
+  - rebalance_enabled: bool = False, rebalance_method: str = 'risk_parity', rebalance_threshold_pct: float = 5.0
+  - garch_enabled: bool = False
+- All fields match reference implementation and PRD acceptance criteria
+- No code changes needed — fields were added progressively during V2/V3 development
+- Tests: 1442 passing (no change), ruff clean
+- **Learnings for future iterations:**
+  - Config fields can accumulate across story branches — always verify before duplicating
+  - Test count baseline: 1442 tests passing as of V3-014
+---
