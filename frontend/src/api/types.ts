@@ -257,6 +257,12 @@ export interface EngineInfo {
   max_positions: number
   loop_interval: number
   error: string | null
+  // V5-003: description metadata and tracked symbols
+  role_ko?: string
+  role_en?: string
+  description_ko?: string
+  key_params?: string
+  symbols?: string[] | string[][]
 }
 
 export type EnginesResponse = Record<string, EngineInfo>

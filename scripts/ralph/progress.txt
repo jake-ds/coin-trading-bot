@@ -45,3 +45,18 @@ Started: 2026년 2월 23일 월요일 01시 08분 44초 KST
   - stat_arb PnL scale factor 0.005 = (taker_fee + slippage) / 10 = (0.04 + 0.01) / 10
   - Cost deduction for stat_arb happens in _check_exit, not _estimate_pairs_pnl, to preserve backward compat
 ---
+
+## 2026-02-23 - V5-003
+- **Implemented**: Multi-pair config expansion + engine description metadata
+- **Files modified**:
+  - `src/bot/config.py` — expanded default symbols (funding: 5, grid: 3, cross: 3, stat: 2 pairs), added ENGINE_DESCRIPTIONS dict, added SETTINGS_METADATA entries for all engine config fields
+  - `src/bot/dashboard/app.py` — enriched GET /api/engines with descriptions/symbols, added GET /api/engines/{name}/params endpoint
+  - `frontend/src/api/types.ts` — added role_ko, role_en, description_ko, key_params, symbols to EngineInfo
+- **Files created**:
+  - `tests/dashboard/test_engine_api.py` — 10 tests for engine API + description metadata
+- **Tests added**: 10
+- **Learnings for future iterations:**
+  - ENGINE_DESCRIPTIONS is a static dict in config.py (not base.py) — co-located with SETTINGS_METADATA
+  - /api/engines/{name}/params dynamically reads Settings fields using SETTINGS_METADATA prefix matching
+  - Frontend types use optional fields (?) for new metadata to maintain backward compat
+---

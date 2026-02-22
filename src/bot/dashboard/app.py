@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from bot.config import SETTINGS_METADATA
+from bot.config import ENGINE_DESCRIPTIONS, SETTINGS_METADATA
 from bot.dashboard.auth import (
     blacklist_refresh_token,
     create_access_token,
@@ -766,13 +766,33 @@ engine_router = APIRouter(
 
 @engine_router.get("")
 async def list_engines():
-    """List all engines with status."""
+    """List all engines with status, descriptions, and symbols."""
     if _engine_manager is None:
         return JSONResponse(
             status_code=503,
             content={"detail": "Engine mode not enabled"},
         )
-    return _engine_manager.get_status()
+    status = _engine_manager.get_status()
+    # Enrich with description metadata and tracked symbols
+    _symbol_map = {
+        "funding_rate_arb": "funding_arb_symbols",
+        "grid_trading": "grid_symbols",
+        "cross_exchange_arb": "cross_arb_symbols",
+        "stat_arb": "stat_arb_pairs",
+    }
+    for name, info in status.items():
+        desc = ENGINE_DESCRIPTIONS.get(name, {})
+        info["role_ko"] = desc.get("role_ko", "")
+        info["role_en"] = desc.get("role_en", "")
+        info["description_ko"] = desc.get("description_ko", "")
+        info["key_params"] = desc.get("key_params", "")
+        # Add tracked symbols from settings
+        sym_field = _symbol_map.get(name)
+        if sym_field and _settings and hasattr(_settings, sym_field):
+            info["symbols"] = getattr(_settings, sym_field)
+        else:
+            info["symbols"] = []
+    return status
 
 
 @engine_router.post("/{name}/start")
@@ -853,6 +873,43 @@ async def engine_cycle_log(name: str):
         )
     logs = _engine_manager.get_engine_cycle_log(name)
     return {"engine": name, "cycle_log": logs}
+
+
+@engine_router.get("/{name}/params")
+async def engine_params(name: str):
+    """Get engine-specific config params, description metadata, and symbols."""
+    if _engine_manager is None:
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "Engine mode not enabled"},
+        )
+    # Engine param prefix mapping
+    _prefix_map = {
+        "funding_rate_arb": "funding_arb_",
+        "grid_trading": "grid_",
+        "cross_exchange_arb": "cross_arb_",
+        "stat_arb": "stat_arb_",
+    }
+    prefix = _prefix_map.get(name)
+    if prefix is None:
+        return JSONResponse(
+            status_code=404,
+            content={"detail": f"Unknown engine: {name}"},
+        )
+
+    # Gather config params for this engine
+    params = {}
+    if _settings:
+        for field_name in type(_settings).model_fields:
+            if field_name.startswith(prefix):
+                params[field_name] = getattr(_settings, field_name, None)
+
+    desc = ENGINE_DESCRIPTIONS.get(name, {})
+    return {
+        "engine": name,
+        "description": desc,
+        "params": params,
+    }
 
 
 @engine_router.get("/{name}/positions")
