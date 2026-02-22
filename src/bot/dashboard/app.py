@@ -14,6 +14,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from bot.config import SETTINGS_METADATA
 from bot.dashboard.auth import (
     blacklist_refresh_token,
     create_access_token,
@@ -463,6 +464,128 @@ async def toggle_strategy(
     # Broadcast strategy toggle via WebSocket
     asyncio.ensure_future(broadcast_state_update())
     return {"name": name, "active": new_state == "enabled", "success": True}
+
+
+# ---------------------------------------------------------------------------
+# Settings endpoints
+# ---------------------------------------------------------------------------
+
+# Track the last saved config snapshot for undo
+_settings_previous: dict | None = None
+
+
+@api_router.get("/settings")
+async def get_settings_endpoint():
+    """Get current configuration with metadata. Sensitive fields are masked."""
+    if _settings is None:
+        return JSONResponse(
+            status_code=500,
+            content={"detail": "Settings not configured"},
+        )
+
+    settings_list = []
+    for field_name, meta in SETTINGS_METADATA.items():
+        if not hasattr(_settings, field_name):
+            continue
+        current_value = getattr(_settings, field_name)
+
+        # Get default value from model fields (access from class, not instance)
+        field_info = type(_settings).model_fields.get(field_name)
+        default_value = None
+        if field_info is not None:
+            default_value = field_info.default
+            # Handle default_factory
+            if default_value is None and field_info.default_factory is not None:
+                default_value = field_info.default_factory()
+
+        # Mask sensitive fields
+        display_value = current_value
+        if meta.get("type") == "secret":
+            if current_value:
+                display_value = "***configured***"
+            else:
+                display_value = ""
+
+        # Convert enums to string
+        if hasattr(display_value, "value"):
+            display_value = display_value.value
+        if hasattr(default_value, "value"):
+            default_value = default_value.value
+
+        settings_list.append({
+            "key": field_name,
+            "value": display_value,
+            "default": default_value,
+            "section": meta.get("section", "Other"),
+            "description": meta.get("description", ""),
+            "type": meta.get("type", "str"),
+            "requires_restart": meta.get("requires_restart", False),
+            "options": meta.get("options"),
+        })
+
+    return {"settings": settings_list}
+
+
+@api_router.put("/settings")
+async def update_settings_endpoint(body: dict):
+    """Update bot settings at runtime (hot-reload safe settings only)."""
+    global _settings_previous
+
+    if _settings is None:
+        return JSONResponse(
+            status_code=500,
+            content={"detail": "Settings not configured"},
+        )
+
+    if not body:
+        return JSONResponse(
+            status_code=400,
+            content={"detail": "No settings provided"},
+        )
+
+    # Validate fields exist and are not unsafe
+    errors = []
+    for key, value in body.items():
+        if key not in SETTINGS_METADATA:
+            errors.append(f"Unknown setting: {key}")
+            continue
+        meta = SETTINGS_METADATA[key]
+        if meta.get("requires_restart", False):
+            errors.append(
+                f"Setting '{key}' requires restart and cannot be changed at runtime"
+            )
+
+    if errors:
+        return JSONResponse(
+            status_code=400,
+            content={"detail": "; ".join(errors), "errors": errors},
+        )
+
+    # Snapshot current values for undo
+    snapshot = {}
+    for key in body:
+        if hasattr(_settings, key):
+            val = getattr(_settings, key)
+            if hasattr(val, "value"):
+                val = val.value
+            snapshot[key] = val
+    _settings_previous = snapshot
+
+    # Apply changes via hot-reload
+    try:
+        changed = _settings.reload(body)
+    except ValueError as e:
+        return JSONResponse(
+            status_code=400,
+            content={"detail": str(e)},
+        )
+
+    logger.info("settings_updated", changed=changed)
+    return {
+        "success": True,
+        "changed": changed,
+        "previous": snapshot,
+    }
 
 
 @api_router.get("/health")

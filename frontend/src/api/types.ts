@@ -220,3 +220,25 @@ export interface CycleLogEntry {
 export interface CycleLogResponse {
   cycle_log: CycleLogEntry[]
 }
+
+// Settings types
+export interface SettingItem {
+  key: string
+  value: unknown
+  default: unknown
+  section: string
+  description: string
+  type: string
+  requires_restart: boolean
+  options?: string[]
+}
+
+export interface SettingsResponse {
+  settings: SettingItem[]
+}
+
+export interface SettingsUpdateResponse {
+  success: boolean
+  changed: string[]
+  previous: Record<string, unknown>
+}

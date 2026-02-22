@@ -14,6 +14,9 @@ Started: 2026-02-22
 - **Auth**: JWT via python-jose. Disabled when dashboard_password='changeme'. Auth router at `/api/auth/*` (no auth dependency). Protected API router has `Depends(require_auth_strict)`.
 - **Auth testing**: Test fixtures must call `set_settings(None)` and `auth_module.clear_blacklist()` in setup/teardown.
 - **Auth tokens**: Access token (1h), refresh token (7d with jti for blacklisting). In-memory blacklist via `_refresh_blacklist` set.
+- **Settings metadata**: `SETTINGS_METADATA` dict in `bot.config` maps field names to section, description, type, requires_restart. Used by GET/PUT /api/settings.
+- **Hot-reload**: `Settings.reload(updates)` method applies runtime changes to safe settings. Raises ValueError for unsafe/unknown fields.
+- **Settings tests**: Use `_make_settings()` factory that creates real `Settings` instances with `config_file="__nonexistent__"` to avoid YAML override.
 - **Frontend auth**: `AuthProvider` wraps app in main.tsx. `useAuth()` hook. `getAccessToken()` for axios interceptor. Tokens stored in module-level variables (not localStorage).
 - **Baseline**: 1494 tests passing on V3 branch (V2 + V3 complete).
 - **API Router**: All API endpoints use `api_router = APIRouter(prefix="/api")`. Legacy HTML at `/legacy`.
@@ -290,4 +293,41 @@ Started: 2026-02-22
   - `set_settings(None)` in test fixture teardown prevents auth state leaking between tests
   - Pre-existing test_config::test_defaults failure (unrelated to auth) — caused by .env.example being loaded
   - Test count baseline: 1617 collected, 1616 passing as of V4-007
+---
+
+## 2026-02-22 - V4-008
+- Built web-based settings panel with hot-reload for safe settings
+- Files created:
+  - tests/dashboard/test_v4_008_settings.py (29 tests)
+- Files modified:
+  - src/bot/config.py:
+    - Added `Settings.reload(updates)` method for runtime hot-reload of safe settings
+    - Added `SETTINGS_METADATA` dict: maps every configurable field to section, description, type, requires_restart flag
+    - Metadata covers Trading, Risk Management, Strategies, Exchange, Dashboard, Notifications sections
+  - src/bot/dashboard/app.py:
+    - Added GET /api/settings: returns all settings with metadata, masked secrets, defaults, sections, restart flags
+    - Added PUT /api/settings: validates fields, rejects unsafe/unknown, applies hot-reload, returns previous values for undo
+    - Imported SETTINGS_METADATA from bot.config
+    - Module-level `_settings_previous` for undo support
+  - src/bot/main.py:
+    - Added `dashboard_module.set_settings(self._settings)` in initialize() so settings endpoints work at runtime
+  - frontend/src/api/types.ts:
+    - Added SettingItem, SettingsResponse, SettingsUpdateResponse interfaces
+  - frontend/src/pages/Settings.tsx:
+    - Full implementation with grouped sections (Trading, Risk Management, Strategies, Exchange, Dashboard, Notifications)
+    - Each setting shows: current value, description, type badge, restart indicator
+    - Input types: number (int/float), boolean toggle, select dropdown, text, secret (masked read-only)
+    - Restart-required and secret fields shown as read-only
+    - Save button with confirmation dialog showing what will change
+    - Undo button to revert to previous values (using server-returned previous snapshot)
+    - Loading skeleton, error state, save success/error messages
+    - Consistent dark theme
+- Tests: 1646 passing (1617 existing + 29 new — 1 pre-existing test_config failure), ruff clean, frontend builds clean
+- **Learnings for future iterations:**
+  - Access `model_fields` from the class, not instance: `type(_settings).model_fields` (Pydantic v2.11 deprecation)
+  - `SETTINGS_METADATA` dict is the single source of truth for what settings exist and their properties
+  - `Settings.reload()` uses `object.__setattr__` to bypass Pydantic frozen model protection
+  - Test factory `_make_settings(config_file="__nonexistent__")` prevents YAML override from test environment
+  - PUT endpoint rejects entire request if any field is unsafe (atomic — no partial apply)
+  - Test count baseline: 1646 passing as of V4-008
 ---

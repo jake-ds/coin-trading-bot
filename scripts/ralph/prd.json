@@ -164,7 +164,7 @@
         "All existing Python tests pass, ruff check passes"
       ],
       "priority": 8,
-      "passes": false,
+      "passes": true,
       "notes": "API keys are NEVER returned in GET response. Only masked indicators (e.g., '***configured***' or 'not set')."
     },
     {

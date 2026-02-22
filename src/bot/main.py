@@ -183,8 +183,9 @@ class TradingBot:
         # Start dashboard server as background task
         self._start_dashboard()
 
-        # Provide strategy registry to dashboard for toggle endpoint
+        # Provide strategy registry and settings to dashboard for API endpoints
         dashboard_module.set_strategy_registry(strategy_registry)
+        dashboard_module.set_settings(self._settings)
 
         # Import strategies to trigger registration
         self._load_strategies()
@@ -497,6 +498,16 @@ class TradingBot:
 
     async def _trading_cycle(self) -> None:
         """Execute one trading cycle: check exits -> collect -> analyze -> risk check -> execute."""
+        cycle_start_ms = time.monotonic()
+
+        # Build cycle log entry
+        cycle_entry: dict = {
+            "cycle_num": self._cycle_count + 1,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "duration_ms": None,
+            "symbols": {},
+        }
+
         # Auto-reset daily PnL at start of each new day
         if self._risk_manager:
             self._risk_manager.check_and_reset_daily()
@@ -556,6 +567,24 @@ class TradingBot:
             if not candles:
                 continue
 
+            # Initialize per-symbol cycle log
+            sym_log: dict = {
+                "price": candles[-1].close,
+                "regime": None,
+                "trend": None,
+                "strategies": [],
+                "ensemble": {
+                    "action": "HOLD",
+                    "confidence": 0.0,
+                    "agreement": 0,
+                    "reason": None,
+                    "agreeing_strategies": [],
+                },
+                "risk_check": None,
+                "final_action": "HOLD",
+                "order": None,
+            }
+
             # Update price history for portfolio correlation calculation
             if self._portfolio_risk:
                 try:
@@ -566,6 +595,7 @@ class TradingBot:
                     pass
 
             # Detect market regime and adapt strategies
+            regime = None
             if self._regime_detector and candles:
                 try:
                     if (
@@ -590,6 +620,7 @@ class TradingBot:
                         symbol=symbol,
                         exc_info=True,
                     )
+            sym_log["regime"] = regime.value if regime else None
 
             # Determine trend from higher-timeframe candles
             trend_direction = None
@@ -613,6 +644,7 @@ class TradingBot:
                         symbol=symbol,
                         exc_info=True,
                     )
+            sym_log["trend"] = trend_direction.value if trend_direction else None
 
             # Analyze order book for confidence modification
             ob_analysis = None
@@ -635,18 +667,51 @@ class TradingBot:
                 signals = await self._signal_ensemble.collect_signals(
                     symbol, active_strategies, candles
                 )
+
+                # Record individual strategy signals
+                sym_log["strategies"] = [
+                    {
+                        "name": s.strategy_name,
+                        "action": s.action.value,
+                        "confidence": round(s.confidence, 4),
+                    }
+                    for s in signals
+                ]
+
                 signal = self._signal_ensemble.vote(
                     signals,
                     symbol,
                     trend_direction=trend_direction,
                     order_book_analysis=ob_analysis,
                 )
+
+                # Record ensemble result
+                sym_log["ensemble"] = {
+                    "action": signal.action.value,
+                    "confidence": round(signal.confidence, 4),
+                    "agreement": signal.metadata.get("ensemble_agreement", 0),
+                    "reason": signal.metadata.get("reason"),
+                    "agreeing_strategies": signal.metadata.get(
+                        "agreeing_strategies", []
+                    ),
+                }
             else:
+                cycle_entry["symbols"][symbol] = sym_log
                 continue
 
             # Risk check (individual trade)
+            pre_risk_action = signal.action
             if self._risk_manager:
                 signal = self._risk_manager.validate_signal(signal)
+            if signal.action != pre_risk_action:
+                sym_log["risk_check"] = {
+                    "passed": False,
+                    "reason": signal.metadata.get(
+                        "reject_reason",
+                        "risk_manager_rejected",
+                    ),
+                    "stage": "risk_manager",
+                }
 
             # Portfolio-level risk check (BUY only)
             if (
@@ -716,6 +781,14 @@ class TradingBot:
                             "reject_reason": f"portfolio_risk: {reason}",
                         },
                     )
+                    sym_log["risk_check"] = {
+                        "passed": False,
+                        "reason": f"portfolio_risk: {reason}",
+                        "stage": "portfolio_risk",
+                    }
+
+            # Record final action
+            sym_log["final_action"] = signal.action.value
 
             if signal.action != signal.action.HOLD:
                 # Execute on first available exchange
@@ -762,6 +835,14 @@ class TradingBot:
                         order = await engine.execute_signal(signal, quantity=qty)
                         if order:
                             fill_price = order.filled_price or 0
+
+                            # Record order in cycle log
+                            sym_log["order"] = {
+                                "symbol": order.symbol,
+                                "side": order.side.value,
+                                "quantity": order.quantity,
+                                "price": fill_price,
+                            }
 
                             # Track position in RiskManager
                             if self._risk_manager and fill_price > 0:
@@ -870,6 +951,27 @@ class TradingBot:
                                 )
                     break
 
+            # If risk check passed and no rejection was recorded, mark as passed
+            if sym_log["risk_check"] is None and sym_log["final_action"] != "HOLD":
+                sym_log["risk_check"] = {
+                    "passed": True,
+                    "reason": None,
+                    "stage": "all",
+                }
+
+            cycle_entry["symbols"][symbol] = sym_log
+
+        # Finalize cycle log entry
+        cycle_entry["duration_ms"] = round(
+            (time.monotonic() - cycle_start_ms) * 1000, 1
+        )
+
+        # Append to cycle log (keep last 50)
+        cycle_log = dashboard_module.get_state().get("cycle_log", [])
+        cycle_log.append(cycle_entry)
+        if len(cycle_log) > 50:
+            cycle_log = cycle_log[-50:]
+
         # Build open positions data for dashboard
         open_positions = self._build_open_positions()
 
@@ -899,6 +1001,7 @@ class TradingBot:
             open_positions=open_positions,
             regime=current_regime,
             equity_curve=dashboard_module.get_state().get("equity_curve", []),
+            cycle_log=cycle_log,
         )
 
         # Broadcast state to WebSocket clients after each cycle

@@ -173,6 +173,316 @@ class Settings(BaseSettings):
         return self
 
 
+    def reload(self, updates: dict[str, Any]) -> list[str]:
+        """Hot-reload safe settings at runtime.
+
+        Args:
+            updates: dict of field_name -> new_value to apply.
+
+        Returns:
+            List of field names that were actually changed.
+
+        Raises:
+            ValueError: If any field is not a safe (hot-reloadable) setting.
+        """
+        changed: list[str] = []
+        for key, value in updates.items():
+            if key not in SETTINGS_METADATA:
+                raise ValueError(f"Unknown setting: {key}")
+            meta = SETTINGS_METADATA[key]
+            if meta.get("requires_restart", False):
+                raise ValueError(
+                    f"Setting '{key}' requires restart and cannot be changed at runtime"
+                )
+            if not hasattr(self, key):
+                raise ValueError(f"Unknown setting: {key}")
+            old_value = getattr(self, key)
+            if old_value != value:
+                object.__setattr__(self, key, value)
+                changed.append(key)
+        return changed
+
+
+# ---------------------------------------------------------------------------
+# Settings metadata — describes each setting for the web UI
+# ---------------------------------------------------------------------------
+
+SETTINGS_METADATA: dict[str, dict[str, Any]] = {
+    # Trading (unsafe — require restart)
+    "trading_mode": {
+        "section": "Trading",
+        "description": "Trading mode: paper or live",
+        "type": "select",
+        "options": ["paper", "live"],
+        "requires_restart": True,
+    },
+    "symbols": {
+        "section": "Trading",
+        "description": "Symbols to trade",
+        "type": "list",
+        "requires_restart": True,
+    },
+    "loop_interval_seconds": {
+        "section": "Trading",
+        "description": "Seconds between trading cycles",
+        "type": "int",
+        "requires_restart": False,
+    },
+    # Exchange (unsafe)
+    "binance_api_key": {
+        "section": "Exchange",
+        "description": "Binance API key",
+        "type": "secret",
+        "requires_restart": True,
+    },
+    "binance_secret_key": {
+        "section": "Exchange",
+        "description": "Binance secret key",
+        "type": "secret",
+        "requires_restart": True,
+    },
+    "binance_testnet": {
+        "section": "Exchange",
+        "description": "Use Binance testnet",
+        "type": "bool",
+        "requires_restart": True,
+    },
+    "upbit_api_key": {
+        "section": "Exchange",
+        "description": "Upbit API key",
+        "type": "secret",
+        "requires_restart": True,
+    },
+    "upbit_secret_key": {
+        "section": "Exchange",
+        "description": "Upbit secret key",
+        "type": "secret",
+        "requires_restart": True,
+    },
+    # Database (unsafe)
+    "database_url": {
+        "section": "Exchange",
+        "description": "Database connection URL",
+        "type": "secret",
+        "requires_restart": True,
+    },
+    # Risk Management (safe — hot-reloadable)
+    "max_position_size_pct": {
+        "section": "Risk Management",
+        "description": "Maximum position size as % of portfolio",
+        "type": "float",
+        "requires_restart": False,
+    },
+    "daily_loss_limit_pct": {
+        "section": "Risk Management",
+        "description": "Maximum daily loss as % of portfolio",
+        "type": "float",
+        "requires_restart": False,
+    },
+    "max_drawdown_pct": {
+        "section": "Risk Management",
+        "description": "Maximum drawdown % before halting",
+        "type": "float",
+        "requires_restart": False,
+    },
+    "max_concurrent_positions": {
+        "section": "Risk Management",
+        "description": "Maximum number of concurrent positions",
+        "type": "int",
+        "requires_restart": False,
+    },
+    "stop_loss_pct": {
+        "section": "Risk Management",
+        "description": "Stop-loss percentage per trade",
+        "type": "float",
+        "requires_restart": False,
+    },
+    "take_profit_pct": {
+        "section": "Risk Management",
+        "description": "Take-profit percentage per trade",
+        "type": "float",
+        "requires_restart": False,
+    },
+    "trailing_stop_enabled": {
+        "section": "Risk Management",
+        "description": "Enable trailing stop-loss",
+        "type": "bool",
+        "requires_restart": False,
+    },
+    "trailing_stop_pct": {
+        "section": "Risk Management",
+        "description": "Trailing stop distance as %",
+        "type": "float",
+        "requires_restart": False,
+    },
+    "risk_per_trade_pct": {
+        "section": "Risk Management",
+        "description": "Risk per trade as % of portfolio (ATR-based sizing)",
+        "type": "float",
+        "requires_restart": False,
+    },
+    "atr_multiplier": {
+        "section": "Risk Management",
+        "description": "ATR multiplier for position sizing",
+        "type": "float",
+        "requires_restart": False,
+    },
+    "atr_period": {
+        "section": "Risk Management",
+        "description": "ATR calculation period",
+        "type": "int",
+        "requires_restart": False,
+    },
+    # Strategies (safe)
+    "signal_min_agreement": {
+        "section": "Strategies",
+        "description": "Minimum strategy agreement for signal",
+        "type": "int",
+        "requires_restart": False,
+    },
+    "strategy_weights": {
+        "section": "Strategies",
+        "description": "Per-strategy weight overrides (JSON)",
+        "type": "dict",
+        "requires_restart": False,
+    },
+    "strategy_max_consecutive_losses": {
+        "section": "Strategies",
+        "description": "Max consecutive losses before auto-disable",
+        "type": "int",
+        "requires_restart": False,
+    },
+    "strategy_min_win_rate_pct": {
+        "section": "Strategies",
+        "description": "Min win rate % before auto-disable",
+        "type": "float",
+        "requires_restart": False,
+    },
+    "strategy_min_trades_for_eval": {
+        "section": "Strategies",
+        "description": "Min trades before evaluating strategy",
+        "type": "int",
+        "requires_restart": False,
+    },
+    "strategy_re_enable_check_hours": {
+        "section": "Strategies",
+        "description": "Hours before re-checking disabled strategy",
+        "type": "float",
+        "requires_restart": False,
+    },
+    # Paper Trading (safe)
+    "paper_initial_balance": {
+        "section": "Trading",
+        "description": "Paper trading initial balance",
+        "type": "float",
+        "requires_restart": True,
+    },
+    "paper_fee_pct": {
+        "section": "Trading",
+        "description": "Paper trading fee percentage",
+        "type": "float",
+        "requires_restart": False,
+    },
+    # Smart execution (safe)
+    "prefer_limit_orders": {
+        "section": "Trading",
+        "description": "Prefer limit orders over market orders",
+        "type": "bool",
+        "requires_restart": False,
+    },
+    "limit_order_timeout_seconds": {
+        "section": "Trading",
+        "description": "Timeout for limit orders before fallback to market",
+        "type": "float",
+        "requires_restart": False,
+    },
+    "twap_chunk_count": {
+        "section": "Trading",
+        "description": "Number of chunks for TWAP execution",
+        "type": "int",
+        "requires_restart": False,
+    },
+    # Multi-timeframe (safe)
+    "timeframes": {
+        "section": "Strategies",
+        "description": "Timeframes for analysis",
+        "type": "list",
+        "requires_restart": True,
+    },
+    "trend_timeframe": {
+        "section": "Strategies",
+        "description": "Higher timeframe for trend filter",
+        "type": "str",
+        "requires_restart": False,
+    },
+    # Portfolio risk (safe)
+    "max_total_exposure_pct": {
+        "section": "Risk Management",
+        "description": "Max total portfolio exposure %",
+        "type": "float",
+        "requires_restart": False,
+    },
+    "max_correlation": {
+        "section": "Risk Management",
+        "description": "Max correlation allowed between positions",
+        "type": "float",
+        "requires_restart": False,
+    },
+    "max_portfolio_heat": {
+        "section": "Risk Management",
+        "description": "Max portfolio heat (risk)",
+        "type": "float",
+        "requires_restart": False,
+    },
+    # Dashboard (unsafe)
+    "dashboard_port": {
+        "section": "Dashboard",
+        "description": "Dashboard server port",
+        "type": "int",
+        "requires_restart": True,
+    },
+    "dashboard_username": {
+        "section": "Dashboard",
+        "description": "Dashboard login username",
+        "type": "str",
+        "requires_restart": True,
+    },
+    "dashboard_password": {
+        "section": "Dashboard",
+        "description": "Dashboard login password",
+        "type": "secret",
+        "requires_restart": True,
+    },
+    "jwt_secret": {
+        "section": "Dashboard",
+        "description": "JWT signing secret",
+        "type": "secret",
+        "requires_restart": True,
+    },
+    # Notifications (unsafe)
+    "telegram_bot_token": {
+        "section": "Notifications",
+        "description": "Telegram bot token",
+        "type": "secret",
+        "requires_restart": True,
+    },
+    "telegram_chat_id": {
+        "section": "Notifications",
+        "description": "Telegram chat ID",
+        "type": "secret",
+        "requires_restart": True,
+    },
+    # Logging (safe)
+    "log_level": {
+        "section": "Dashboard",
+        "description": "Logging level",
+        "type": "select",
+        "options": ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        "requires_restart": False,
+    },
+}
+
+
 def load_settings(**overrides: Any) -> Settings:
     """Create a Settings instance with optional overrides."""
     return Settings(**overrides)
