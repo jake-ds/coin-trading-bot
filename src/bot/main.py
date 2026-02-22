@@ -23,6 +23,7 @@ from bot.monitoring.logger import setup_logging
 from bot.monitoring.strategy_tracker import StrategyTracker
 from bot.monitoring.telegram import TelegramNotifier
 from bot.risk.manager import RiskManager
+from bot.risk.portfolio_risk import PortfolioRiskManager
 from bot.strategies.base import strategy_registry
 from bot.strategies.ensemble import SignalEnsemble
 from bot.strategies.indicators import calculate_atr
@@ -52,6 +53,7 @@ class TradingBot:
         self._regime_detector: MarketRegimeDetector | None = None
         self._ws_feed: WebSocketFeed | None = None
         self._strategy_tracker: StrategyTracker | None = None
+        self._portfolio_risk: PortfolioRiskManager | None = None
         self._cycle_lock: asyncio.Lock = asyncio.Lock()
         self._cycle_count: int = 0
         self._total_cycle_duration: float = 0.0
@@ -85,6 +87,16 @@ class TradingBot:
             daily_loss_limit_pct=self._settings.daily_loss_limit_pct,
             max_drawdown_pct=self._settings.max_drawdown_pct,
             max_concurrent_positions=self._settings.max_concurrent_positions,
+        )
+
+        # Initialize portfolio-level risk manager
+        self._portfolio_risk = PortfolioRiskManager(
+            max_total_exposure_pct=self._settings.max_total_exposure_pct,
+            max_correlation=self._settings.max_correlation,
+            correlation_window=self._settings.correlation_window,
+            max_positions_per_sector=self._settings.max_positions_per_sector,
+            max_portfolio_heat=self._settings.max_portfolio_heat,
+            sector_map=self._settings.sector_map,
         )
 
         # Initialize signal ensemble voting system
@@ -338,11 +350,16 @@ class TradingBot:
         # Update portfolio value from paper portfolio or default
         if self._risk_manager:
             if self._paper_portfolio:
-                self._risk_manager.update_portfolio_value(
-                    self._paper_portfolio.total_value
-                )
+                portfolio_val = self._paper_portfolio.total_value
+                self._risk_manager.update_portfolio_value(portfolio_val)
             elif self._risk_manager._current_portfolio_value == 0:
-                self._risk_manager.update_portfolio_value(10000.0)
+                portfolio_val = 10000.0
+                self._risk_manager.update_portfolio_value(portfolio_val)
+            else:
+                portfolio_val = self._risk_manager._current_portfolio_value
+            # Sync portfolio value to portfolio risk manager
+            if self._portfolio_risk:
+                self._portfolio_risk.update_portfolio_value(portfolio_val)
 
         # Collect data
         if self._collector:
@@ -380,6 +397,15 @@ class TradingBot:
             candles = await self._store.get_candles(symbol, limit=200)
             if not candles:
                 continue
+
+            # Update price history for portfolio correlation calculation
+            if self._portfolio_risk:
+                try:
+                    self._portfolio_risk.update_price_history(
+                        symbol, candles
+                    )
+                except Exception:
+                    pass
 
             # Detect market regime and adapt strategies
             if self._regime_detector and candles:
@@ -440,9 +466,78 @@ class TradingBot:
             else:
                 continue
 
-            # Risk check
+            # Risk check (individual trade)
             if self._risk_manager:
                 signal = self._risk_manager.validate_signal(signal)
+
+            # Portfolio-level risk check (BUY only)
+            if (
+                signal.action == SignalAction.BUY
+                and self._portfolio_risk
+            ):
+                try:
+                    atr_for_check = calculate_atr(
+                        candles, period=self._settings.atr_period
+                    )
+                except Exception:
+                    atr_for_check = None
+                # Estimate position value for check
+                price = candles[-1].close
+                est_qty = 0.01  # Will be refined later
+                if self._risk_manager:
+                    portfolio_val = (
+                        self._risk_manager._current_portfolio_value
+                        or 10000
+                    )
+                    if atr_for_check and atr_for_check > 0:
+                        est_qty = (
+                            self._risk_manager
+                            .calculate_dynamic_position_size(
+                                portfolio_val,
+                                price,
+                                atr_for_check,
+                                risk_per_trade_pct=self._settings
+                                .risk_per_trade_pct,
+                                atr_multiplier=self._settings
+                                .atr_multiplier,
+                            )
+                        )
+                    else:
+                        est_qty = (
+                            self._risk_manager
+                            .calculate_position_size(
+                                portfolio_val, price
+                            )
+                        )
+                est_value = est_qty * price
+                # Normalize ATR as fraction of price for heat calc
+                atr_ratio = (
+                    atr_for_check / price
+                    if atr_for_check and price > 0
+                    else None
+                )
+                allowed, reason = (
+                    self._portfolio_risk.validate_new_position(
+                        symbol, est_value, atr=atr_ratio
+                    )
+                )
+                if not allowed:
+                    logger.info(
+                        "portfolio_risk_rejected",
+                        symbol=symbol,
+                        reason=reason,
+                    )
+                    signal = TradingSignal(
+                        strategy_name=signal.strategy_name,
+                        symbol=signal.symbol,
+                        action=SignalAction.HOLD,
+                        confidence=0.0,
+                        metadata={
+                            **signal.metadata,
+                            "rejected": True,
+                            "reject_reason": f"portfolio_risk: {reason}",
+                        },
+                    )
 
             if signal.action != signal.action.HOLD:
                 # Execute on first available exchange
@@ -505,6 +600,30 @@ class TradingBot:
                                             fill_price,
                                             order.quantity,
                                         )
+                                    # Track in portfolio risk manager
+                                    if self._portfolio_risk:
+                                        pos_value = (
+                                            order.quantity * fill_price
+                                        )
+                                        try:
+                                            pos_atr = calculate_atr(
+                                                candles,
+                                                period=self._settings
+                                                .atr_period,
+                                            )
+                                        except Exception:
+                                            pos_atr = None
+                                        atr_r = (
+                                            pos_atr / fill_price
+                                            if pos_atr
+                                            and fill_price > 0
+                                            else None
+                                        )
+                                        self._portfolio_risk.add_position(
+                                            order.symbol,
+                                            pos_value,
+                                            atr=atr_r,
+                                        )
                                 elif order.side == OrderSide.SELL:
                                     position = (
                                         self._risk_manager.get_position(
@@ -540,6 +659,11 @@ class TradingBot:
                                     # Remove from PositionManager
                                     if self._position_manager:
                                         self._position_manager.remove_position(
+                                            order.symbol
+                                        )
+                                    # Remove from portfolio risk
+                                    if self._portfolio_risk:
+                                        self._portfolio_risk.remove_position(
                                             order.symbol
                                         )
 
@@ -641,6 +765,11 @@ class TradingBot:
                         # Remove from PositionManager on full exit
                         if self._position_manager:
                             self._position_manager.remove_position(
+                                exit_signal.symbol
+                            )
+                        # Remove from portfolio risk on full exit
+                        if self._portfolio_risk:
+                            self._portfolio_risk.remove_position(
                                 exit_signal.symbol
                             )
 

@@ -679,4 +679,38 @@ Started: 2026년 2월 22일 일요일 00시 13분 50초 KST
   - StrategyRegistry `disable()` and `enable()` use `_active` set — StrategyTracker calls these directly for auto-management
   - Re-enable resets `consecutive_losses` to 0 to give the strategy a fresh start
   - Test count baseline: 900 tests passing as of V2-022
+- **PortfolioRiskManager pattern**: Created in `initialize()` from config settings. Portfolio value synced from paper_portfolio (or risk_manager fallback) at start of each `_trading_cycle()`. Price history updated from candles in symbol loop via `update_price_history()`. Before BUY execution, `validate_new_position()` checks: exposure limit → correlation → sector limit → portfolio heat. After BUY, `add_position()` with value and normalized ATR (atr/price). After SELL/exit, `remove_position()`. ATR used as price-normalized ratio for heat calculation.
+- **Portfolio risk check order**: Runs AFTER `risk_manager.validate_signal()` and BEFORE execution. Only checks BUY signals. Creates HOLD signal with `reject_reason: "portfolio_risk: ..."` on rejection.
+- **Test count baseline**: 948 tests passing as of V2-023
+---
+
+## 2026-02-22 - V2-023: Portfolio-level risk management: correlation, exposure limits, heat map
+- **Implemented:**
+  - New `PortfolioRiskManager` class in `src/bot/risk/portfolio_risk.py` with full portfolio-wide risk controls
+  - Max total exposure: total position value must not exceed `max_total_exposure_pct` (default 60%) of portfolio
+  - Correlation check: before opening new position, calculates rolling Pearson correlation with existing positions using recent close-to-close returns; rejects if |correlation| > `max_correlation` (default 0.8)
+  - Rolling correlation window: configurable `correlation_window` (default 30 candles), needs minimum 5 returns for valid calculation
+  - Sector/category limits: `sector_map` (dict[symbol→sector]) + `max_positions_per_sector` (default 3); symbols without sector mapping are always allowed
+  - Portfolio heat: sum of (position_value × ATR_ratio) / portfolio_value; ATR stored as price-normalized ratio; positions without ATR excluded from heat; rejects if projected heat > `max_portfolio_heat` (default 0.15)
+  - `validate_new_position()` runs all 4 checks in order: exposure → correlation → sector → heat; returns (allowed, reason) tuple
+  - Integrated into `main.py _trading_cycle()`: portfolio value synced at cycle start, price history updated per symbol, BUY signals validated after risk_manager check, positions tracked on BUY and removed on SELL/exit
+  - Added 6 new config settings: `max_total_exposure_pct`, `max_correlation`, `correlation_window`, `max_positions_per_sector`, `max_portfolio_heat`, `sector_map`
+  - Exported `PortfolioRiskManager` from `risk/__init__.py`
+- **Files created:**
+  - `src/bot/risk/portfolio_risk.py` — PortfolioRiskManager class
+  - `tests/risk/test_portfolio_risk.py` — 41 unit tests (exposure, correlation, sector, heat, validation, position mgmt, price history, edge cases)
+  - `tests/test_v2_023_portfolio_risk.py` — 7 integration tests (wiring, config, position tracking)
+- **Files modified:**
+  - `src/bot/main.py` — import PortfolioRiskManager, create in initialize(), sync portfolio value, update price history, validate BUY, track positions on BUY/SELL/exit
+  - `src/bot/config.py` — added 6 portfolio risk settings
+  - `src/bot/risk/__init__.py` — exported PortfolioRiskManager
+- **Tests:** 948 tests passing (900 previous + 48 new), ruff check passes
+- **Learnings for future iterations:**
+  - Correlation calculation needs at least 5 data points; fewer returns `None` (allows the trade)
+  - Zero-variance returns (constant prices) produce undefined correlation — handle by returning None
+  - Use `np.random.seed()` for deterministic random test data in correlation tests
+  - Order model requires `id` and `type` fields — test helpers must include them
+  - ATR for heat calculation should be normalized as ATR/price ratio, not absolute ATR, since heat is proportional to volatility fraction
+  - Portfolio risk check runs after individual risk_manager.validate_signal() so halted/drawdown checks happen first
+  - Test count baseline: 948 tests passing as of V2-023
 ---

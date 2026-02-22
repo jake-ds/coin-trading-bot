@@ -82,6 +82,14 @@ class Settings(BaseSettings):
     strategy_min_trades_for_eval: int = Field(default=20, ge=1)
     strategy_re_enable_check_hours: float = Field(default=24.0, gt=0)
 
+    # Portfolio-level risk management
+    max_total_exposure_pct: float = Field(default=60.0, ge=0, le=100)
+    max_correlation: float = Field(default=0.8, ge=0, le=1.0)
+    correlation_window: int = Field(default=30, ge=5)
+    max_positions_per_sector: int = Field(default=3, ge=1)
+    max_portfolio_heat: float = Field(default=0.15, gt=0)
+    sector_map: dict[str, str] = Field(default_factory=dict)
+
     # WebSocket feed
     websocket_enabled: bool = False
     websocket_poll_interval: float = Field(default=5.0, gt=0)
