@@ -876,3 +876,23 @@ Started: 2026년 2월 22일 일요일 00시 13분 50초 KST
   - Multi-strategy CSV needs an extra `strategy` column prepended to identify which strategy each trade belongs to
   - Test count baseline: 1178 tests passing as of V2-027
 ---
+
+## V3 Quant System Progress
+
+### V3 Codebase Patterns
+- V3 branch (`ralph/v3-quant-trading-system`) based on `ralph/v2-production` (1263 tests, 63 src files)
+- Reference code: `git show feat/v3-quant-trading-system:<path>`
+- New quant modules: `src/bot/quant/`, new strategies: `src/bot/strategies/quant/`
+- V3 dependencies: statsmodels>=0.14.0, scipy>=1.11.0, arch>=6.0.0
+
+---
+
+## 2026-02-22 - V3-001
+- Added statsmodels>=0.14.0, scipy>=1.11.0, arch>=6.0.0 to pyproject.toml
+- Created src/bot/quant/__init__.py with docstring
+- Created src/bot/strategies/quant/__init__.py with docstring
+- Tests added: 0 (scaffold only)
+- **Learnings for future iterations:**
+  - Main branch is nearly empty — V3 branch must be based on ralph/v2-production
+  - All 1263 existing tests still pass after dependency addition
+---
