@@ -992,6 +992,49 @@ app.include_router(perf_router)
 
 
 # ---------------------------------------------------------------------------
+# Research endpoints
+# ---------------------------------------------------------------------------
+
+research_router = APIRouter(
+    prefix="/api/research",
+    dependencies=[Depends(require_auth_strict)],
+)
+
+
+@research_router.get("/experiments")
+async def list_experiments():
+    """List registered research experiments with status."""
+    if _engine_manager is None:
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "Engine mode not enabled"},
+        )
+    experiments = []
+    for exp in _engine_manager._research_experiments:
+        experiments.append({
+            "name": exp.__class__.__name__,
+            "target_engine": exp.target_engine,
+            "status": "registered",
+        })
+    return {"experiments": experiments}
+
+
+@research_router.get("/reports")
+async def list_reports():
+    """List research reports, most recent first."""
+    if _engine_manager is None:
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "Engine mode not enabled"},
+        )
+    reports = list(reversed(_engine_manager._research_reports))
+    return {"reports": reports}
+
+
+app.include_router(research_router)
+
+
+# ---------------------------------------------------------------------------
 # WebSocket endpoint (at /api/ws — registered directly on app)
 # ---------------------------------------------------------------------------
 

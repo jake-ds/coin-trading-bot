@@ -159,6 +159,8 @@ class Settings(BaseSettings):
     tuner_interval_hours: int = Field(default=24, ge=1)
     engine_rebalance_enabled: bool = True
     engine_rebalance_interval_hours: int = Field(default=24, ge=1)
+    research_enabled: bool = True
+    research_interval_hours: int = Field(default=24, ge=1)
 
     # Funding rate strategy
     funding_extreme_positive_rate: float = Field(default=0.0005, ge=0)
@@ -743,6 +745,18 @@ SETTINGS_METADATA: dict[str, dict[str, Any]] = {
     "engine_rebalance_interval_hours": {
         "section": "Engines",
         "description": "Hours between capital rebalancing",
+        "type": "int",
+        "requires_restart": False,
+    },
+    "research_enabled": {
+        "section": "Research",
+        "description": "Enable automated research experiments",
+        "type": "bool",
+        "requires_restart": False,
+    },
+    "research_interval_hours": {
+        "section": "Research",
+        "description": "Hours between research experiment runs",
         "type": "int",
         "requires_restart": False,
     },

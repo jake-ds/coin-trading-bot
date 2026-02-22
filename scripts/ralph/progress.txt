@@ -164,3 +164,21 @@ Started: 2026년 2월 23일 월요일 01시 08분 44초 KST
   - statsmodels coint() returns numpy scalars, must convert for dict storage
   - Each experiment generates synthetic data via np.random.default_rng(seed) for reproducibility
 ---
+
+## 2026-02-23 - V5-011
+- **Implemented**: Research loop integration + research dashboard + final verification
+- **Files modified**:
+  - `src/bot/engines/manager.py` — added register_experiment(), _research_loop(), _research_experiments list, _research_reports list, research_task in start_background_loops()
+  - `src/bot/dashboard/app.py` — added GET /api/research/experiments and GET /api/research/reports endpoints
+  - `src/bot/config.py` — added research_enabled, research_interval_hours fields + SETTINGS_METADATA entries
+  - `frontend/src/App.tsx` — added /research route, nav link, Research import
+- **Files created**:
+  - `frontend/src/pages/Research.tsx` — experiment cards, collapsible report cards with color-coded results, before->after param changes, 30s auto-refresh
+  - `tests/research/test_integration.py` — 10 tests for manager integration, config, and experiment serialization
+- **Tests added**: 10
+- **Final verification**: 2085 tests pass, ruff clean, frontend builds
+
+## V5 COMPLETE
+All 11 user stories (V5-001 through V5-011) implemented and passing.
+Total new tests added: ~220 (from baseline ~1865 to 2085+)
+---

@@ -10,6 +10,7 @@ import structlog
 
 from bot.engines.tracker import EngineTracker, TradeRecord
 from bot.engines.tuner import ParameterTuner
+from bot.research.base import ResearchTask
 
 if TYPE_CHECKING:
     from bot.config import Settings
@@ -39,7 +40,10 @@ class EngineManager:
         self.tuner = ParameterTuner()
         self._tuner_task: asyncio.Task | None = None
         self._rebalance_task: asyncio.Task | None = None
+        self._research_task: asyncio.Task | None = None
         self._rebalance_history: list[dict] = []
+        self._research_experiments: list[ResearchTask] = []
+        self._research_reports: list[dict] = []
 
     # ------------------------------------------------------------------
     # Registration
@@ -174,8 +178,17 @@ class EngineManager:
     # Tuner and rebalance loops
     # ------------------------------------------------------------------
 
+    def register_experiment(self, experiment: ResearchTask) -> None:
+        """Register a research experiment for the research loop."""
+        self._research_experiments.append(experiment)
+        logger.info(
+            "experiment_registered",
+            name=experiment.__class__.__name__,
+            target=experiment.target_engine,
+        )
+
     async def start_background_loops(self) -> None:
-        """Start tuner and rebalance background loops."""
+        """Start tuner, rebalance, and research background loops."""
         s = self._settings
         if s and getattr(s, "tuner_enabled", False):
             self._tuner_task = asyncio.create_task(
@@ -184,6 +197,10 @@ class EngineManager:
         if s and getattr(s, "engine_rebalance_enabled", False):
             self._rebalance_task = asyncio.create_task(
                 self._rebalance_loop(), name="rebalance-loop"
+            )
+        if s and getattr(s, "research_enabled", False):
+            self._research_task = asyncio.create_task(
+                self._research_loop(), name="research-loop"
             )
 
     async def _tuner_loop(self) -> None:
@@ -259,6 +276,59 @@ class EngineManager:
                     logger.info("rebalance_complete", allocations=new_allocs)
             except Exception:
                 logger.exception("rebalance_loop_error")
+
+            await asyncio.sleep(interval)
+
+    async def _research_loop(self) -> None:
+        """Periodically run research experiments."""
+        s = self._settings
+        initial_delay = 10800  # 3 hours before first run
+        interval = (
+            getattr(s, "research_interval_hours", 24) * 3600
+            if s
+            else 86400
+        )
+
+        await asyncio.sleep(initial_delay)
+
+        while True:
+            try:
+                if s and not getattr(s, "research_enabled", False):
+                    await asyncio.sleep(interval)
+                    continue
+
+                for experiment in self._research_experiments:
+                    try:
+                        report = experiment.run_experiment()
+                        self._research_reports.append(report.to_dict())
+                        # Keep last 50 reports
+                        self._research_reports = (
+                            self._research_reports[-50:]
+                        )
+
+                        if report.improvement_significant:
+                            changes = experiment.apply_findings()
+                            if changes and s:
+                                self.tuner.apply_changes(changes, s)
+                                logger.info(
+                                    "research_applied",
+                                    experiment=report.experiment_name,
+                                    changes=[
+                                        c.to_dict() for c in changes
+                                    ],
+                                )
+                        logger.info(
+                            "research_complete",
+                            experiment=report.experiment_name,
+                            significant=report.improvement_significant,
+                        )
+                    except Exception:
+                        logger.exception(
+                            "research_experiment_error",
+                            experiment=experiment.__class__.__name__,
+                        )
+            except Exception:
+                logger.exception("research_loop_error")
 
             await asyncio.sleep(interval)
 
