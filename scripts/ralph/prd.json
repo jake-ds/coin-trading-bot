@@ -181,7 +181,7 @@
         "All existing tests pass, ruff check passes"
       ],
       "priority": 9,
-      "passes": false,
+      "passes": true,
       "notes": "The tuner and rebalance run as background tasks in EngineManager, similar to how engines run as asyncio tasks. First run after 1 hour, then every 24 hours."
     },
     {

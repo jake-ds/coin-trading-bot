@@ -154,6 +154,12 @@ class Settings(BaseSettings):
     stat_arb_stop_zscore: float = Field(default=4.0, gt=0)
     stat_arb_min_correlation: float = Field(default=0.7, ge=0, le=1.0)
 
+    # ── Auto-tuner & rebalance ──
+    tuner_enabled: bool = True
+    tuner_interval_hours: int = Field(default=24, ge=1)
+    engine_rebalance_enabled: bool = True
+    engine_rebalance_interval_hours: int = Field(default=24, ge=1)
+
     # Funding rate strategy
     funding_extreme_positive_rate: float = Field(default=0.0005, ge=0)
     funding_extreme_negative_rate: float = Field(default=-0.0003, le=0)
@@ -714,6 +720,30 @@ SETTINGS_METADATA: dict[str, dict[str, Any]] = {
         "section": "Engines",
         "description": "Minimum correlation required between pairs",
         "type": "float",
+        "requires_restart": False,
+    },
+    "tuner_enabled": {
+        "section": "Engines",
+        "description": "Enable automatic parameter tuning based on performance",
+        "type": "bool",
+        "requires_restart": False,
+    },
+    "tuner_interval_hours": {
+        "section": "Engines",
+        "description": "Hours between auto-tuner runs",
+        "type": "int",
+        "requires_restart": False,
+    },
+    "engine_rebalance_enabled": {
+        "section": "Engines",
+        "description": "Enable Sharpe-weighted capital rebalancing across engines",
+        "type": "bool",
+        "requires_restart": False,
+    },
+    "engine_rebalance_interval_hours": {
+        "section": "Engines",
+        "description": "Hours between capital rebalancing",
+        "type": "int",
         "requires_restart": False,
     },
 }

@@ -9,8 +9,10 @@ from typing import TYPE_CHECKING
 import structlog
 
 from bot.engines.tracker import EngineTracker, TradeRecord
+from bot.engines.tuner import ParameterTuner
 
 if TYPE_CHECKING:
+    from bot.config import Settings
     from bot.engines.base import BaseEngine, EngineCycleResult
     from bot.engines.portfolio_manager import PortfolioManager
 
@@ -24,11 +26,20 @@ class EngineManager:
     aggregated status reporting.
     """
 
-    def __init__(self, portfolio_manager: PortfolioManager):
+    def __init__(
+        self,
+        portfolio_manager: PortfolioManager,
+        settings: Settings | None = None,
+    ):
         self._portfolio_manager = portfolio_manager
+        self._settings = settings
         self._engines: dict[str, BaseEngine] = {}
         self._tasks: dict[str, asyncio.Task] = {}
         self.tracker = EngineTracker()
+        self.tuner = ParameterTuner()
+        self._tuner_task: asyncio.Task | None = None
+        self._rebalance_task: asyncio.Task | None = None
+        self._rebalance_history: list[dict] = []
 
     # ------------------------------------------------------------------
     # Registration
@@ -158,6 +169,110 @@ class EngineManager:
                     hold_time_seconds=action.get("hold_time_seconds", 0),
                 )
                 self.tracker.record_trade(engine_name, trade)
+
+    # ------------------------------------------------------------------
+    # Tuner and rebalance loops
+    # ------------------------------------------------------------------
+
+    async def start_background_loops(self) -> None:
+        """Start tuner and rebalance background loops."""
+        s = self._settings
+        if s and getattr(s, "tuner_enabled", False):
+            self._tuner_task = asyncio.create_task(
+                self._tuner_loop(), name="tuner-loop"
+            )
+        if s and getattr(s, "engine_rebalance_enabled", False):
+            self._rebalance_task = asyncio.create_task(
+                self._rebalance_loop(), name="rebalance-loop"
+            )
+
+    async def _tuner_loop(self) -> None:
+        """Periodically evaluate and adjust engine parameters."""
+        s = self._settings
+        initial_delay = 3600  # 1 hour before first run
+        interval = (
+            getattr(s, "tuner_interval_hours", 24) * 3600 if s else 86400
+        )
+
+        await asyncio.sleep(initial_delay)
+
+        while True:
+            try:
+                if s and not getattr(s, "tuner_enabled", False):
+                    await asyncio.sleep(interval)
+                    continue
+
+                all_metrics = self.tracker.get_all_metrics(window_hours=24)
+                for engine_name in self._engines:
+                    metrics = all_metrics.get(engine_name)
+                    if metrics is None or metrics.total_trades < 2:
+                        continue
+
+                    # Get current params from settings
+                    current_params = self._get_engine_params(engine_name)
+                    changes = self.tuner.evaluate_and_adjust(
+                        engine_name, metrics, current_params
+                    )
+                    if changes and s:
+                        self.tuner.apply_changes(changes, s)
+                        logger.info(
+                            "tuner_adjusted",
+                            engine=engine_name,
+                            changes=[c.to_dict() for c in changes],
+                        )
+            except Exception:
+                logger.exception("tuner_loop_error")
+
+            await asyncio.sleep(interval)
+
+    async def _rebalance_loop(self) -> None:
+        """Periodically rebalance capital allocation across engines."""
+        s = self._settings
+        initial_delay = 7200  # 2 hours before first run (offset from tuner)
+        interval = (
+            getattr(s, "engine_rebalance_interval_hours", 24) * 3600
+            if s
+            else 86400
+        )
+
+        await asyncio.sleep(initial_delay)
+
+        while True:
+            try:
+                if s and not getattr(s, "engine_rebalance_enabled", False):
+                    await asyncio.sleep(interval)
+                    continue
+
+                all_metrics = self.tracker.get_all_metrics(window_hours=24)
+                new_allocs = self._portfolio_manager.rebalance_allocations(
+                    all_metrics
+                )
+                if new_allocs:
+                    self._rebalance_history.append({
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "allocations": {
+                            k: round(v, 4) for k, v in new_allocs.items()
+                        },
+                    })
+                    # Keep last 30 entries
+                    self._rebalance_history = self._rebalance_history[-30:]
+                    logger.info("rebalance_complete", allocations=new_allocs)
+            except Exception:
+                logger.exception("rebalance_loop_error")
+
+            await asyncio.sleep(interval)
+
+    def _get_engine_params(self, engine_name: str) -> dict:
+        """Read current engine-specific params from settings."""
+        from bot.engines.tuner import TUNER_CONFIG
+
+        config = TUNER_CONFIG.get(engine_name, {})
+        params: dict = {}
+        if self._settings:
+            for param_name in config:
+                if hasattr(self._settings, param_name):
+                    params[param_name] = getattr(self._settings, param_name)
+        return params
 
     # ------------------------------------------------------------------
     # Status

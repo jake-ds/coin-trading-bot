@@ -128,3 +128,19 @@ Started: 2026년 2월 23일 월요일 01시 08분 44초 KST
   - Integer params (grid_levels) rounded after adjustment
   - 0.5 <= Sharpe < 1.0 = "steady" — no changes made
 ---
+
+## 2026-02-23 - V5-009
+- **Implemented**: Capital rebalance + tuner/rebalance integration in manager
+- **Files modified**:
+  - `src/bot/engines/portfolio_manager.py` — added rebalance_allocations() with Lagrange projection onto bounded simplex [0.10, 0.40]
+  - `src/bot/engines/manager.py` — added ParameterTuner instance, settings param, start_background_loops(), _tuner_loop(), _rebalance_loop(), _get_engine_params(), _rebalance_history
+  - `src/bot/config.py` — added tuner_enabled, tuner_interval_hours, engine_rebalance_enabled, engine_rebalance_interval_hours fields + SETTINGS_METADATA entries
+- **Files created**:
+  - `tests/engines/test_rebalance.py` — 15 tests for rebalance allocation, manager integration, config fields
+- **Tests added**: 15
+- **Learnings for future iterations:**
+  - [0.10, 0.40] bounds infeasible with N<3 engines (N*MAX < 1.0). Solution: dynamic effective_max = max(MAX, 1 - (N-1)*MIN)
+  - Lagrange projection (binary search for lambda in clip(y_i - lambda, min, max) summing to 1.0) is the correct algorithm for bounded simplex
+  - Single clip + normalize NEVER enforces hard max cap (needs N>=7 engines for that)
+  - EngineManager.settings is optional; _get_engine_params() reads settings fields by prefix matching engine name
+---
