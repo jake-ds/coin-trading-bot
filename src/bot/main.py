@@ -1,9 +1,11 @@
 """Main entry point for the Coin Trading Bot."""
 
+import argparse
 import asyncio
 import signal
 import sys
 import time
+from datetime import datetime, timezone
 
 import structlog
 
@@ -30,6 +32,13 @@ from bot.strategies.ensemble import SignalEnsemble
 from bot.strategies.indicators import calculate_atr
 from bot.strategies.regime import MarketRegimeDetector
 from bot.strategies.trend_filter import TrendFilter
+from bot.validation import (
+    ValidationCriteria,
+    ValidationReport,
+    build_validation_report,
+    parse_duration,
+    save_report,
+)
 
 logger = structlog.get_logger()
 
@@ -61,6 +70,10 @@ class TradingBot:
         self._total_cycle_duration: float = 0.0
         self._last_cycle_time: float | None = None
         self._current_regime = None
+        # Validation mode tracking
+        self._validation_mode: bool = False
+        self._validation_trade_pnls: list[float] = []
+        self._validation_equity_curve: list[float] = []
 
     async def initialize(self) -> None:
         """Initialize all bot components."""
@@ -328,6 +341,17 @@ class TradingBot:
                         self._cycle_count += 1
                         self._total_cycle_duration += duration
                         self._last_cycle_time = time.time()
+                        # Track equity curve for validation mode
+                        if self._validation_mode:
+                            val = 10000.0
+                            if self._paper_portfolio:
+                                val = self._paper_portfolio.total_value
+                            elif self._risk_manager:
+                                val = (
+                                    self._risk_manager._current_portfolio_value
+                                    or 10000.0
+                                )
+                            self._validation_equity_curve.append(val)
                         # Update dashboard with latest cycle metrics
                         dashboard_module.update_state(
                             cycle_metrics=self.cycle_metrics,
@@ -346,6 +370,129 @@ class TradingBot:
                         await self._telegram.notify_error(tb)
 
             await asyncio.sleep(self._settings.loop_interval_seconds)
+
+    async def run_validation(self, duration_seconds: float) -> ValidationReport:
+        """Run paper trading validation for a fixed duration, then generate report.
+
+        Args:
+            duration_seconds: How long to run the validation in seconds.
+
+        Returns:
+            ValidationReport with go/no-go recommendation.
+        """
+        self._validation_mode = True
+        self._validation_trade_pnls = []
+        self._validation_equity_curve = []
+        self._running = True
+
+        initial_balance = self._settings.paper_initial_balance
+        if self._paper_portfolio:
+            initial_balance = self._paper_portfolio.total_value
+        self._validation_equity_curve.append(initial_balance)
+
+        start_time = datetime.now(timezone.utc)
+        deadline = time.monotonic() + duration_seconds
+
+        logger.info(
+            "validation_started",
+            duration_seconds=duration_seconds,
+            initial_balance=initial_balance,
+        )
+
+        while self._running and time.monotonic() < deadline:
+            if not self._cycle_lock.locked():
+                try:
+                    async with self._cycle_lock:
+                        cycle_start = time.monotonic()
+                        await self._trading_cycle()
+                        duration = time.monotonic() - cycle_start
+                        self._cycle_count += 1
+                        self._total_cycle_duration += duration
+                        self._last_cycle_time = time.time()
+                        # Track equity curve for validation mode
+                        val = initial_balance
+                        if self._paper_portfolio:
+                            val = self._paper_portfolio.total_value
+                        elif self._risk_manager:
+                            val = (
+                                self._risk_manager._current_portfolio_value
+                                or initial_balance
+                            )
+                        self._validation_equity_curve.append(val)
+                except Exception:
+                    logger.error("validation_cycle_error", exc_info=True)
+
+            await asyncio.sleep(self._settings.loop_interval_seconds)
+
+        end_time = datetime.now(timezone.utc)
+        self._running = False
+        self._validation_mode = False
+
+        # Get final balance
+        final_balance = initial_balance
+        if self._paper_portfolio:
+            final_balance = self._paper_portfolio.total_value
+        elif self._risk_manager:
+            final_balance = (
+                self._risk_manager._current_portfolio_value or initial_balance
+            )
+
+        # Get strategy breakdown from tracker
+        strategy_breakdown = {}
+        if self._strategy_tracker:
+            strategy_breakdown = self._strategy_tracker.get_all_stats()
+
+        # Build validation criteria from config
+        criteria = ValidationCriteria(
+            min_win_rate_pct=self._settings.validation_min_win_rate_pct,
+            min_sharpe_ratio=self._settings.validation_min_sharpe_ratio,
+            max_drawdown_pct=self._settings.validation_max_drawdown_pct,
+            min_trades=self._settings.validation_min_trades,
+        )
+
+        # Build report
+        report = build_validation_report(
+            start_time=start_time,
+            end_time=end_time,
+            initial_balance=initial_balance,
+            final_balance=final_balance,
+            trade_pnls=self._validation_trade_pnls,
+            equity_curve=self._validation_equity_curve,
+            strategy_breakdown=strategy_breakdown,
+            criteria=criteria,
+        )
+
+        # Save report
+        try:
+            filepath = save_report(report)
+            logger.info("validation_report_saved", filepath=filepath)
+        except Exception:
+            logger.error("validation_report_save_error", exc_info=True)
+
+        # Print summary
+        print(report.format_summary())
+
+        # Notify via Telegram
+        if self._telegram:
+            summary = (
+                f"Validation Complete: {report.recommendation}\n"
+                f"Duration: {report.duration_seconds:.0f}s\n"
+                f"Total Return: {report.total_return_pct:+.2f}%\n"
+                f"Win Rate: {report.win_rate_pct:.1f}%\n"
+                f"Sharpe: {report.sharpe_ratio:.4f}\n"
+                f"Max DD: {report.max_drawdown_pct:.2f}%\n"
+                f"Trades: {report.total_trades}"
+            )
+            await self._telegram.send_message(summary)
+
+        logger.info(
+            "validation_complete",
+            recommendation=report.recommendation,
+            total_trades=report.total_trades,
+            total_return_pct=round(report.total_return_pct, 4),
+        )
+
+        return report
 
     async def _trading_cycle(self) -> None:
         """Execute one trading cycle: check exits -> collect -> analyze -> risk check -> execute."""
@@ -668,6 +815,9 @@ class TradingBot:
                                         self._risk_manager.record_trade_pnl(
                                             pnl
                                         )
+                                        # Track PnL for validation
+                                        if self._validation_mode:
+                                            self._validation_trade_pnls.append(pnl)
                                         # Record to strategy tracker
                                         if self._strategy_tracker:
                                             strat_names = signal.metadata.get(
@@ -844,6 +994,9 @@ class TradingBot:
                             fill_price - position["entry_price"]
                         ) * order.quantity
                         self._risk_manager.record_trade_pnl(pnl)
+                        # Track PnL for validation
+                        if self._validation_mode:
+                            self._validation_trade_pnls.append(pnl)
                         # Record exit to strategy tracker
                         if self._strategy_tracker:
                             self._strategy_tracker.record_trade(
@@ -938,7 +1091,26 @@ class TradingBot:
         self._running = False
 
 
-async def main() -> None:
+def build_parser() -> argparse.ArgumentParser:
+    """Build the CLI argument parser."""
+    parser = argparse.ArgumentParser(
+        description="Coin Trading Bot"
+    )
+    parser.add_argument(
+        "--validate",
+        action="store_true",
+        help="Run paper trading validation mode",
+    )
+    parser.add_argument(
+        "--duration",
+        type=str,
+        default="48h",
+        help="Validation duration (e.g., '48h', '30m', '2d'). Default: 48h",
+    )
+    return parser
+
+
+async def main(args: argparse.Namespace | None = None) -> None:
     """Run the trading bot."""
     bot = TradingBot()
 
@@ -949,14 +1121,20 @@ async def main() -> None:
 
     try:
         await bot.initialize()
-        await bot.run_trading_loop()
+        if args and args.validate:
+            duration_seconds = parse_duration(args.duration)
+            await bot.run_validation(duration_seconds)
+        else:
+            await bot.run_trading_loop()
     finally:
         await bot.shutdown()
 
 
 if __name__ == "__main__":
     try:
-        asyncio.run(main())
+        parser = build_parser()
+        parsed_args = parser.parse_args()
+        asyncio.run(main(parsed_args))
     except KeyboardInterrupt:
         print("\nShutdown requested. Exiting.")
         sys.exit(0)

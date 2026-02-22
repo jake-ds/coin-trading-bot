@@ -110,6 +110,12 @@ class Settings(BaseSettings):
     rebalance_threshold_pct: float = Field(default=5.0, ge=0, le=100)
     garch_enabled: bool = False
 
+    # Validation criteria (go/no-go)
+    validation_min_win_rate_pct: float = Field(default=45.0, ge=0, le=100)
+    validation_min_sharpe_ratio: float = Field(default=0.5)
+    validation_max_drawdown_pct: float = Field(default=15.0, ge=0, le=100)
+    validation_min_trades: int = Field(default=10, ge=1)
+
     # WebSocket feed
     websocket_enabled: bool = False
     websocket_poll_interval: float = Field(default=5.0, gt=0)

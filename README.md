@@ -4,13 +4,49 @@ A Python-based cryptocurrency automated trading system with multiple strategies,
 
 ## Features
 
-- **Multiple Strategies**: MA Crossover, RSI, MACD, Bollinger Bands, DCA, Cross-Exchange Arbitrage, ML Prediction
-- **Exchange Support**: Binance and Upbit via ccxt
-- **Risk Management**: Position sizing, stop-loss, daily loss limits, max drawdown protection
-- **Backtesting**: Test strategies against historical data with configurable fees/slippage
-- **Monitoring**: Structured logging, performance metrics, Telegram alerts, web dashboard
-- **Paper Trading**: Safe paper trading mode by default
+- **12+ Strategies**: MA Crossover (with filters), RSI (with divergence), MACD, Bollinger Squeeze, VWAP, Composite Momentum, Funding Rate, DCA, Cross-Exchange Arbitrage, ML Prediction
+- **Signal Pipeline**: Ensemble voting, multi-timeframe trend filtering, market regime detection
+- **Risk Management**: Position sizing (ATR-based), stop-loss/take-profit (multi-level), trailing stop, portfolio-level exposure/correlation limits, daily loss limits, max drawdown
+- **Backtesting**: Realistic simulation with SL/TP enforcement, dynamic slippage, walk-forward analysis, strategy comparison CLI
+- **Monitoring**: Strategy performance tracker with auto-disable, structured logging, Telegram alerts, real-time web dashboard with equity curves
+- **Paper Trading**: Safe paper trading mode by default with finite balance and fee tracking
+- **Validation**: Automated paper trading validation with go/no-go criteria
 - **Docker**: Containerized deployment with health checks
+
+## How It Works
+
+```
+Market Data → Data Collection → Multi-Timeframe Candles
+                                        ↓
+                              Market Regime Detection
+                              (trending/ranging/volatile)
+                                        ↓
+                             Strategy Analysis (12+ strategies)
+                             Each adapts to detected regime
+                                        ↓
+                              Signal Ensemble Voting
+                              (min N strategies must agree)
+                                        ↓
+                              Trend Filter (4h confirmation)
+                              Rejects counter-trend signals
+                                        ↓
+                              Risk Manager Validation
+                              (daily loss, drawdown, position limits)
+                                        ↓
+                              Portfolio Risk Check
+                              (exposure, correlation, sector limits)
+                                        ↓
+                              ATR-Based Position Sizing
+                                        ↓
+                              Smart Order Execution
+                              (limit orders, TWAP for large orders)
+                                        ↓
+                              Position Management
+                              (TP1 partial → TP2 full, trailing SL)
+                                        ↓
+                              Strategy Performance Tracking
+                              (auto-disable underperformers)
+```
 
 ## Architecture
 
@@ -18,20 +54,44 @@ A Python-based cryptocurrency automated trading system with multiple strategies,
 src/bot/
 ├── main.py                 # TradingBot orchestrator, CLI entry point
 ├── config.py               # pydantic-settings configuration
-├── models/                 # Pydantic v2 data models
+├── validation.py           # Paper trading validation framework
+├── models/                 # Pydantic v2 data models (OHLCV, Order, Signal, Portfolio)
 ├── exchanges/              # Exchange adapters (Binance, Upbit) via ccxt
-├── data/                   # DataCollector + DataStore (SQLAlchemy + aiosqlite)
+│   ├── base.py             # ExchangeAdapter ABC
+│   ├── factory.py          # Factory pattern for adapter creation
+│   └── resilient.py        # ResilientExchange (circuit breaker, retry)
+├── data/                   # Data layer
+│   ├── collector.py        # DataCollector (multi-timeframe)
+│   ├── store.py            # DataStore (SQLAlchemy + aiosqlite)
+│   ├── websocket_feed.py   # WebSocket real-time data feed
+│   └── order_book.py       # Order book analysis (imbalance detection)
 ├── strategies/             # Plugin-based strategies
 │   ├── base.py             # BaseStrategy ABC + StrategyRegistry
-│   ├── technical/          # MA Crossover, RSI, MACD, Bollinger
+│   ├── ensemble.py         # SignalEnsemble voting system
+│   ├── trend_filter.py     # Multi-timeframe trend confirmation
+│   ├── regime.py           # Market regime detector (ADX, ATR, BB)
+│   ├── indicators.py       # Shared technical indicators (ATR)
+│   ├── technical/          # MA Crossover, RSI, MACD, Bollinger Squeeze,
+│   │                       # VWAP, Composite Momentum
 │   ├── arbitrage/          # Cross-exchange arbitrage
 │   ├── dca/                # Dollar Cost Averaging
-│   └── ml/                 # ML price prediction (scikit-learn)
-├── risk/                   # RiskManager (position sizing, loss limits)
-├── execution/              # ExecutionEngine, CircuitBreaker, ResilientExchange
-├── backtest/               # BacktestEngine (historical simulation)
-├── monitoring/             # Logging, MetricsCollector, Telegram alerts
+│   └── ml/                 # ML price prediction (GradientBoosting, CV)
+├── risk/                   # Risk management
+│   ├── manager.py          # RiskManager (sizing, daily loss, drawdown)
+│   └── portfolio_risk.py   # PortfolioRiskManager (exposure, correlation, heat)
+├── execution/              # Order execution
+│   ├── engine.py           # ExecutionEngine (paper + live modes)
+│   ├── paper_portfolio.py  # PaperPortfolio (finite balance, fees)
+│   ├── position_manager.py # PositionManager (SL/TP1/TP2/trailing)
+│   └── smart_executor.py   # SmartExecutor (limit orders, TWAP)
+├── backtest/               # Backtesting engine
+│   └── engine.py           # BacktestEngine with SL/TP, slippage, walk-forward
+├── monitoring/             # Monitoring & alerting
+│   ├── logger.py           # Structured logging (structlog)
+│   ├── strategy_tracker.py # Per-strategy performance tracking & auto-disable
+│   └── telegram.py         # Telegram notifications
 └── dashboard/              # FastAPI web dashboard
+    └── app.py              # Real-time dashboard with equity curves
 ```
 
 ## Quick Start
@@ -61,6 +121,23 @@ cp .env.example .env
 python -m bot.main
 ```
 
+### Run Paper Trading Validation
+
+```bash
+# Run 48-hour validation with go/no-go report
+python -m bot.main --validate --duration=48h
+
+# Custom duration
+python -m bot.main --validate --duration=2d
+```
+
+### Run Backtests
+
+```bash
+# Strategy comparison
+python -m bot.backtest
+```
+
 ### Run Tests
 
 ```bash
@@ -82,162 +159,28 @@ uvicorn bot.dashboard.app:app --port 8000
 ### Docker Deployment
 
 ```bash
-# Build and run
 docker-compose up -d
-
-# View logs
 docker-compose logs -f bot
 ```
 
-## Configuration
+## Documentation
 
-### Environment Variables
-
-Create a `.env` file with the following variables:
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `TRADING_MODE` | `paper` | Trading mode: `paper` or `live` |
-| `BINANCE_API_KEY` | | Binance API key |
-| `BINANCE_SECRET_KEY` | | Binance secret key |
-| `BINANCE_TESTNET` | `true` | Use Binance testnet |
-| `UPBIT_API_KEY` | | Upbit API key |
-| `UPBIT_SECRET_KEY` | | Upbit secret key |
-| `DATABASE_URL` | `sqlite+aiosqlite:///data/trading.db` | Database connection URL |
-| `TELEGRAM_BOT_TOKEN` | | Telegram bot token for alerts |
-| `TELEGRAM_CHAT_ID` | | Telegram chat ID |
-| `MAX_POSITION_SIZE_PCT` | `10.0` | Max position size as % of portfolio |
-| `DAILY_LOSS_LIMIT_PCT` | `5.0` | Daily loss limit as % of portfolio |
-| `MAX_DRAWDOWN_PCT` | `15.0` | Max drawdown % before halting |
-| `STOP_LOSS_PCT` | `3.0` | Per-trade stop-loss % |
-| `MAX_CONCURRENT_POSITIONS` | `5` | Max concurrent open positions |
-| `LOOP_INTERVAL_SECONDS` | `60` | Trading loop interval in seconds |
-| `LOG_LEVEL` | `INFO` | Logging level (DEBUG, INFO, WARNING, ERROR) |
-| `DASHBOARD_PORT` | `8000` | Dashboard web server port |
-| `SYMBOLS` | `["BTC/USDT"]` | Trading symbols |
-
-### YAML Override
-
-Create a `config.yaml` file to override settings:
-
-```yaml
-trading_mode: paper
-symbols:
-  - BTC/USDT
-  - ETH/USDT
-loop_interval_seconds: 30
-log_level: DEBUG
-```
-
-### Exchange Setup
-
-1. **Binance**: Create an API key at https://www.binance.com/en/my/settings/api-management. For testing, enable testnet.
-2. **Upbit**: Create an API key at https://upbit.com/mypage/open_api_management.
-
-## Strategy Development
-
-Create a custom strategy by extending `BaseStrategy`:
-
-```python
-from bot.models import OHLCV, SignalAction, TradingSignal
-from bot.strategies.base import BaseStrategy, strategy_registry
-
-
-@strategy_registry.register
-class MyStrategy(BaseStrategy):
-    @property
-    def name(self) -> str:
-        return "my_strategy"
-
-    @property
-    def required_history_length(self) -> int:
-        return 20
-
-    async def analyze(self, ohlcv_data: list[OHLCV], **kwargs) -> TradingSignal:
-        # Your strategy logic here
-        last_price = ohlcv_data[-1].close
-
-        return TradingSignal(
-            strategy_name=self.name,
-            symbol=kwargs.get("symbol", "BTC/USDT"),
-            action=SignalAction.BUY,  # or SELL or HOLD
-            confidence=0.8,
-        )
-```
-
-## Backtesting
-
-Run backtests with the `BacktestEngine`:
-
-```python
-from bot.backtest.engine import BacktestEngine
-from bot.strategies.technical.rsi import RSIStrategy
-
-engine = BacktestEngine(
-    initial_capital=10000.0,
-    fee_pct=0.1,      # 0.1% trading fee
-    slippage_pct=0.05, # 0.05% slippage
-)
-
-strategy = RSIStrategy()
-result = await engine.run(strategy, candle_data, symbol="BTC/USDT")
-
-print(f"Total Return: {result.metrics.total_return_pct}%")
-print(f"Sharpe Ratio: {result.metrics.sharpe_ratio}")
-print(f"Max Drawdown: {result.metrics.max_drawdown_pct}%")
-print(f"Win Rate: {result.metrics.win_rate}%")
-print(f"Total Trades: {result.metrics.total_trades}")
-```
-
-## Dashboard API
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/` | GET | HTML dashboard page |
-| `/status` | GET | Bot status (running/stopped) |
-| `/trades` | GET | Recent trades |
-| `/metrics` | GET | Performance metrics |
-| `/portfolio` | GET | Current portfolio |
-| `/health` | GET | Health check for Docker |
-
-## Deployment
-
-### Manual Setup
-
-```bash
-# Install dependencies
-pip install -e .
-
-# Configure environment
-cp .env.example .env
-# Edit .env
-
-# Run the bot
-python -m bot.main
-```
-
-### Docker
-
-```bash
-# Build and start
-docker-compose up -d
-
-# Check health
-curl http://localhost:8000/health
-
-# Stop
-docker-compose down
-```
-
-### Monitoring
-
-- **Dashboard**: Open `http://localhost:8000` in your browser
-- **Telegram**: Configure `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` for real-time alerts
-- **Logs**: JSON-structured logs via structlog. Use `LOG_LEVEL=DEBUG` for verbose output.
+- [Strategy Guide](docs/strategies.md) - How each strategy works and when it's effective
+- [Configuration Reference](docs/configuration.md) - All environment variables and config options
+- [Backtesting Guide](docs/backtesting.md) - Running and interpreting backtests
+- [Risk Management](docs/risk-management.md) - Risk controls and recommended settings
+- [Operational Runbook](docs/operational-runbook.md) - Starting, monitoring, and handling emergencies
 
 ## Safety
 
 - **Paper trading is the default** - live trading requires explicit `TRADING_MODE=live`
 - All signals pass through the RiskManager before execution
+- Signal ensemble requires multiple strategies to agree before trading
+- Trend filter rejects signals against the higher-timeframe trend
+- Portfolio-level risk checks prevent over-concentration
+- ATR-based position sizing adapts to volatility
+- Multi-level take-profit with trailing stop-loss
+- Strategy auto-disable removes underperforming strategies
 - Circuit breaker pattern protects against exchange API failures
 - Daily loss limits and max drawdown protection halt trading automatically
+- Paper trading validation provides go/no-go assessment before going live
