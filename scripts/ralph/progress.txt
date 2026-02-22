@@ -186,3 +186,18 @@ Started: 2026-02-22
   - min_rebalance_interval=0 in tests to bypass interval gating
   - Test count baseline: 1455 tests passing as of V3-015
 ---
+
+## 2026-02-22 - V3-016
+- Created src/bot/backtest/quant_backtest.py with PairsBacktestEngine and PortfolioBacktestEngine
+  - PairsBacktestEngine: z-score entry/exit on rolling hedge ratio spread, stop-loss, fee accounting
+  - PortfolioBacktestEngine: periodic risk_parity rebalance, turnover-based fees, equity tracking
+  - Both produce BacktestResult with equity_curve, drawdown_curve, trades, metrics
+- Created tests/backtest/test_quant_backtest.py (10 tests)
+  - Pairs: basic backtest, non-cointegrated pair, drawdown curve, symbol names, initial capital
+  - Portfolio: basic backtest, single asset empty result, rebalance trades, equity curve length, drawdown
+- Tests: 1465 passing (1455 + 10 new), ruff clean
+- **Learnings for future iterations:**
+  - PairsBacktestEngine needs start_idx = hedge_window + zscore_window before trading begins
+  - PerformanceMetrics import needed for _empty_result() fallback
+  - Test count baseline: 1465 tests passing as of V3-016
+---
