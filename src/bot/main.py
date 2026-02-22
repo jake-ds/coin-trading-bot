@@ -26,6 +26,7 @@ from bot.execution.reconciler import PositionReconciler
 from bot.execution.resilient import ResilientExchange
 from bot.execution.smart_executor import SmartExecutor
 from bot.models import OrderSide, SignalAction, TradingSignal
+from bot.monitoring.audit import AuditLogger
 from bot.monitoring.logger import setup_logging
 from bot.monitoring.strategy_tracker import StrategyTracker
 from bot.monitoring.telegram import TelegramNotifier
@@ -71,6 +72,7 @@ class TradingBot:
         self._order_book_analyzer: OrderBookAnalyzer | None = None
         self._reconciler: PositionReconciler | None = None
         self._preflight_checker: PreFlightChecker | None = None
+        self._audit_logger: AuditLogger = AuditLogger()
         self._cycle_lock: asyncio.Lock = asyncio.Lock()
         self._cycle_count: int = 0
         self._total_cycle_duration: float = 0.0
@@ -93,6 +95,9 @@ class TradingBot:
         # Initialize data store
         self._store = DataStore(database_url=self._settings.database_url)
         await self._store.initialize()
+
+        # Connect audit logger to data store
+        self._audit_logger.store = self._store
 
         # Create exchange adapters (wrapped in ResilientExchange)
         self._init_exchanges()
@@ -202,10 +207,11 @@ class TradingBot:
         # Start dashboard server as background task
         self._start_dashboard()
 
-        # Provide strategy registry, settings, and bot ref to dashboard for API endpoints
+        # Provide strategy registry, settings, bot ref, and audit logger to dashboard
         dashboard_module.set_strategy_registry(strategy_registry)
         dashboard_module.set_settings(self._settings)
         dashboard_module.set_trading_bot(self)
+        dashboard_module.set_audit_logger(self._audit_logger)
 
         # Import strategies to trigger registration
         self._load_strategies()
@@ -225,6 +231,12 @@ class TradingBot:
             )
             self._register_telegram_commands()
             await self._telegram.start_command_polling()
+
+        # Audit log startup
+        await self._audit_logger.log_bot_started(
+            mode=self._settings.trading_mode.value,
+            symbols=self._settings.symbols,
+        )
 
     def _init_exchanges(self) -> None:
         """Create exchange adapters from configuration, wrapped in ResilientExchange."""
@@ -1198,6 +1210,14 @@ class TradingBot:
             reconciliation=result.to_dict(),
         )
 
+        # Audit log reconciliation
+        disc_count = len(result.local_only) + len(result.exchange_only) + len(result.qty_mismatch)
+        await self._audit_logger.log_reconciliation_result(
+            has_discrepancies=result.has_discrepancies,
+            matched=len(result.matched),
+            discrepancies=disc_count,
+        )
+
         # Alert on discrepancies
         if result.has_discrepancies:
             alert_msg = self._reconciler.format_alert_message(result)
@@ -1271,11 +1291,20 @@ class TradingBot:
         )
 
         # Log summary
+        failures = [c.name for c in result.checks if c.status.value == "FAIL"]
+        warnings_list = [c.name for c in result.checks if c.status.value == "WARN"]
         logger.info(
             "preflight_checks_complete",
             overall=result.overall.value,
-            failures=[c.name for c in result.checks if c.status.value == "FAIL"],
-            warnings=[c.name for c in result.checks if c.status.value == "WARN"],
+            failures=failures,
+            warnings=warnings_list,
+        )
+
+        # Audit log preflight result
+        await self._audit_logger.log_preflight_result(
+            overall=result.overall.value,
+            failures=failures,
+            warnings=warnings_list,
         )
 
         # Print human-readable summary
@@ -1486,6 +1515,19 @@ class TradingBot:
                 f"Positions kept open."
             )
 
+        # Audit log
+        if reason == "telegram_command":
+            actor = "telegram"
+        elif reason == "api_request":
+            actor = "user"
+        else:
+            actor = "system"
+        await self._audit_logger.log_emergency_stop(
+            reason=reason,
+            cancelled_orders=cancelled_orders,
+            actor=actor,
+        )
+
         return {
             "success": True,
             "cancelled_orders": cancelled_orders,
@@ -1562,6 +1604,9 @@ class TradingBot:
         # Notify via Telegram
         if self._telegram:
             await self._telegram.send_message("Trading RESUMED after emergency stop.")
+
+        # Audit log
+        await self._audit_logger.log_emergency_resume(previous_reason=prev_reason)
 
         return {"success": True, "previous_reason": prev_reason}
 
@@ -1675,6 +1720,12 @@ class TradingBot:
         """Graceful shutdown."""
         logger.info("bot_shutting_down")
         self._running = False
+
+        # Audit log shutdown
+        try:
+            await self._audit_logger.log_bot_stopped()
+        except Exception:
+            pass
 
         # Stop Telegram command polling
         if self._telegram and hasattr(self._telegram, "stop_command_polling"):

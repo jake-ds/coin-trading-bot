@@ -524,3 +524,47 @@ Started: 2026-02-22
   - Command parsing handles @botname suffix by splitting on @ (e.g., /stop@my_bot → "stop")
   - Test count baseline: 1797 passing as of V4-012
 ---
+
+## 2026-02-22 - V4-013
+- Added comprehensive audit trail and trade log
+- Files created:
+  - src/bot/monitoring/audit.py (AuditLogger class with convenience methods for all event types)
+  - tests/dashboard/test_v4_013_audit.py (36 tests)
+- Files modified:
+  - src/bot/data/models.py:
+    - Added AuditLogRecord SQLAlchemy model: id, timestamp, event_type, actor, details (JSON Text), severity
+    - Explicit indexes on event_type, timestamp, severity via __table_args__
+  - src/bot/data/store.py:
+    - Added save_audit_log(): persists audit log entry with JSON-serialized details
+    - Added get_audit_logs(): paginated query with filters (event_type, severity, start, end), returns total/page info
+    - Added cleanup_old_audit_logs(): deletes entries older than configurable max_age_days (default 90)
+  - src/bot/monitoring/__init__.py:
+    - Added AuditLogger to imports and __all__
+  - src/bot/main.py:
+    - Added _audit_logger field to TradingBot, connected to DataStore
+    - Passed audit logger to dashboard via set_audit_logger()
+    - Added audit logging to: emergency_stop(), emergency_resume(), initialize() (bot_started), shutdown() (bot_stopped), _run_preflight_checks(), _maybe_reconcile()
+  - src/bot/dashboard/app.py:
+    - Added _audit_logger reference with set_audit_logger() / get_audit_logger()
+    - Added GET /api/audit endpoint with query params: event_type, severity, start_date, end_date, page, limit
+    - Added audit logging to: strategy toggle, settings update, auth login (success/failure)
+    - Audit calls use asyncio.ensure_future() to avoid blocking API responses
+  - tests/dashboard/test_v4_012_emergency.py:
+    - Added bot._audit_logger = AsyncMock() to 7 tests using TradingBot.__new__() for V4-013 compatibility
+- Features:
+  - AuditLogger class with optional DataStore dependency (works without DB, logging to structlog only)
+  - Core method: log_event(event_type, actor, details, severity) — logs to structlog + persists to DB
+  - 12 convenience methods: log_trade, log_order_cancelled, log_position_closed, log_strategy_toggled, log_config_changed, log_emergency_stop, log_emergency_resume, log_bot_started, log_bot_stopped, log_auth_login, log_preflight_result, log_reconciliation_result
+  - Each event has appropriate actor (system/user/telegram), severity (info/warning/critical), and structured details
+  - GET /api/audit: paginated with total_pages, filterable by event_type, severity, date range
+  - Audit entries immutable (append-only via save_audit_log, no update/delete API)
+  - Auto-cleanup: cleanup_old_audit_logs() for retention management
+  - Graceful error handling: if DB save fails, event still logged to structlog
+- Tests: 1833 passing (1797 existing + 36 new — 1 pre-existing test_config failure), ruff clean
+- **Learnings for future iterations:**
+  - SQLAlchemy index=True on column AND explicit Index() in __table_args__ creates duplicate indexes — use one or the other
+  - Tests using TradingBot.__new__() bypass __init__ — must manually set new fields like _audit_logger
+  - asyncio.ensure_future() is good for fire-and-forget audit logging in API handlers
+  - AuditLogger without a store gracefully degrades to structlog-only (no exceptions)
+  - Test count baseline: 1833 passing as of V4-013
+---

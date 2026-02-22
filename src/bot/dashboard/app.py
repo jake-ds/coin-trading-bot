@@ -80,6 +80,9 @@ _settings = None
 # Reference to TradingBot — set by main.py via set_trading_bot()
 _trading_bot = None
 
+# Reference to AuditLogger — set by main.py via set_audit_logger()
+_audit_logger = None
+
 
 def set_strategy_registry(registry) -> None:
     """Set the strategy registry reference for toggle endpoint."""
@@ -107,6 +110,17 @@ def set_trading_bot(bot) -> None:
 def get_trading_bot():
     """Get the current TradingBot reference."""
     return _trading_bot
+
+
+def set_audit_logger(audit_logger) -> None:
+    """Set the AuditLogger reference for audit endpoints and event logging."""
+    global _audit_logger
+    _audit_logger = audit_logger
+
+
+def get_audit_logger():
+    """Get the current AuditLogger reference."""
+    return _audit_logger
 
 
 # ---------------------------------------------------------------------------
@@ -212,6 +226,8 @@ async def login(body: LoginRequest):
 
     if not verify_credentials(_settings, body.username, body.password):
         logger.warning("auth_login_failed", username=body.username)
+        if _audit_logger:
+            asyncio.ensure_future(_audit_logger.log_auth_login(body.username, success=False))
         return JSONResponse(
             status_code=401,
             content={"detail": "Invalid credentials"},
@@ -220,6 +236,8 @@ async def login(body: LoginRequest):
     access_token = create_access_token(_settings, body.username)
     refresh_token = create_refresh_token(_settings, body.username)
     logger.info("auth_login_success", username=body.username)
+    if _audit_logger:
+        asyncio.ensure_future(_audit_logger.log_auth_login(body.username, success=True))
     return {
         "access_token": access_token,
         "refresh_token": refresh_token,
@@ -435,6 +453,44 @@ async def emergency_resume():
     return result
 
 
+@api_router.get("/audit")
+async def get_audit_logs(
+    event_type: str | None = Query(None, description="Filter by event type"),
+    severity: str | None = Query(None, description="Filter by severity"),
+    start_date: str | None = Query(None, description="Start date (ISO format)"),
+    end_date: str | None = Query(None, description="End date (ISO format)"),
+    page: int = Query(1, ge=1, description="Page number"),
+    limit: int = Query(50, ge=1, le=200, description="Items per page"),
+):
+    """Get paginated audit log with optional filters."""
+    if _audit_logger is None or _audit_logger.store is None:
+        return {"logs": [], "total": 0, "page": 1, "limit": limit, "total_pages": 1}
+
+    # Parse date strings to datetime
+    start = None
+    end = None
+    if start_date:
+        try:
+            start = datetime.fromisoformat(start_date.replace("Z", "+00:00"))
+        except ValueError:
+            pass
+    if end_date:
+        try:
+            end = datetime.fromisoformat(end_date.replace("Z", "+00:00"))
+        except ValueError:
+            pass
+
+    result = await _audit_logger.store.get_audit_logs(
+        event_type=event_type,
+        severity=severity,
+        start=start,
+        end=end,
+        page=page,
+        limit=limit,
+    )
+    return result
+
+
 @api_router.get("/analytics")
 async def get_analytics(
     range: str = Query("all", description="Date range: 7d, 30d, 90d, all"),
@@ -537,6 +593,11 @@ async def toggle_strategy(
         new_state = "enabled"
 
     logger.info("strategy_toggled", name=name, state=new_state)
+    # Audit log
+    if _audit_logger:
+        asyncio.ensure_future(_audit_logger.log_strategy_toggled(
+            name=name, active=new_state == "enabled",
+        ))
     # Broadcast strategy toggle via WebSocket
     asyncio.ensure_future(broadcast_state_update())
     return {"name": name, "active": new_state == "enabled", "success": True}
@@ -657,6 +718,11 @@ async def update_settings_endpoint(body: dict):
         )
 
     logger.info("settings_updated", changed=changed)
+    # Audit log
+    if _audit_logger:
+        asyncio.ensure_future(_audit_logger.log_config_changed(
+            changed=changed, previous=snapshot,
+        ))
     return {
         "success": True,
         "changed": changed,

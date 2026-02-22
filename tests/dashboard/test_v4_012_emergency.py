@@ -376,6 +376,7 @@ async def test_bot_emergency_stop_sets_flag():
     bot._risk_manager = None
     bot._position_manager = None
     bot._portfolio_risk = None
+    bot._audit_logger = AsyncMock()
 
     result = await bot.emergency_stop(reason="test")
     assert result["success"] is True
@@ -397,6 +398,7 @@ async def test_bot_emergency_stop_cancels_pending_orders():
     bot._risk_manager = None
     bot._position_manager = None
     bot._portfolio_risk = None
+    bot._audit_logger = AsyncMock()
 
     # Mock execution engine with pending orders
     engine = AsyncMock()
@@ -426,6 +428,7 @@ async def test_bot_emergency_stop_notifies_telegram():
     bot._risk_manager = None
     bot._position_manager = None
     bot._portfolio_risk = None
+    bot._audit_logger = AsyncMock()
 
     telegram = AsyncMock()
     telegram.send_message = AsyncMock(return_value=True)
@@ -454,6 +457,7 @@ async def test_bot_emergency_close_all_sells_positions():
     bot._telegram = None
     bot._portfolio_risk = None
     bot._strategy_tracker = None
+    bot._audit_logger = AsyncMock()
 
     # Mock risk manager with positions
     risk = MagicMock()
@@ -518,6 +522,7 @@ async def test_bot_emergency_close_all_records_pnl():
     bot._telegram = None
     bot._portfolio_risk = None
     bot._strategy_tracker = None
+    bot._audit_logger = AsyncMock()
 
     risk = MagicMock()
     risk._open_positions = {"BTC/USDT": {}}
@@ -562,6 +567,7 @@ async def test_bot_emergency_resume_clears_flag():
     bot._emergency_stopped_at = "2026-01-01T00:00:00+00:00"
     bot._emergency_reason = "test"
     bot._telegram = None
+    bot._audit_logger = AsyncMock()
 
     result = await bot.emergency_resume()
     assert result["success"] is True
@@ -595,6 +601,7 @@ async def test_bot_emergency_resume_notifies_telegram():
     bot._emergency_stopped = True
     bot._emergency_stopped_at = "2026-01-01T00:00:00+00:00"
     bot._emergency_reason = "test"
+    bot._audit_logger = AsyncMock()
 
     telegram = AsyncMock()
     telegram.send_message = AsyncMock(return_value=True)

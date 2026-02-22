@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, Index, Integer, String, UniqueConstraint
+from sqlalchemy import DateTime, Float, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -82,3 +82,21 @@ class PortfolioSnapshot(Base):
     unrealized_pnl: Mapped[float] = mapped_column(Float, default=0.0)
     balances_json: Mapped[str] = mapped_column(String(2000), default="{}")
     positions_json: Mapped[str] = mapped_column(String(5000), default="[]")
+
+
+class AuditLogRecord(Base):
+    """Immutable audit log entry for tracking all significant bot actions."""
+
+    __tablename__ = "audit_log"
+    __table_args__ = (
+        Index("ix_audit_log_event_type", "event_type"),
+        Index("ix_audit_log_timestamp", "timestamp"),
+        Index("ix_audit_log_severity", "severity"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    timestamp: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    event_type: Mapped[str] = mapped_column(String(50))
+    actor: Mapped[str] = mapped_column(String(50), default="system")
+    details: Mapped[str] = mapped_column(Text, default="{}")
+    severity: Mapped[str] = mapped_column(String(20), default="info")

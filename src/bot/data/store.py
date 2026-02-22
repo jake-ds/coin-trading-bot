@@ -3,10 +3,11 @@
 import json
 from datetime import datetime
 
-from sqlalchemy import insert, select
+from sqlalchemy import delete, func, insert, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from bot.data.models import (
+    AuditLogRecord,
     Base,
     FundingRateRecord,
     OHLCVRecord,
@@ -288,3 +289,100 @@ class DataStore:
                 }
                 for r in reversed(records)
             ]
+
+    # --- Audit Log Operations ---
+
+    async def save_audit_log(
+        self,
+        event_type: str,
+        actor: str = "system",
+        details: dict | None = None,
+        severity: str = "info",
+        timestamp: datetime | None = None,
+    ) -> None:
+        """Save an immutable audit log entry."""
+        async with self._session_factory() as session:
+            record = AuditLogRecord(
+                timestamp=timestamp or datetime.utcnow(),
+                event_type=event_type,
+                actor=actor,
+                details=json.dumps(details or {}),
+                severity=severity,
+            )
+            session.add(record)
+            await session.commit()
+
+    async def get_audit_logs(
+        self,
+        event_type: str | None = None,
+        severity: str | None = None,
+        start: datetime | None = None,
+        end: datetime | None = None,
+        page: int = 1,
+        limit: int = 50,
+    ) -> dict:
+        """Query audit logs with filters and pagination.
+
+        Returns dict with 'logs', 'total', 'page', 'limit', 'total_pages'.
+        """
+        async with self._session_factory() as session:
+            # Build base query
+            stmt = select(AuditLogRecord)
+            count_stmt = select(func.count(AuditLogRecord.id))
+
+            if event_type:
+                stmt = stmt.where(AuditLogRecord.event_type == event_type)
+                count_stmt = count_stmt.where(AuditLogRecord.event_type == event_type)
+            if severity:
+                stmt = stmt.where(AuditLogRecord.severity == severity)
+                count_stmt = count_stmt.where(AuditLogRecord.severity == severity)
+            if start:
+                stmt = stmt.where(AuditLogRecord.timestamp >= start)
+                count_stmt = count_stmt.where(AuditLogRecord.timestamp >= start)
+            if end:
+                stmt = stmt.where(AuditLogRecord.timestamp <= end)
+                count_stmt = count_stmt.where(AuditLogRecord.timestamp <= end)
+
+            # Get total count
+            total_result = await session.execute(count_stmt)
+            total = total_result.scalar() or 0
+
+            # Paginate (newest first)
+            offset = (page - 1) * limit
+            stmt = stmt.order_by(AuditLogRecord.timestamp.desc())
+            stmt = stmt.offset(offset).limit(limit)
+
+            result = await session.execute(stmt)
+            records = result.scalars().all()
+
+            logs = [
+                {
+                    "id": r.id,
+                    "timestamp": r.timestamp.isoformat() if r.timestamp else "",
+                    "event_type": r.event_type,
+                    "actor": r.actor,
+                    "details": json.loads(r.details) if r.details else {},
+                    "severity": r.severity,
+                }
+                for r in records
+            ]
+
+            total_pages = max(1, (total + limit - 1) // limit)
+            return {
+                "logs": logs,
+                "total": total,
+                "page": page,
+                "limit": limit,
+                "total_pages": total_pages,
+            }
+
+    async def cleanup_old_audit_logs(self, max_age_days: int = 90) -> int:
+        """Delete audit log entries older than max_age_days. Returns count deleted."""
+        from datetime import timedelta
+
+        cutoff = datetime.utcnow() - timedelta(days=max_age_days)
+        async with self._session_factory() as session:
+            stmt = delete(AuditLogRecord).where(AuditLogRecord.timestamp < cutoff)
+            result = await session.execute(stmt)
+            await session.commit()
+            return result.rowcount
