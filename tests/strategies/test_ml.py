@@ -52,7 +52,7 @@ class TestMLPredictionStrategy:
         assert signal.metadata.get("reason") == "insufficient_data_for_training"
 
     def test_train_with_enough_data(self):
-        strategy = MLPredictionStrategy(min_training_samples=100)
+        strategy = MLPredictionStrategy(min_training_samples=100, min_cv_accuracy=0.0)
         candles = make_trending_candles(200)
         result = strategy.train(candles)
         assert result is True
@@ -67,7 +67,7 @@ class TestMLPredictionStrategy:
 
     @pytest.mark.asyncio
     async def test_auto_train_and_predict(self):
-        strategy = MLPredictionStrategy(min_training_samples=100)
+        strategy = MLPredictionStrategy(min_training_samples=100, min_cv_accuracy=0.0)
         candles = make_trending_candles(200)
         signal = await strategy.analyze(candles, symbol="ETH/USDT")
 
@@ -78,7 +78,7 @@ class TestMLPredictionStrategy:
 
     @pytest.mark.asyncio
     async def test_prediction_has_metadata(self):
-        strategy = MLPredictionStrategy(min_training_samples=100)
+        strategy = MLPredictionStrategy(min_training_samples=100, min_cv_accuracy=0.0)
         candles = make_trending_candles(200)
         signal = await strategy.analyze(candles, symbol="BTC/USDT")
 
@@ -91,11 +91,11 @@ class TestMLPredictionStrategy:
         features = strategy._compute_features(candles)
 
         assert features.ndim == 2
-        assert features.shape[1] == 6  # 6 features
+        assert features.shape[1] == 25  # V2: 25 features (6 original + 19 new)
         assert features.shape[0] > 0
 
     def test_save_and_load_model(self):
-        strategy = MLPredictionStrategy(min_training_samples=100)
+        strategy = MLPredictionStrategy(min_training_samples=100, min_cv_accuracy=0.0)
         candles = make_trending_candles(200)
         strategy.train(candles)
 
@@ -119,6 +119,7 @@ class TestMLPredictionStrategy:
         strategy = MLPredictionStrategy(
             min_training_samples=100,
             prediction_threshold=0.99,
+            min_cv_accuracy=0.0,
         )
         candles = make_trending_candles(200)
         signal = await strategy.analyze(candles, symbol="BTC/USDT")

@@ -387,7 +387,7 @@
         "All existing tests pass (update ML tests for new model), ruff check passes"
       ],
       "priority": 20,
-      "passes": false,
+      "passes": true,
       "notes": "Current ML strategy is guaranteed to overfit — no train/test split at all"
     },
     {

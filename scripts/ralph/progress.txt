@@ -542,7 +542,10 @@ Started: 2026년 2월 22일 일요일 00시 13분 50초 KST
 - **TWAP**: `should_use_twap()` checks if order value > `twap_volume_threshold_pct` (default 5%) of avg_daily_volume. `create_twap_plan()` splits quantity into equal chunks. `execute_twap()` executes each chunk with fresh ticker prices and interval sleeps.
 - **FillMetrics**: Tracks maker vs taker fills, volumes, fees. `maker_ratio` = maker_fills / total_fills. `to_dict()` for serialization.
 - **Order model constraint**: Market orders must have `price=0` per Pydantic validator. Test helpers must set `order_price = 0 if order_type == OrderType.MARKET else price`.
-- **Test count baseline**: 779 tests passing as of V2-019
+- **Test count baseline**: 817 tests passing as of V2-020
+- **ML V2 CV accuracy pattern**: With 200 noisy candles the default `min_cv_accuracy=0.55` is NOT met. Existing tests that need the model to actually train must pass `min_cv_accuracy=0.0` to the constructor. New tests that verify the threshold behavior should use `min_cv_accuracy=0.99` (impossibly high).
+- **CalibratedClassifierCV pattern**: Wrapping `GradientBoostingClassifier` with `CalibratedClassifierCV(cv=TimeSeriesSplit(...))` gives calibrated probabilities. Falls back to raw GB if calibration fails (e.g., too few samples for the CV splits).
+- **Feature importances from calibrated model**: Access via `model.calibrated_classifiers_[0].estimator.feature_importances_` (not directly on CalibratedClassifierCV).
 ---
 
 ## 2026-02-22 - V2-019: Smart order execution: limit orders, TWAP, and fee optimization
@@ -573,4 +576,31 @@ Started: 2026년 2월 22일 일요일 00시 13분 50초 KST
   - TWAP returns list[Order], but ExecutionEngine returns single Order (the last chunk) while tracking all in pending_orders
   - When SmartExecutor fails (any exception), engine falls back to direct exchange call — no data loss
   - Limit order polling interval is `min(2.0, timeout/3)` to avoid excessive status checks
+---
+
+## 2026-02-22 - V2-020: ML Strategy v2: proper cross-validation, feature engineering, regime awareness
+- **Implemented:**
+  - Replaced `RandomForestClassifier` with `GradientBoostingClassifier` (better for financial data, less overfitting)
+  - Feature engineering: expanded from 6 to 25 features including lag returns (t-1,2,3,5,10), rolling stats (std, skew), volume features, time features (hour sin/cos), candle body ratio
+  - `TimeSeriesSplit` cross-validation: never trains on future data; configurable `n_cv_splits` (default 5)
+  - Minimum CV accuracy threshold: `min_cv_accuracy` (default 0.55) — if CV score below threshold, model returns HOLD
+  - `CalibratedClassifierCV` wraps GradientBoosting for calibrated probability scores (better confidence)
+  - Walk-forward retraining: `needs_retrain()` tracks candles since last train, auto-retrains in `analyze()` when `retrain_interval` (default 500) reached
+  - Feature importance logging: logs top 5 features after each training, stored in `_feature_importances` dict
+  - Model versioning: `save_model()` creates timestamped copies, `_cleanup_old_versions()` keeps last N (default 3)
+  - Regime adaptation: disabled in `HIGH_VOLATILITY` (noisy predictions), enabled in all other regimes
+  - All new parameters have backward-compatible defaults
+- **Files modified:**
+  - `src/bot/strategies/ml/prediction.py` — full V2 rewrite with GradientBoosting, CV, features, walk-forward, versioning
+  - `tests/strategies/test_ml.py` — updated 5 existing tests to pass `min_cv_accuracy=0.0` and feature count 25
+- **Files created:**
+  - `tests/strategies/test_v2_020_ml_v2.py` — 38 new tests (features, CV, training, prediction, walk-forward, versioning, regime, backward compat)
+- **Tests:** 817 tests passing (779 previous + 38 new), ruff check passes
+- **Learnings for future iterations:**
+  - CV accuracy with 200 noisy trending candles is ~0.42, well below 0.55 threshold — existing tests need `min_cv_accuracy=0.0` to get a trained model
+  - `CalibratedClassifierCV` needs sufficient data per CV fold; falls back to uncalibrated GradientBoosting on failure
+  - Feature importances from calibrated model: `model.calibrated_classifiers_[0].estimator.feature_importances_`
+  - `_compute_features` start index changed from `max(lookback, 14)` to `max(lookback, 20)` for rolling 20-period stats
+  - `glob` module used for versioned model file cleanup — no external dependency
+  - Walk-forward retrain resets `_candles_since_train` to 0 after training; `analyze()` increments by 1 after each prediction
 ---
