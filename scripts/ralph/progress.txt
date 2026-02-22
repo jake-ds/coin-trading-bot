@@ -7,7 +7,7 @@ Started: 2026년 2월 23일 월요일 01시 08분 44초 KST
 - **DecisionStep labels**: Use Korean (e.g., '비용 분석') with category = "evaluate"/"decide"/"execute"/"skip"
 - **Engine defaults**: Binance VIP0 spot: maker=0.02%, taker=0.04%, slippage=0.01%
 - **Pre-existing test failures (3)**: `test_defaults`, `test_main_without_validate_runs_trading_loop`, `test_main_without_args_runs_trading_loop` — these fail on main, not caused by V5 changes
-- **Test count baseline**: 2013 passing on main + 29 new CostModel tests = 2042 passing
+- **Test count baseline**: 2028 passing (2013 on main + 29 CostModel + 15 cost integration - 29 overlap from earlier count)
 - **Engines __init__.py**: exports must be alphabetically sorted in __all__
 - **dataclass pattern**: Use `@dataclass` from stdlib for simple data holders (CostModel, DecisionStep, EngineCycleResult)
 
@@ -25,4 +25,23 @@ Started: 2026년 2월 23일 월요일 01시 08분 44초 KST
   - All fees are percentages (0.04 = 0.04%), division by 100 in cost calculation
   - is_maker keyword-only arg for maker/taker distinction
   - Break-even (net=0) counts as NOT profitable (strict >0 check)
+---
+
+## 2026-02-23 - V5-002
+- **Implemented**: Fee-aware engine integration — all 4 engines use CostModel
+- **Files modified**:
+  - `src/bot/engines/funding_arb.py` — CostModel integration: cost DecisionStep, net PnL on close (4 legs)
+  - `src/bot/engines/grid_trading.py` — maker fee deduction per sell fill, skip unprofitable fills
+  - `src/bot/engines/cross_exchange_arb.py` — cost-based min spread (max of config vs fee-based), cost deduction in arb execution
+  - `src/bot/engines/stat_arb.py` — replaced magic 0.005 with cost-model-derived scale, cost deduction on exit
+  - `tests/engines/test_funding_arb.py` — updated test_close_position_returns_pnl for net PnL
+- **Files created**:
+  - `tests/engines/test_engine_cost_integration.py` — 15 tests covering all 4 engines
+- **Tests added**: 15
+- **Learnings for future iterations:**
+  - `decisions[-1]` pattern breaks when inserting extra DecisionSteps — save reference to the step instead
+  - Grid uses is_maker=True (limit orders), other engines use taker fees
+  - Cross-exchange arb uses `max(config_min, cost_min)` to ensure cost-based floor
+  - stat_arb PnL scale factor 0.005 = (taker_fee + slippage) / 10 = (0.04 + 0.01) / 10
+  - Cost deduction for stat_arb happens in _check_exit, not _estimate_pairs_pnl, to preserve backward compat
 ---

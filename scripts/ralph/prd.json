@@ -38,7 +38,7 @@
         "All existing tests pass, ruff check passes"
       ],
       "priority": 2,
-      "passes": false,
+      "passes": true,
       "notes": "CRITICAL: Existing engine tests must not break. Add CostModel with default values. The key behavioral change is PnL now reflects fees. Existing tests that check PnL values may need updating — update the expected values to reflect fee deduction, don't remove the tests."
     },
     {

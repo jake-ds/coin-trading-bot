@@ -16,6 +16,7 @@ import numpy as np
 import structlog
 
 from bot.engines.base import BaseEngine, DecisionStep, EngineCycleResult
+from bot.engines.cost_model import CostModel
 
 if TYPE_CHECKING:
     from bot.config import Settings
@@ -51,6 +52,8 @@ class StatisticalArbEngine(BaseEngine):
         self._exit_zscore = s.stat_arb_exit_zscore if s else 0.5
         self._stop_zscore = s.stat_arb_stop_zscore if s else 4.0
         self._min_correlation = s.stat_arb_min_correlation if s else 0.7
+
+        self._cost_model = CostModel()
 
         # Price history cache: symbol -> list of close prices
         self._price_cache: dict[str, list[float]] = {}
@@ -166,6 +169,18 @@ class StatisticalArbEngine(BaseEngine):
                         f"PnL: {exit_result['pnl']:.4f}"
                     )
                     decisions[-1].category = "execute"
+                    # Cost analysis showing gross vs net PnL
+                    decisions.append(DecisionStep(
+                        label="비용 분석",
+                        observation=(
+                            f"총수익=${exit_result.get('gross_pnl', 0):.2f}, "
+                            f"비용=${exit_result.get('cost', 0):.2f}, "
+                            f"순수익=${exit_result['pnl']:.2f}"
+                        ),
+                        threshold="순수익 > 0",
+                        result="수익" if exit_result["pnl"] > 0 else "손실",
+                        category="evaluate",
+                    ))
                 else:
                     decisions[-1].result = (
                         f"HOLD - 포지션 유지 (진입 z: {pos.get('entry_zscore', 0):.4f})"
@@ -299,7 +314,11 @@ class StatisticalArbEngine(BaseEngine):
             return None
 
         # Estimate PnL (simplified paper mode)
-        pnl = self._estimate_pairs_pnl(pos, zscore)
+        gross_pnl = self._estimate_pairs_pnl(pos, zscore)
+        # Deduct round-trip costs (4 legs: long+short entry and exit)
+        notional = (pos.get("qty_a", 0) * pos.get("price_a", 0))
+        cost = self._cost_model.round_trip_cost(notional, legs=4)
+        net_pnl = gross_pnl - cost
         self._remove_position(pair_key)
 
         logger.info(
@@ -308,7 +327,9 @@ class StatisticalArbEngine(BaseEngine):
             reason=reason,
             entry_zscore=round(entry_z, 4),
             exit_zscore=round(float(zscore), 4),
-            pnl=round(pnl, 4),
+            gross_pnl=round(gross_pnl, 4),
+            cost=round(cost, 4),
+            net_pnl=round(net_pnl, 4),
         )
 
         return {
@@ -317,7 +338,9 @@ class StatisticalArbEngine(BaseEngine):
             "reason": reason,
             "entry_zscore": round(entry_z, 4),
             "exit_zscore": round(float(zscore), 4),
-            "pnl": round(pnl, 4),
+            "gross_pnl": round(gross_pnl, 4),
+            "cost": round(cost, 4),
+            "pnl": round(net_pnl, 4),
         }
 
     def _estimate_pairs_pnl(self, pos: dict, exit_zscore: float) -> float:
@@ -330,8 +353,11 @@ class StatisticalArbEngine(BaseEngine):
         # Simplified: PnL proportional to z-score reversion
         z_change = abs(entry_z) - abs(exit_zscore)  # positive if reverted
         notional = qty_a * price_a if qty_a and price_a else 0
-        # Rough estimate: 1 unit z-score change ≈ 0.5-1% of notional
-        pnl = z_change * notional * 0.005
+        # PnL scaling derived from cost model spread metrics
+        pnl_scale = (
+            self._cost_model.taker_fee_pct + self._cost_model.slippage_pct
+        ) / 10
+        pnl = z_change * notional * pnl_scale
 
         if side_a == "short":
             pnl = -pnl  # Invert if we were short the overperformer
