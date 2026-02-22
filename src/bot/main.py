@@ -21,6 +21,7 @@ from bot.exchanges.rate_limiter import DEFAULT_EXCHANGE_LIMITS, RateLimiter
 from bot.execution.engine import ExecutionEngine
 from bot.execution.paper_portfolio import PaperPortfolio
 from bot.execution.position_manager import ExitType, PositionManager
+from bot.execution.preflight import PreFlightChecker
 from bot.execution.reconciler import PositionReconciler
 from bot.execution.resilient import ResilientExchange
 from bot.execution.smart_executor import SmartExecutor
@@ -69,6 +70,7 @@ class TradingBot:
         self._portfolio_risk: PortfolioRiskManager | None = None
         self._order_book_analyzer: OrderBookAnalyzer | None = None
         self._reconciler: PositionReconciler | None = None
+        self._preflight_checker: PreFlightChecker | None = None
         self._cycle_lock: asyncio.Lock = asyncio.Lock()
         self._cycle_count: int = 0
         self._total_cycle_duration: float = 0.0
@@ -182,6 +184,10 @@ class TradingBot:
             self._reconciler = PositionReconciler(
                 auto_fix=self._settings.reconciliation_auto_fix,
             )
+
+        # Run pre-flight checks for live trading mode
+        if self._settings.trading_mode == TradingMode.LIVE:
+            await self._run_preflight_checks()
 
         # Initialize WebSocket feed (if enabled and exchanges available)
         self._init_ws_feed()
@@ -1176,6 +1182,63 @@ class TradingBot:
                 self._risk_manager.add_position(
                     d.symbol, d.exchange_qty, entry_price
                 )
+
+    async def _run_preflight_checks(self) -> None:
+        """Run pre-flight safety checks for live trading mode.
+
+        FAILed checks prevent the bot from starting.
+        WARN checks allow startup but log warnings.
+        """
+        self._preflight_checker = PreFlightChecker()
+        result = await self._preflight_checker.run_all_checks(
+            settings=self._settings,
+            exchanges=self._exchanges,
+            symbols=self._settings.symbols,
+            rate_limit_enabled=self._settings.rate_limit_enabled,
+        )
+
+        # Update dashboard state with pre-flight results
+        dashboard_module.update_state(
+            preflight=result.to_dict(),
+        )
+
+        # Log summary
+        logger.info(
+            "preflight_checks_complete",
+            overall=result.overall.value,
+            failures=[c.name for c in result.checks if c.status.value == "FAIL"],
+            warnings=[c.name for c in result.checks if c.status.value == "WARN"],
+        )
+
+        # Print human-readable summary
+        print(result.format_summary())
+
+        # Send Telegram notification for warnings
+        if result.has_warnings and self._telegram:
+            warn_msgs = [
+                f"  [{c.status.value}] {c.name}: {c.message}"
+                for c in result.checks
+                if c.status.value == "WARN"
+            ]
+            await self._telegram.send_message(
+                "Pre-flight warnings:\n" + "\n".join(warn_msgs)
+            )
+
+        # FAIL prevents startup
+        if result.has_failures:
+            fail_msgs = [
+                f"  [{c.status.value}] {c.name}: {c.message}"
+                for c in result.checks
+                if c.status.value == "FAIL"
+            ]
+            error_msg = (
+                "Pre-flight checks FAILED. Cannot start live trading.\n"
+                + "\n".join(fail_msgs)
+            )
+            logger.error("preflight_failed", message=error_msg)
+            if self._telegram:
+                await self._telegram.send_message(error_msg)
+            raise SystemExit(error_msg)
 
     async def _maybe_save_portfolio_snapshot(self) -> None:
         """Save portfolio snapshot every 10 cycles for equity curve tracking."""

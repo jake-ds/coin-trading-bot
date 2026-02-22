@@ -67,6 +67,7 @@ _bot_state = {
     "regime": None,
     "cycle_log": [],
     "reconciliation": {},
+    "preflight": {},
 }
 
 # Reference to strategy_registry — set by main.py via set_strategy_registry()
@@ -369,6 +370,12 @@ async def get_cycle_log():
 async def get_reconciliation():
     """Get last position reconciliation result and timestamp."""
     return {"reconciliation": _bot_state.get("reconciliation", {})}
+
+
+@api_router.get("/preflight")
+async def get_preflight():
+    """Get last pre-flight check results."""
+    return {"preflight": _bot_state.get("preflight", {})}
 
 
 @api_router.get("/analytics")
