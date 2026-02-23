@@ -419,6 +419,28 @@ export interface CorrelationReport {
   alerts: string[]
 }
 
+// Metrics History types (V6-013)
+export interface DailySummaryEntry {
+  date: string
+  total_pnl: number
+  total_trades: number
+  winning_trades: number
+  total_cost: number
+  avg_win_rate: number
+}
+
+export interface MetricsHistoryResponse {
+  timestamps: string[]
+  sharpe: number[]
+  win_rate: number[]
+  total_pnl: number[]
+  max_drawdown: number[]
+}
+
+export interface MetricsCompareResponse {
+  engines: Record<string, { timestamps: string[]; values: number[] }>
+}
+
 // Scanner / Opportunity types
 export type OpportunityTypeName = 'funding_rate' | 'volatility' | 'cross_exchange_spread' | 'correlation'
 

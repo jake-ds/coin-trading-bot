@@ -1426,6 +1426,181 @@ app.include_router(heatmap_router)
 
 
 # ---------------------------------------------------------------------------
+# Metrics history endpoints (V6-013)
+# ---------------------------------------------------------------------------
+
+metrics_history_router = APIRouter(
+    prefix="/api/metrics",
+    dependencies=[Depends(require_auth_strict)],
+)
+
+
+@metrics_history_router.get("/history")
+async def get_metrics_history(
+    engine: str = Query(..., description="Engine name"),
+    days: int = Query(30, ge=1, le=365, description="Lookback days"),
+):
+    """Return time-series of engine metric snapshots."""
+    if _engine_manager is None:
+        return {"timestamps": [], "sharpe": [], "win_rate": [],
+                "total_pnl": [], "max_drawdown": []}
+
+    persistence = getattr(_engine_manager, "_metrics_persistence", None)
+    if persistence is None:
+        return {"timestamps": [], "sharpe": [], "win_rate": [],
+                "total_pnl": [], "max_drawdown": []}
+
+    store = persistence._data_store
+    start = datetime.now(timezone.utc) - timedelta(days=days)
+    snapshots = await store.get_engine_metric_snapshots(
+        engine_name=engine, start=start, limit=2000,
+    )
+
+    timestamps = []
+    sharpe = []
+    win_rate = []
+    total_pnl = []
+    max_drawdown = []
+    for s in snapshots:
+        timestamps.append(s["timestamp"])
+        sharpe.append(s["sharpe_ratio"])
+        win_rate.append(s["win_rate"])
+        total_pnl.append(s["total_pnl"])
+        max_drawdown.append(s["max_drawdown"])
+
+    return {
+        "timestamps": timestamps,
+        "sharpe": sharpe,
+        "win_rate": win_rate,
+        "total_pnl": total_pnl,
+        "max_drawdown": max_drawdown,
+    }
+
+
+@metrics_history_router.get("/compare")
+async def get_metrics_compare(
+    engines: str = Query(
+        ..., description="Comma-separated engine names"
+    ),
+    metric: str = Query("sharpe", description="Metric to compare"),
+    days: int = Query(30, ge=1, le=365, description="Lookback days"),
+):
+    """Compare a single metric across multiple engines over time."""
+    if _engine_manager is None:
+        return {"engines": {}}
+
+    persistence = getattr(_engine_manager, "_metrics_persistence", None)
+    if persistence is None:
+        return {"engines": {}}
+
+    store = persistence._data_store
+    start = datetime.now(timezone.utc) - timedelta(days=days)
+    engine_list = [e.strip() for e in engines.split(",") if e.strip()]
+
+    valid_metrics = {
+        "sharpe": "sharpe_ratio",
+        "win_rate": "win_rate",
+        "total_pnl": "total_pnl",
+        "max_drawdown": "max_drawdown",
+        "profit_factor": "profit_factor",
+        "cost_ratio": "cost_ratio",
+    }
+    field = valid_metrics.get(metric, "sharpe_ratio")
+
+    result: dict[str, dict] = {}
+    for eng in engine_list:
+        snapshots = await store.get_engine_metric_snapshots(
+            engine_name=eng, start=start, limit=2000,
+        )
+        timestamps = [s["timestamp"] for s in snapshots]
+        values = [s.get(field, 0.0) for s in snapshots]
+        result[eng] = {"timestamps": timestamps, "values": values}
+
+    return {"engines": result}
+
+
+@metrics_history_router.get("/daily-summary")
+async def get_daily_summary(
+    days: int = Query(30, ge=1, le=365, description="Lookback days"),
+):
+    """Return daily aggregated PnL/trades summary from engine trades."""
+    if _engine_manager is None:
+        return {"daily": []}
+
+    persistence = getattr(_engine_manager, "_metrics_persistence", None)
+    if persistence is None:
+        # Fallback: compute from in-memory tracker
+        return _daily_summary_from_tracker(days)
+
+    store = persistence._data_store
+    start = datetime.now(timezone.utc) - timedelta(days=days)
+    trades = await store.get_engine_trades(start=start, limit=10000)
+
+    if not trades:
+        return _daily_summary_from_tracker(days)
+
+    return {"daily": _aggregate_daily(trades)}
+
+
+def _daily_summary_from_tracker(days: int) -> dict:
+    """Build daily summary from in-memory EngineTracker trades."""
+    if _engine_manager is None:
+        return {"daily": []}
+
+    trades = _collect_tracker_trades(None, None, None, None, None)
+
+    if not trades:
+        return {"daily": []}
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    cutoff_str = cutoff.isoformat()
+    filtered = [t for t in trades if t.get("exit_time", "") >= cutoff_str]
+
+    return {"daily": _aggregate_daily(filtered)}
+
+
+def _aggregate_daily(trades: list[dict]) -> list[dict]:
+    """Aggregate a list of trade dicts into daily summaries."""
+    daily: dict[str, dict] = {}
+    for t in trades:
+        exit_time = t.get("exit_time", "")
+        if not exit_time:
+            continue
+        date_str = exit_time[:10]  # YYYY-MM-DD
+        if date_str not in daily:
+            daily[date_str] = {
+                "date": date_str,
+                "total_pnl": 0.0,
+                "total_trades": 0,
+                "winning_trades": 0,
+                "total_cost": 0.0,
+            }
+        entry = daily[date_str]
+        net = t.get("net_pnl", 0.0)
+        entry["total_pnl"] += net
+        entry["total_trades"] += 1
+        if net > 0:
+            entry["winning_trades"] += 1
+        entry["total_cost"] += t.get("cost", 0.0)
+
+    result = []
+    for date_str in sorted(daily.keys()):
+        entry = daily[date_str]
+        total = entry["total_trades"]
+        wins = entry["winning_trades"]
+        entry["total_pnl"] = round(entry["total_pnl"], 2)
+        entry["total_cost"] = round(entry["total_cost"], 2)
+        entry["avg_win_rate"] = (
+            round(wins / total, 4) if total > 0 else 0.0
+        )
+        result.append(entry)
+    return result
+
+
+app.include_router(metrics_history_router)
+
+
+# ---------------------------------------------------------------------------
 # Scanner / opportunity discovery endpoints
 # ---------------------------------------------------------------------------
 
