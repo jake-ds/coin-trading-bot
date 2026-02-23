@@ -286,7 +286,7 @@
         "All existing tests pass, ruff check passes"
       ],
       "priority": 12,
-      "passes": false,
+      "passes": true,
       "notes": "DB 마이그레이션: Base.metadata.create_all()이 새 테이블 자동 생성. 기존 테이블은 건드리지 않음. restore_tracker()는 첫 시작 시만 실행 (이후는 실시간 저장). EngineTracker의 TradeRecord와 data.models의 TradeRecord(거래소 주문)는 다른 모델이므로 이름 충돌 주의 — DB 모델을 EngineTradeRecord로 구분."
     },
     {
@@ -306,7 +306,7 @@
         "All existing tests pass, ruff check passes"
       ],
       "priority": 13,
-      "passes": false,
+      "passes": true,
       "notes": "EngineMetricSnapshot이 5분마다 저장되므로 30일 = 8640건. daily-summary는 GROUP BY date로 집계. compare에서 시간축 정렬 (start/end 맞추기). 주석 데이터는 tuner.get_history()와 deployer.get_deploy_history()에서 가져옴."
     },
     {
@@ -332,75 +332,92 @@
         "All existing tests pass, ruff check passes"
       ],
       "priority": 14,
-      "passes": false,
+      "passes": true,
       "notes": "CRISIS 판별은 보수적으로: 변동성 2.5배 이상 또는 24h -10% 이하. 양쪽 다 만족할 필요 없음 (OR 조건). volatility_service가 None이거나 fit 안 됐으면 항상 NORMAL. detect_regime() 실패 시 이전 레짐 유지."
     },
     {
       "id": "V6-015",
-      "title": "엔진 적응형 행동 — 레짐 기반 자동 조절 + 서킷 브레이커",
-      "description": "MarketRegimeDetector의 레짐 정보를 각 엔진에 전달하여, 시장 상황에 따라 자동으로 행동을 조절한다. HIGH 레짐에서는 보수적으로, LOW에서는 적극적으로, CRISIS에서는 신규 진입을 멈추고 기존 포지션만 관리한다.",
+      "title": "BaseEngine 레짐 조절 인터페이스 + 4개 엔진 적용",
+      "description": "MarketRegimeDetector의 레짐 정보를 각 엔진이 읽어서 threshold/size를 자동 조절한다. BaseEngine에 공통 인터페이스를 추가하고, 4개 엔진에 적용한다.",
       "acceptanceCriteria": [
         "BaseEngine에 _regime_detector: MarketRegimeDetector | None = None 필드 + set_regime_detector(detector) 메서드 추가",
-        "BaseEngine에 _get_regime_adjustments() -> dict 메서드 추가: 현재 레짐에 따른 조절 계수 반환. LOW: {threshold_mult: 0.8, size_mult: 1.2, description: '적극적'}. NORMAL: {threshold_mult: 1.0, size_mult: 1.0, description: '표준'}. HIGH: {threshold_mult: 1.3, size_mult: 0.7, description: '보수적'}. CRISIS: {threshold_mult: 999, size_mult: 0.0, description: '신규진입 중지'}",
-        "funding_arb._run_cycle(): 레짐 조절 적용 — min_rate에 threshold_mult 곱함. CRISIS면 신규 진입 skip, 기존 포지션 청산 조건만 체크",
-        "grid_trading._run_cycle(): HIGH/CRISIS에서 grid_spacing을 넓힘 (threshold_mult 적용). CRISIS면 새 그리드 주문 안 넣음",
+        "BaseEngine에 _get_regime_adjustments() -> dict 메서드: LOW={threshold_mult:0.8, size_mult:1.2}, NORMAL={1.0, 1.0}, HIGH={1.3, 0.7}, CRISIS={999, 0.0}. detector 없으면 NORMAL 반환",
+        "funding_arb._run_cycle(): min_rate에 threshold_mult 곱함. CRISIS면 신규 진입 skip",
+        "grid_trading._run_cycle(): grid_spacing에 threshold_mult 적용. CRISIS면 새 그리드 주문 안 넣음",
         "cross_exchange_arb._run_cycle(): min_spread_pct에 threshold_mult 적용. CRISIS면 신규 진입 skip",
-        "stat_arb._run_cycle(): entry_zscore에 threshold_mult 적용 (높아지면 진입 조건 까다로워짐). CRISIS면 신규 진입 skip",
-        "각 엔진 cycle 시작에 DecisionStep 추가: label='시장 레짐', observation='현재: {regime}', threshold='조절: threshold×{mult}, size×{mult}', result='{description}', category='evaluate'",
-        "EngineManager에 서킷 브레이커 로직: CRISIS 레짐이 30분 이상 지속되면 모든 엔진 pause(). CRISIS 해제되면 자동 resume(). 서킷 브레이커 발동/해제 시 audit log 기록",
-        "main.py에서 regime_detector를 각 엔진에 set_regime_detector() 호출",
-        "Config: regime_adaptation_enabled: bool = True, crisis_circuit_breaker_minutes: float = 30.0",
-        "SETTINGS_METADATA에 위 2개 설정 추가 (section: 'Market Regime')",
-        "Create tests/engines/test_regime_adaptation.py: 각 레짐별 threshold/size 조절 검증, CRISIS 시 신규 진입 차단, 서킷 브레이커 pause/resume, DecisionStep 생성, regime_adaptation_enabled=False면 조절 없음",
+        "stat_arb._run_cycle(): entry_zscore에 threshold_mult 적용. CRISIS면 신규 진입 skip",
+        "각 엔진 cycle 시작에 DecisionStep: label='시장 레짐', observation='현재: {regime}', category='evaluate'",
+        "Create tests/engines/test_regime_adaptation.py: 각 레짐별 threshold/size 조절 검증, detector=None이면 무조절",
         "All existing tests pass, ruff check passes"
       ],
       "priority": 15,
       "passes": false,
-      "notes": "핵심: regime_detector=None이거나 regime_adaptation_enabled=False면 기존과 100% 동일. threshold_mult=999는 사실상 진입 불가 (어떤 펀딩비도 999배 min_rate보다 클 수 없음). 서킷 브레이커는 EngineManager의 background task에서 체크."
+      "notes": "detector=None이면 기존과 100% 동일 동작. threshold_mult=999는 사실상 진입 불가. 기존 엔진 테스트 깨지지 않게 주의."
     },
     {
       "id": "V6-016",
-      "title": "Dockerfile + docker-compose — 컨테이너화",
-      "description": "프로덕션 배포를 위한 Docker 컨테이너화. 멀티 스테이지 빌드로 프론트엔드와 백엔드를 하나의 이미지에 담고, docker-compose로 전체 스택을 한 줄에 실행한다.",
+      "title": "서킷 브레이커 + main.py 와이어링",
+      "description": "CRISIS 레짐이 일정 시간 이상 지속되면 모든 엔진을 자동 pause하는 서킷 브레이커를 EngineManager에 추가하고, main.py에서 regime_detector를 각 엔진에 연결한다.",
       "acceptanceCriteria": [
-        "Create Dockerfile (프로젝트 루트): 멀티 스테이지 빌드. Stage 1 (frontend-builder): node:20-alpine, cd frontend && npm ci && npm run build. Stage 2 (runtime): python:3.11-slim, COPY requirements.txt + pip install, COPY src/, COPY --from=frontend-builder frontend/dist → src/bot/dashboard/static/. EXPOSE 8000. CMD: python -m bot.main",
-        "Create docker-compose.yml: service 'bot' — build: ., ports: 8000:8000, env_file: .env, volumes: ./data:/app/data (DB 영속화), restart: unless-stopped, healthcheck: curl http://localhost:8000/api/health",
-        "Create .dockerignore: node_modules, __pycache__, .env, .git, data/*.db, .pytest_cache, .ruff_cache, venv, .venv",
-        "GET /api/health 엔드포인트 추가 (인증 불필요): {status: 'healthy'|'degraded'|'unhealthy', uptime_seconds, engines: {name: status}, database: 'connected'|'disconnected', version: str}. dashboard/app.py에 추가",
-        "Health check 로직: (1) DB 연결 확인 (간단한 SELECT 1), (2) 엔진 상태 확인 (모두 RUNNING이면 healthy, 일부 ERROR면 degraded, 전부 STOPPED면 unhealthy)",
-        "Dockerfile에서 non-root user 사용: RUN useradd -m botuser, USER botuser",
-        "환경변수 기반 config 분리: TRADING_ENV=production|staging|development. production일 때 로깅 레벨 WARNING, staging일 때 INFO, dev일 때 DEBUG",
-        "Python 의존성: requirements.txt가 최신인지 확인 (pyproject.toml과 동기화)",
-        "docker-compose에 volume mount: ./data:/app/data (SQLite DB 영속화), ./.env:/app/.env:ro (읽기 전용)",
-        "Create tests/dashboard/test_health_endpoint.py: health 엔드포인트 응답 포맷, healthy/degraded/unhealthy 조건",
-        "docker build -t trading-bot . 이 성공하는지 확인 (CI에서 빌드 테스트용 명령어 기록)",
+        "EngineManager에 _circuit_breaker_check() 메서드: regime_detector.is_crisis()가 True이고 duration >= crisis_circuit_breaker_minutes이면 모든 엔진 pause(). CRISIS 해제되면 resume()",
+        "EngineManager._detection_loop 또는 별도 _circuit_breaker_loop()에서 주기적(1분) 체크",
+        "서킷 브레이커 발동/해제 시 audit log 기록",
+        "main.py에서 regime_detector를 각 엔진에 set_regime_detector() 호출",
+        "Config: regime_adaptation_enabled: bool = True, crisis_circuit_breaker_minutes: float = 30.0",
+        "SETTINGS_METADATA에 위 2개 설정 추가 (section: 'Market Regime')",
+        "Create tests/engines/test_circuit_breaker.py: CRISIS 30분 이상 → pause, CRISIS 해제 → resume, adaptation_enabled=False면 미동작",
         "All existing tests pass, ruff check passes"
       ],
       "priority": 16,
       "passes": false,
-      "notes": "docker build는 실제 실행하지 않아도 됨 (Docker 없을 수 있음). Dockerfile + docker-compose.yml 파일이 정확하면 충분. python:3.11-slim은 ~150MB. node:20-alpine은 빌드만 사용하므로 최종 이미지에 불포함. 최종 이미지 크기 목표: ~300MB."
+      "notes": "서킷 브레이커는 EngineManager의 background task. pause()는 BaseEngine에 이미 있음."
     },
     {
       "id": "V6-017",
-      "title": "프로덕션 배포 강화 — graceful shutdown + 최종 검증",
-      "description": "프로덕션 안정성을 위한 마무리 작업. Graceful shutdown 처리, 시그널 핸들링, 스타트업 체크리스트, 전체 시스템 통합 검증을 수행한다.",
+      "title": "Dockerfile + docker-compose + .dockerignore",
+      "description": "프로덕션 배포를 위한 Docker 컨테이너화. 멀티 스테이지 빌드, non-root user, health check.",
       "acceptanceCriteria": [
-        "main.py에 graceful shutdown 핸들링 강화: SIGTERM, SIGINT 수신 시 (1) 모든 엔진 stop() (2) 메트릭 최종 스냅샷 저장 (3) DB 연결 정리 (4) 로깅: 'Graceful shutdown completed'. asyncio signal handler 사용",
-        "TradingBot에 async shutdown() 메서드 추가 (또는 기존 stop() 강화): stop_all_engines → save_final_metrics → close_db 순서 보장. timeout 30초 — 초과 시 force exit",
-        "Startup preflight check 강화: (1) DB 연결 확인, (2) 거래소 API 연결 확인 (ping), (3) 필수 config 검증 (API key 존재), (4) disk space 확인 (data/ 디렉토리에 100MB 이상 여유). 실패 시 명확한 에러 메시지 + exit code 1",
-        "docker-compose.yml에 추가: stop_grace_period: 35s (shutdown timeout 30s + 여유 5s)",
-        "GET /api/health에 detailed=true 파라미터: 상세 정보 포함 (disk_space_mb, memory_usage_mb, cpu_usage_pct, total_trades_today, uptime_formatted)",
-        "Config: shutdown_timeout_seconds: float = 30.0",
-        "SETTINGS_METADATA에 위 1개 설정 추가",
-        "Integration test: tests/test_v6_integration.py — V6 전체 모듈 import 검증, 새 config 필드 기본값 검증, health endpoint, 주요 클래스 인스턴스화 검증",
-        "최종 검증: pytest tests/ -v — ALL 테스트 통과 (기존 2202+ 새 테스트 전부)",
-        "최종 검증: ruff check src/ tests/ — 린트 에러 0개",
-        "최종 검증: cd frontend && npm run build — 프론트엔드 빌드 성공",
+        "Create Dockerfile: 멀티 스테이지. Stage 1 (frontend-builder): node:20-alpine, npm ci && npm run build. Stage 2: python:3.11-slim, pip install, COPY src/ + frontend dist. non-root user. EXPOSE 8000",
+        "Create docker-compose.yml: service 'bot', ports 8000:8000, env_file .env, volumes ./data:/app/data, restart unless-stopped, healthcheck curl /api/health, stop_grace_period 35s",
+        "Create .dockerignore: node_modules, __pycache__, .env, .git, data/*.db, venv",
+        "requirements.txt를 pyproject.toml과 동기화 확인",
+        "환경변수 TRADING_ENV (production|staging|development) 기반 로깅 레벨 분리",
         "All existing tests pass, ruff check passes"
       ],
       "priority": 17,
       "passes": false,
-      "notes": "이 스토리는 V6의 마지막 스토리. 전체 통합을 검증하고 프로덕션 안정성을 확보하는 것이 목표. Graceful shutdown은 asyncio.get_event_loop().add_signal_handler() 사용. disk space는 shutil.disk_usage('/app/data'). memory/cpu는 psutil (없으면 /proc/meminfo fallback 또는 skip)."
+      "notes": "Docker 없어도 파일이 정확하면 충분. docker build는 실행하지 않아도 됨."
+    },
+    {
+      "id": "V6-018",
+      "title": "Health 엔드포인트 + graceful shutdown",
+      "description": "상세 health check 엔드포인트와 SIGTERM/SIGINT graceful shutdown 처리.",
+      "acceptanceCriteria": [
+        "GET /api/health 엔드포인트 강화 (인증 불필요): status (healthy/degraded/unhealthy), uptime_seconds, engines 상태, database 연결. detailed=true면 disk_space_mb, memory_usage_mb 추가",
+        "Health 로직: 모든 엔진 RUNNING → healthy, 일부 ERROR → degraded, 전부 STOPPED → unhealthy",
+        "main.py graceful shutdown: SIGTERM/SIGINT → 엔진 stop → 메트릭 스냅샷 → DB 정리. timeout 30초",
+        "Config: shutdown_timeout_seconds: float = 30.0",
+        "Create tests/dashboard/test_health_endpoint.py: healthy/degraded/unhealthy 조건, detailed 파라미터",
+        "All existing tests pass, ruff check passes"
+      ],
+      "priority": 18,
+      "passes": false,
+      "notes": "health 엔드포인트는 V6-014에서 기본 버전이 이미 있을 수 있음. 강화만 하면 됨."
+    },
+    {
+      "id": "V6-019",
+      "title": "최종 통합 검증 + V6 완료",
+      "description": "V6 전체 모듈 통합 검증. 모든 테스트, 린트, 프론트엔드 빌드 통과를 확인한다.",
+      "acceptanceCriteria": [
+        "tests/test_v6_integration.py 생성: V6 전체 모듈 import 검증, 새 config 필드 기본값 검증, 주요 클래스 인스턴스화",
+        "pytest tests/ -v — ALL 테스트 통과",
+        "ruff check src/ tests/ — 린트 에러 0개",
+        "cd frontend && npm run build — 프론트엔드 빌드 성공",
+        "All existing tests pass, ruff check passes"
+      ],
+      "priority": 19,
+      "passes": false,
+      "notes": "이 스토리가 V6의 마지막. 전체 통합 검증만 수행."
     }
   ]
 }
