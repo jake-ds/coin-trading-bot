@@ -382,6 +382,43 @@ export interface HeatmapMonthly {
   win_rate: number
 }
 
+// Risk Dashboard types (V6-011)
+export interface RiskPortfolioMetrics {
+  exposure_pct: number
+  heat: number
+  var_pct: number | null
+  parametric_var: number | null
+  cornish_fisher_var: number | null
+  cvar: number | null
+  stress_var: number | null
+  n_positions: number
+  portfolio_value: number
+  var_enabled: boolean
+  positions: Array<{ symbol: string; value: number; atr: number | null }>
+}
+
+export interface DrawdownPoint {
+  timestamp: string
+  drawdown_pct: number
+  equity: number
+}
+
+export interface CorrelationReport {
+  per_symbol: Record<
+    string,
+    { engines: string[]; total_notional: number; pct_of_capital: number }
+  >
+  cross_engine_correlations: Record<
+    string,
+    {
+      overlap_symbols: string[]
+      overlap_pct: number
+      concentration_score: number
+    }
+  >
+  alerts: string[]
+}
+
 // Scanner / Opportunity types
 export type OpportunityTypeName = 'funding_rate' | 'volatility' | 'cross_exchange_spread' | 'correlation'
 

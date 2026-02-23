@@ -342,4 +342,36 @@ Started: 2026년 2월 23일 월요일 17시 18분 03초 KST
   - `_collect_tracker_trades()` reuse avoids code duplication between trade detail and heatmap endpoints
   - Frontend rgba color scaling: `rgba(r, g, b, intensity)` where intensity = abs(value)/maxAbs
   - Monthly calendar sorted by (year, month) for chronological display
+
+### Risk Dashboard Patterns
+- `PortfolioManager._drawdown_history: list[dict]` appended in `report_pnl()` with {timestamp, drawdown_pct, equity}
+- Capped at 1000 entries with slicing
+- `GET /api/risk/drawdown` returns `{"history": pm._drawdown_history}` via `getattr(_engine_manager, "_portfolio_manager")`
+- Frontend uses `Promise.allSettled()` for parallel fetch of /risk/portfolio, /risk/drawdown, /risk/correlation (graceful degradation)
+- VaR gauge uses recharts RadialBarChart with startAngle=180 endAngle=0 for semicircle
+- Drawdown curve: AreaChart with reversed Y-axis (drawdown % grows downward)
+- Correlation heatmap: 4×4 engine grid with overlap_pct from corrMap
+- TypeScript: `(data as any).error` pattern to check API error responses on typed interfaces
+- `Tooltip formatter` needs `value: number | undefined` to satisfy recharts strict typing
+- `labelFormatter` needs `label: unknown` (not `string`) for recharts compatibility
+---
+
+## 2026-02-23 - V6-011
+- **Implemented**: Risk Dashboard page — VaR/drawdown/correlation visualization
+- **Files created**:
+  - `frontend/src/pages/RiskDashboard.tsx` — VaR gauge cards (4 types), portfolio heat bar, drawdown curve chart, engine correlation heatmap, position exposure pie/bar, concentration monitor
+  - `tests/dashboard/test_drawdown_api.py` — 10 tests: TestDrawdownEndpoint (no_manager, no_pm, with_history, history_values), TestPortfolioManagerDrawdownHistory (initial_empty, report_adds_entry, multiple_reports, capped_at_1000, zero_on_new_high, nonzero_after_loss)
+- **Files modified**:
+  - `src/bot/engines/portfolio_manager.py` — Added `_drawdown_history: list[dict]`, updated `report_pnl()` to append drawdown/equity entry, capped at 1000
+  - `src/bot/dashboard/app.py` — Added `GET /api/risk/drawdown` endpoint on risk_router
+  - `frontend/src/api/types.ts` — Added RiskPortfolioMetrics, DrawdownPoint, CorrelationReport interfaces
+  - `frontend/src/App.tsx` — Added RiskDashboard import, /risk nav item, and Route
+  - `scripts/ralph/prd.json` — Marked V6-011 passes: true
+- **Tests**: 10 new, 2528 total passing (+ 3 pre-existing failures)
+- **Learnings for future iterations:**
+  - `Promise.allSettled()` is essential for dashboard pages that aggregate multiple API calls with graceful degradation
+  - Recharts TypeScript strictness: formatter callbacks take `value | undefined`, labelFormatter takes `unknown`
+  - RadialBarChart semicircle: `startAngle=180 endAngle=0` with `cx="50%" cy="80%"` for bottom alignment
+  - AreaChart reversed Y-axis: `reversed` prop on YAxis for drawdown (higher=worse)
+  - `datetime.now(timezone.utc)` for timestamp generation in drawdown history
 ---

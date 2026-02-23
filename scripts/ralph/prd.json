@@ -259,7 +259,7 @@
         "All existing tests pass, ruff check passes"
       ],
       "priority": 11,
-      "passes": false,
+      "passes": true,
       "notes": "VaR 게이지는 recharts의 RadialBarChart 또는 커스텀 SVG arc. 드로다운은 음수 영역 Area chart (fill red). 리스크 API가 아직 V6-006, V6-008에서 안 만들어졌을 수 있으므로, 해당 엔드포인트가 404이면 graceful degradation (데이터 없음 표시)."
     },
     {

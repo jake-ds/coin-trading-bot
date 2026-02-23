@@ -1097,6 +1097,17 @@ async def get_risk_correlation():
     return controller.get_concentration_report()
 
 
+@risk_router.get("/drawdown")
+async def get_risk_drawdown():
+    """Get drawdown history time-series from PortfolioManager."""
+    if _engine_manager is None:
+        return {"history": []}
+    pm = getattr(_engine_manager, "_portfolio_manager", None)
+    if pm is None:
+        return {"history": []}
+    return {"history": getattr(pm, "_drawdown_history", [])}
+
+
 app.include_router(risk_router)
 
 
