@@ -217,6 +217,8 @@ class TradingBot:
         dashboard_module.set_settings(self._settings)
         dashboard_module.set_trading_bot(self)
         dashboard_module.set_audit_logger(self._audit_logger)
+        if self._store:
+            dashboard_module.set_store_ref(self._store)
 
         # Import strategies to trigger registration
         self._load_strategies()
@@ -2027,32 +2029,78 @@ class TradingBot:
         return closed
 
     async def shutdown(self) -> None:
-        """Graceful shutdown."""
-        logger.info("bot_shutting_down")
+        """Graceful shutdown with timeout.
+
+        Sequence: stop engines → save metrics snapshot → cleanup DB → close.
+        Respects shutdown_timeout_seconds from settings.
+        """
+        timeout = getattr(self._settings, "shutdown_timeout_seconds", 30.0)
+        logger.info("bot_shutting_down", timeout_seconds=timeout)
         self._running = False
 
-        # Audit log shutdown
+        try:
+            await asyncio.wait_for(
+                self._shutdown_sequence(), timeout=timeout,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "shutdown_timeout_exceeded",
+                timeout_seconds=timeout,
+            )
+
+        dashboard_module.update_state(status="stopped")
+        logger.info("bot_shutdown_complete")
+
+    async def _shutdown_sequence(self) -> None:
+        """Internal shutdown sequence called within timeout wrapper."""
+        # 1. Stop engines
+        if self._engine_manager:
+            try:
+                await self._engine_manager.stop_all()
+                logger.info("shutdown_engines_stopped")
+            except Exception:
+                logger.exception("shutdown_engines_stop_error")
+
+        # 2. Save final metrics snapshot
+        if self._engine_manager:
+            persistence = getattr(
+                self._engine_manager, "_metrics_persistence", None,
+            )
+            if persistence:
+                try:
+                    await persistence.save_metrics_snapshot()
+                    logger.info("shutdown_metrics_snapshot_saved")
+                except Exception:
+                    logger.exception("shutdown_metrics_snapshot_error")
+
+        # 3. Audit log shutdown
         try:
             await self._audit_logger.log_bot_stopped()
         except Exception:
             pass
 
-        # Stop Telegram command polling
+        # 4. Stop Telegram command polling
         if self._telegram and hasattr(self._telegram, "stop_command_polling"):
             try:
                 await self._telegram.stop_command_polling()
             except Exception:
                 pass
 
-        # Notify shutdown via Telegram
+        # 5. Notify shutdown via Telegram
         if self._telegram:
-            await self._telegram.send_message("Bot shutting down.")
+            try:
+                await self._telegram.send_message("Bot shutting down.")
+            except Exception:
+                pass
 
-        # Stop WebSocket feed
+        # 6. Stop WebSocket feed
         if self._ws_feed:
-            await self._ws_feed.stop()
+            try:
+                await self._ws_feed.stop()
+            except Exception:
+                pass
 
-        # Cancel dashboard background task
+        # 7. Cancel dashboard background task
         if self._dashboard_task and not self._dashboard_task.done():
             self._dashboard_task.cancel()
             try:
@@ -2060,14 +2108,33 @@ class TradingBot:
             except asyncio.CancelledError:
                 pass
 
+        # 8. Close exchange connections
         for exchange in self._exchanges:
-            await exchange.close()
+            try:
+                await exchange.close()
+            except Exception:
+                pass
 
+        # 9. DB cleanup and close
         if self._store:
-            await self._store.close()
-
-        dashboard_module.update_state(status="stopped")
-        logger.info("bot_shutdown_complete")
+            # Run metrics cleanup if persistence is available
+            if self._engine_manager:
+                persistence = getattr(
+                    self._engine_manager, "_metrics_persistence", None,
+                )
+                if persistence:
+                    try:
+                        retention = getattr(
+                            self._settings, "metrics_retention_days", 90,
+                        )
+                        await persistence.cleanup(max_days=retention)
+                        logger.info("shutdown_metrics_cleanup_done")
+                    except Exception:
+                        logger.exception("shutdown_metrics_cleanup_error")
+            try:
+                await self._store.close()
+            except Exception:
+                pass
 
     def stop(self) -> None:
         """Signal the bot to stop."""

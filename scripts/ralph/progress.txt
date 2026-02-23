@@ -534,3 +534,34 @@ Started: 2026년 2월 23일 월요일 17시 18분 03초 KST
   - Fix: only override log_level when `os.environ.get("TRADING_ENV")` is truthy
   - .dockerignore `data/` blocks bind mounts; use `data/*.db` pattern instead
   - requirements.txt was out of sync with pyproject.toml (quant deps missing)
+
+### Health Endpoint & Shutdown Patterns
+- `/health` and `/api/health` endpoints use NO auth (no `Depends(require_auth_strict)`)
+- `_app_start_time` module-level `time.time()` for uptime calculation
+- `_store_ref` module-level reference for DB connectivity check (separate from `_bot_state`)
+- Health status logic: all engines RUNNING → healthy, any ERROR → degraded, all STOPPED → unhealthy
+- `detailed=True` adds `disk_space_mb` (shutil.disk_usage) and `memory_usage_mb` (resource.getrusage)
+- macOS: `ru_maxrss` in bytes; Linux: in KB — use `platform.system()` to pick divisor
+- Health function uses plain `bool = False` default (NOT `Query(False, ...)`) for direct-call compatibility
+- `shutdown()` wraps `_shutdown_sequence()` in `asyncio.wait_for(timeout=...)` for timeout control
+- Shutdown sequence: stop_engines → save_metrics_snapshot → audit_log → telegram → ws_feed → exchanges → cleanup_db → close_store
+- Each step in shutdown wrapped in try/except to prevent one failure from blocking rest
+- `set_store_ref(store)` called in `main.py.initialize()` after store creation
+---
+
+## 2026-02-24 - V6-018
+- **Implemented**: Enhanced health endpoint + graceful shutdown with timeout
+- **Files created**:
+  - `tests/dashboard/test_health_endpoint.py` — 22 tests: TestHealthEndpointStatus (7: no_manager/all_running/some_error/all_stopped/error_and_stopped/paused/stale_cycle), TestHealthResponseFields (5: basic_fields/uptime/db_false/db_true/timestamp_iso), TestHealthDetailed (3: no_detailed_default/disk_space/memory_usage), TestGracefulShutdown (5: stops_engines/saves_metrics/timeout/no_engine_manager/closes_store), TestHealthConfig (2: default/metadata)
+- **Files modified**:
+  - `src/bot/dashboard/app.py` — Enhanced `health_check()` with status logic (healthy/degraded/unhealthy), uptime_seconds, engines status, database_connected, detailed mode (disk_space_mb, memory_usage_mb). Added `_app_start_time`, `_store_ref`, `set_store_ref()`. Updated `api_health_check()` to pass `detailed` param.
+  - `src/bot/main.py` — Refactored `shutdown()` into `shutdown()` + `_shutdown_sequence()` with timeout. Sequence: stop engines → save metrics snapshot → audit log → telegram → ws_feed → exchanges → cleanup DB → close store. Added `set_store_ref()` wiring.
+  - `src/bot/config.py` — Added `shutdown_timeout_seconds: float = 30.0` + SETTINGS_METADATA entry (section: Shutdown)
+  - `scripts/ralph/prd.json` — Marked V6-018 passes: true
+- **Tests**: 22 new, 2637 total passing (+ 3 pre-existing failures)
+- **Learnings for future iterations:**
+  - `Query(False, ...)` returns a truthy FastAPI Query object when called directly — use plain `bool = False` for functions called both by FastAPI routes and direct invocations
+  - `resource.getrusage(RUSAGE_SELF).ru_maxrss` units differ by platform (bytes on macOS, KB on Linux)
+  - `shutil.disk_usage(os.getcwd())` returns named tuple with total/used/free
+  - Each shutdown step must be try/excepted independently to avoid one error blocking the rest
+  - `asyncio.wait_for(coro, timeout=X)` raises TimeoutError after X seconds — perfect for bounded shutdown

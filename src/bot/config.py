@@ -190,6 +190,9 @@ class Settings(BaseSettings):
     regime_adaptation_enabled: bool = True
     crisis_circuit_breaker_minutes: float = Field(default=30.0, gt=0)
 
+    # ── Shutdown ──
+    shutdown_timeout_seconds: float = Field(default=30.0, gt=0)
+
     # ── Data backfill ──
     data_backfill_enabled: bool = True
     data_backfill_interval_hours: float = Field(default=6.0, gt=0)
@@ -994,6 +997,13 @@ SETTINGS_METADATA: dict[str, dict[str, Any]] = {
         "description": "Minutes of CRISIS regime before circuit breaker pauses all engines",
         "type": "float",
         "requires_restart": False,
+    },
+    # Shutdown
+    "shutdown_timeout_seconds": {
+        "section": "Shutdown",
+        "description": "Timeout in seconds for graceful shutdown",
+        "type": "float",
+        "requires_restart": True,
     },
     # Data Collection (backfill)
     "data_backfill_enabled": {

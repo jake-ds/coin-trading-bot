@@ -401,7 +401,7 @@
         "All existing tests pass, ruff check passes"
       ],
       "priority": 18,
-      "passes": false,
+      "passes": true,
       "notes": "health 엔드포인트는 V6-014에서 기본 버전이 이미 있을 수 있음. 강화만 하면 됨."
     },
     {

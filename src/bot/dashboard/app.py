@@ -30,6 +30,9 @@ logger = structlog.get_logger()
 
 app = FastAPI(title="Coin Trading Bot Dashboard")
 
+# Track application start time for uptime calculation
+_app_start_time: float = time.time()
+
 # CORS configuration — allowed_origins can be overridden via configure_cors()
 _default_origins = ["http://localhost", "http://localhost:8000", "http://localhost:5173"]
 
@@ -83,6 +86,9 @@ _trading_bot = None
 # Reference to AuditLogger — set by main.py via set_audit_logger()
 _audit_logger = None
 
+# Reference to DataStore for health check DB connectivity
+_store_ref = None
+
 
 def set_strategy_registry(registry) -> None:
     """Set the strategy registry reference for toggle endpoint."""
@@ -121,6 +127,12 @@ def set_audit_logger(audit_logger) -> None:
 def get_audit_logger():
     """Get the current AuditLogger reference."""
     return _audit_logger
+
+
+def set_store_ref(store) -> None:
+    """Set the DataStore reference for health check DB connectivity."""
+    global _store_ref
+    _store_ref = store
 
 
 # ---------------------------------------------------------------------------
@@ -731,9 +743,11 @@ async def update_settings_endpoint(body: dict):
 
 
 @api_router.get("/health")
-async def api_health_check():
+async def api_health_check(
+    detailed: bool = False,
+):
     """Health check endpoint under /api prefix."""
-    return await health_check()
+    return await health_check(detailed=detailed)
 
 
 # Include the API router
@@ -1817,28 +1831,93 @@ async def broadcast_alert(message: str, severity: str = "info") -> None:
 
 
 @app.get("/health")
-async def health_check():
-    """Health check endpoint for Docker.
+async def health_check(
+    detailed: bool = False,
+):
+    """Health check endpoint for Docker (no auth required).
 
-    Returns unhealthy if the bot is running but the last cycle was more than
-    5 minutes ago, indicating the trading loop may be stuck.
+    Status logic:
+    - healthy: all engines RUNNING or no engine mode
+    - degraded: some engines in ERROR state
+    - unhealthy: all engines STOPPED or last cycle stale
     """
     now = datetime.now(timezone.utc).isoformat()
+    uptime = round(time.time() - _app_start_time, 1)
     last_cycle = _bot_state["cycle_metrics"].get("last_cycle_time")
     bot_status = _bot_state["status"]
 
-    # If the bot is running and we have a last_cycle_time, check staleness
+    # Determine health status based on engines
+    status = "healthy"
+    engines_info: dict = {}
+
+    if _engine_manager is not None:
+        engine_status_map = _engine_manager.get_status()
+        running_count = 0
+        error_count = 0
+        stopped_count = 0
+        total_engines = 0
+
+        for name, info in engine_status_map.items():
+            eng_status = info.get("status", "unknown")
+            engines_info[name] = eng_status
+            total_engines += 1
+            if eng_status == "running":
+                running_count += 1
+            elif eng_status == "error":
+                error_count += 1
+            elif eng_status == "stopped":
+                stopped_count += 1
+
+        if total_engines > 0:
+            if error_count > 0:
+                status = "degraded"
+            if stopped_count == total_engines:
+                status = "unhealthy"
+
+    # Stale cycle check (non-engine mode)
     if bot_status == "running" and last_cycle is not None:
         elapsed = time.time() - last_cycle
         if elapsed > 300:  # 5 minutes
-            return {
-                "status": "unhealthy",
-                "reason": "last_cycle_stale",
-                "last_cycle_seconds_ago": round(elapsed, 1),
-                "timestamp": now,
-            }
+            status = "unhealthy"
 
-    return {"status": "healthy", "timestamp": now}
+    # Check database connectivity
+    db_connected = _store_ref is not None
+
+    result: dict = {
+        "status": status,
+        "uptime_seconds": uptime,
+        "engines": engines_info,
+        "database_connected": db_connected,
+        "timestamp": now,
+    }
+
+    if detailed:
+        import os
+        import shutil
+
+        # Disk space
+        try:
+            disk = shutil.disk_usage(os.getcwd())
+            result["disk_space_mb"] = round(disk.free / (1024 * 1024), 1)
+        except Exception:
+            result["disk_space_mb"] = None
+
+        # Memory usage
+        try:
+            import resource
+
+            usage = resource.getrusage(resource.RUSAGE_SELF)
+            # maxrss is in bytes on macOS, KB on Linux
+            import platform
+            rss = usage.ru_maxrss
+            if platform.system() == "Darwin":
+                result["memory_usage_mb"] = round(rss / (1024 * 1024), 1)
+            else:
+                result["memory_usage_mb"] = round(rss / 1024, 1)
+        except Exception:
+            result["memory_usage_mb"] = None
+
+    return result
 
 
 @app.get("/legacy", response_class=HTMLResponse)
