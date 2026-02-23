@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from bot.config import Settings
     from bot.engines.base import BaseEngine, EngineCycleResult
     from bot.engines.portfolio_manager import PortfolioManager
+    from bot.research.deployer import ResearchDeployer
 
 logger = structlog.get_logger(__name__)
 
@@ -44,12 +45,18 @@ class EngineManager:
         self._rebalance_history: list[dict] = []
         self._research_experiments: list[ResearchTask] = []
         self._research_reports: list[dict] = []
+        self._deployer: ResearchDeployer | None = None
+        self._regression_task: asyncio.Task | None = None
         self._collector = None
         self._backfill_task: asyncio.Task | None = None
 
     def set_collector(self, collector) -> None:
         """Set the DataCollector for backfill background loop."""
         self._collector = collector
+
+    def set_deployer(self, deployer: ResearchDeployer) -> None:
+        """Set the ResearchDeployer for auto-deploying research findings."""
+        self._deployer = deployer
 
     # ------------------------------------------------------------------
     # Registration
@@ -216,6 +223,10 @@ class EngineManager:
                 ),
                 name="backfill-loop",
             )
+        if self._deployer and getattr(s, "research_auto_deploy", True):
+            self._regression_task = asyncio.create_task(
+                self._regression_check_loop(), name="regression-check-loop"
+            )
 
     async def _tuner_loop(self) -> None:
         """Periodically evaluate and adjust engine parameters."""
@@ -320,7 +331,24 @@ class EngineManager:
                             self._research_reports[-50:]
                         )
 
-                        if report.improvement_significant:
+                        # Use deployer if available, otherwise fallback
+                        if (
+                            self._deployer
+                            and s
+                            and getattr(s, "research_auto_deploy", True)
+                        ):
+                            result = self._deployer.deploy(report)
+                            if result.success:
+                                logger.info(
+                                    "research_deployed",
+                                    experiment=report.experiment_name,
+                                    snapshot_id=result.snapshot_id,
+                                    changes=[
+                                        c.to_dict()
+                                        for c in result.deployed_changes
+                                    ],
+                                )
+                        elif report.improvement_significant:
                             changes = experiment.apply_findings()
                             if changes and s:
                                 self.tuner.apply_changes(changes, s)
@@ -343,6 +371,52 @@ class EngineManager:
                         )
             except Exception:
                 logger.exception("research_loop_error")
+
+            await asyncio.sleep(interval)
+
+    async def _regression_check_loop(self) -> None:
+        """Periodically check for performance regression after deployments."""
+        s = self._settings
+        initial_delay = 21600  # 6 hours before first check
+        interval = (
+            getattr(s, "research_regression_check_hours", 6.0) * 3600
+            if s
+            else 21600
+        )
+
+        await asyncio.sleep(initial_delay)
+
+        while True:
+            try:
+                if not self._deployer:
+                    await asyncio.sleep(interval)
+                    continue
+
+                # Check regression for each engine that has a recent deploy
+                history = self._deployer.get_deploy_history()
+                for record in reversed(history):
+                    if record.get("rolled_back"):
+                        continue
+                    # Check each engine that was affected
+                    engines_checked: set[str] = set()
+                    for change in record.get("changes", []):
+                        engine_name = change.get("engine_name", "")
+                        if engine_name and engine_name not in engines_checked:
+                            engines_checked.add(engine_name)
+                            if self._deployer.check_regression(engine_name):
+                                snapshot_id = record.get("snapshot_id", "")
+                                if snapshot_id:
+                                    logger.warning(
+                                        "auto_rollback_triggered",
+                                        engine=engine_name,
+                                        snapshot_id=snapshot_id,
+                                    )
+                                    self._deployer.rollback(snapshot_id)
+                    # Only check the most recent non-rolled-back deployment
+                    break
+
+            except Exception:
+                logger.exception("regression_check_loop_error")
 
             await asyncio.sleep(interval)
 

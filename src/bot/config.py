@@ -180,6 +180,8 @@ class Settings(BaseSettings):
     engine_rebalance_interval_hours: int = Field(default=24, ge=1)
     research_enabled: bool = True
     research_interval_hours: int = Field(default=24, ge=1)
+    research_auto_deploy: bool = True
+    research_regression_check_hours: float = Field(default=6.0, gt=0)
 
     # Funding rate strategy
     funding_extreme_positive_rate: float = Field(default=0.0005, ge=0)
@@ -777,6 +779,18 @@ SETTINGS_METADATA: dict[str, dict[str, Any]] = {
         "section": "Research",
         "description": "Hours between research experiment runs",
         "type": "int",
+        "requires_restart": False,
+    },
+    "research_auto_deploy": {
+        "section": "Research",
+        "description": "Auto-deploy significant research findings to live parameters",
+        "type": "bool",
+        "requires_restart": False,
+    },
+    "research_regression_check_hours": {
+        "section": "Research",
+        "description": "Hours between regression checks after research deployments",
+        "type": "float",
         "requires_restart": False,
     },
     # Token scanner

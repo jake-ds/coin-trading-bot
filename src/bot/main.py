@@ -583,6 +583,17 @@ class TradingBot:
         # Register research experiments with data_provider for real data
         self._register_research_experiments()
 
+        # Wire ResearchDeployer for auto-deploy pipeline
+        if self._settings.research_auto_deploy:
+            from bot.research.deployer import ResearchDeployer
+
+            deployer = ResearchDeployer(
+                tuner=self._engine_manager.tuner,
+                settings=self._settings,
+                tracker=self._engine_manager.tracker,
+            )
+            self._engine_manager.set_deployer(deployer)
+
         logger.info(
             "engine_mode_initialized",
             engines=list(self._engine_manager.engines.keys()),

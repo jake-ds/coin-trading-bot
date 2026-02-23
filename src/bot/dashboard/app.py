@@ -1032,6 +1032,21 @@ async def list_reports():
     return {"reports": reports}
 
 
+@research_router.get("/deployments")
+async def list_deployments():
+    """List research deployment history with rollback status."""
+    if _engine_manager is None:
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "Engine mode not enabled"},
+        )
+    deployer = getattr(_engine_manager, "_deployer", None)
+    if deployer is None:
+        return {"deployments": []}
+    history = deployer.get_deploy_history()
+    return {"deployments": list(reversed(history))}
+
+
 app.include_router(research_router)
 
 

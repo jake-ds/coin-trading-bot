@@ -100,4 +100,40 @@ Started: 2026년 2월 23일 월요일 17시 18분 03초 KST
   - Funding rate timestamps can be `datetime` objects or epoch milliseconds (int) — handle both
   - experiments/__init__.py uses eager imports (not lazy) — safe since it doesn't import from engines
   - `data_source` field is always present in results for V6-003+, enabling downstream analysis of data quality
+
+### ResearchDeployer Patterns
+- `ResearchDeployer(tuner, settings, tracker)` — takes ParameterTuner, Settings, EngineTracker
+- `evaluate_report()` → `DeployDecision(action, reason, changes)` — filters valid changes within TUNER_CONFIG bounds
+- `deploy()` → saves pre-deploy param snapshot + Sharpe, applies via `tuner.apply_changes()`, records history
+- `check_regression(engine_name)` → True if post-deploy Sharpe dropped >30% from pre-deploy
+- `rollback(snapshot_id)` → restores params via `settings.reload(snapshot)`, marks history as rolled_back
+- Safety bounds: max 3 changes per deploy, all clamped to TUNER_CONFIG min/max
+- `_param_snapshots: dict[str, dict]` keyed by uuid-based snapshot_id
+- `_pre_deploy_sharpe: dict[str, float]` keyed by engine_name, cleared on rollback
+- EngineManager wiring: `set_deployer()` + `_regression_check_loop()` background task
+- `_research_loop()` uses deployer when available, falls back to direct `tuner.apply_changes()`
+- Config: `research_auto_deploy: bool = True`, `research_regression_check_hours: float = 6.0`
+- Dashboard: `GET /api/research/deployments` returns deployment history
+
+---
+
+## 2026-02-23 - V6-004
+- **Implemented**: ResearchDeployer — auto-deploy pipeline with A/B verification + safe rollback
+- **Files created**:
+  - `src/bot/research/deployer.py` — ResearchDeployer class with DeployDecision, DeployResult, DeployRecord dataclasses. evaluate_report(), deploy(), check_regression(), rollback(), get_deploy_history(), _filter_valid_changes()
+  - `tests/research/test_deployer.py` — 40 tests: evaluate (significant/not/no-changes/bounds), deploy (success/snapshot/history/sharpe/tuner), regression (none/stable/detected/negative), rollback (success/not-found/clear-sharpe/failure), history (empty/multiple/limit-50), safety bounds (constant/within/clamped/unknown), EngineManager integration, dashboard endpoint, config settings
+- **Files modified**:
+  - `src/bot/engines/manager.py` — Added `_deployer`, `_regression_task`, `set_deployer()`, `_regression_check_loop()`. Updated `_research_loop()` to use deployer when available. Updated `start_background_loops()` to start regression check loop
+  - `src/bot/config.py` — Added `research_auto_deploy: bool = True`, `research_regression_check_hours: float = 6.0` + SETTINGS_METADATA entries
+  - `src/bot/dashboard/app.py` — Added `GET /api/research/deployments` endpoint on research_router
+  - `src/bot/main.py` — Added ResearchDeployer creation and `set_deployer()` call in `_init_engine_mode()`
+  - `src/bot/research/__init__.py` — Added `ResearchDeployer` to lazy exports
+  - `scripts/ralph/prd.json` — Marked V6-004 passes: true
+- **Tests**: 40 new, 2314 total passing (+ 3 pre-existing failures)
+- **Learnings for future iterations:**
+  - deployer.py imports TUNER_CONFIG for bound validation — safe since tuner.py doesn't import deployer
+  - `settings.reload(snapshot)` for rollback — same method used by dashboard settings endpoint
+  - `_regression_check_loop` only checks the most recent non-rolled-back deployment to avoid cascading rollbacks
+  - Pre-deploy Sharpe is cleared per-engine on rollback to prevent stale regression checks
+  - `uuid.uuid4()[:8]` for snapshot IDs — short enough for logging, unique enough for tracking
 ---

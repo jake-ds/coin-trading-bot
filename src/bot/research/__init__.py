@@ -2,6 +2,7 @@
 
 __all__ = [
     "HistoricalDataProvider",
+    "ResearchDeployer",
     "ResearchReport",
     "ResearchTask",
 ]
@@ -23,4 +24,8 @@ def __getattr__(name: str):  # type: ignore[misc]
         from bot.research.data_provider import HistoricalDataProvider
 
         return HistoricalDataProvider
+    if name == "ResearchDeployer":
+        from bot.research.deployer import ResearchDeployer
+
+        return ResearchDeployer
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

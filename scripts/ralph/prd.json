@@ -92,7 +92,7 @@
         "All existing tests pass, ruff check passes"
       ],
       "priority": 4,
-      "passes": false,
+      "passes": true,
       "notes": "안전이 최우선. deploy 후 반드시 pre-deploy snapshot을 저장. rollback은 항상 가능해야 함. regression threshold는 보수적으로 (30% 하락). auto_deploy=False면 report만 저장하고 deploy하지 않음."
     },
     {
