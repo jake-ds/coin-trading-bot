@@ -88,6 +88,11 @@ class TestFetchAllTickers:
         ex._exchange.fetch_tickers = AsyncMock(side_effect=Exception("API error"))
 
         s = make_scanner(pm, registry, exchanges=[ex])
+        # Disable public client fallback for this test
+        s._public_exchange = MagicMock()
+        s._public_exchange.fetch_tickers = AsyncMock(
+            side_effect=Exception("no fallback"),
+        )
         result = await s._fetch_all_tickers()
         assert result == {}
 

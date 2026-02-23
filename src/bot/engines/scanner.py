@@ -83,6 +83,8 @@ class TokenScannerEngine(BaseEngine):
         self._ticker_cache: dict[str, dict[str, Any]] = {}
         # Price history for correlation scan (symbol -> list of last prices)
         self._price_history: dict[str, list[float]] = {}
+        # Unauthenticated ccxt client for public API calls (lazy init)
+        self._public_exchange: Any | None = None
 
     @property
     def name(self) -> str:
@@ -214,14 +216,28 @@ class TokenScannerEngine(BaseEngine):
     # Batch data fetching
     # ------------------------------------------------------------------
 
+    async def _get_public_exchange(self) -> Any:
+        """Lazy-init an unauthenticated ccxt client for public API calls."""
+        if self._public_exchange is None:
+            try:
+                import ccxt.async_support as ccxt
+
+                self._public_exchange = ccxt.binance({
+                    "options": {"defaultType": "future"},
+                })
+            except Exception:
+                return None
+        return self._public_exchange
+
     async def _fetch_all_tickers(self) -> dict[str, dict[str, Any]]:
         """Fetch all tickers from the primary exchange (1 API call)."""
+        # Try each connected exchange adapter first
         for exchange in self._exchanges:
             inner = getattr(exchange, "_exchange", None)
             if inner and hasattr(inner, "fetch_tickers"):
                 try:
                     raw = await inner.fetch_tickers()
-                    if isinstance(raw, dict):
+                    if isinstance(raw, dict) and raw:
                         return raw
                 except Exception as e:
                     logger.debug(
@@ -230,40 +246,76 @@ class TokenScannerEngine(BaseEngine):
                         error=str(e),
                     )
 
-            # Fallback: adapter-level method
             if hasattr(exchange, "get_all_tickers"):
                 try:
-                    return await exchange.get_all_tickers()
+                    result = await exchange.get_all_tickers()
+                    if result:
+                        return result
                 except Exception as e:
                     logger.debug(
                         "scanner_get_all_tickers_failed",
                         exchange=getattr(exchange, "name", "unknown"),
                         error=str(e),
                     )
+
+        # Fallback: unauthenticated public client
+        pub = await self._get_public_exchange()
+        if pub and hasattr(pub, "fetch_tickers"):
+            try:
+                raw = await pub.fetch_tickers()
+                if isinstance(raw, dict) and raw:
+                    logger.debug(
+                        "scanner_tickers_via_public_client",
+                        count=len(raw),
+                    )
+                    return raw
+            except Exception as e:
+                logger.debug(
+                    "scanner_public_fetch_tickers_failed",
+                    error=str(e),
+                )
         return {}
 
     async def _fetch_all_funding_rates(self) -> dict[str, dict[str, Any]]:
         """Fetch all funding rates from a futures exchange (1 API call)."""
+        # Try connected exchanges first
         for exchange in self._exchanges:
-            # Direct adapter method
             if hasattr(exchange, "get_all_funding_rates"):
                 try:
-                    return await exchange.get_all_funding_rates()
+                    result = await exchange.get_all_funding_rates()
+                    if result:
+                        return result
                 except Exception:
                     pass
 
-            # ccxt underlying
             inner = getattr(exchange, "_exchange", None)
             if inner and hasattr(inner, "fetch_funding_rates"):
                 try:
                     raw = await inner.fetch_funding_rates()
-                    if isinstance(raw, dict):
+                    if isinstance(raw, dict) and raw:
                         return raw
                 except Exception as e:
                     logger.debug(
                         "scanner_fetch_funding_rates_failed",
                         error=str(e),
                     )
+
+        # Fallback: unauthenticated public client
+        pub = await self._get_public_exchange()
+        if pub and hasattr(pub, "fetch_funding_rates"):
+            try:
+                raw = await pub.fetch_funding_rates()
+                if isinstance(raw, dict) and raw:
+                    logger.debug(
+                        "scanner_funding_rates_via_public_client",
+                        count=len(raw),
+                    )
+                    return raw
+            except Exception as e:
+                logger.debug(
+                    "scanner_public_funding_rates_failed",
+                    error=str(e),
+                )
         return {}
 
     # ------------------------------------------------------------------
