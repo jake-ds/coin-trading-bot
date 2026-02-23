@@ -139,7 +139,7 @@
         "All existing tests pass, ruff check passes"
       ],
       "priority": 6,
-      "passes": false,
+      "passes": true,
       "notes": "stress_var는 Cholesky decomposition으로 correlated returns 생성: L = cholesky(corr_matrix), simulated = L @ random_normal. 시뮬레이션 수가 많으면 느려지므로 default 1000. calculate_portfolio_var() 기존 메서드는 유지 (historical method)."
     },
     {

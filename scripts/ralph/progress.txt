@@ -165,4 +165,38 @@ Started: 2026년 2월 23일 월요일 17시 18분 03초 KST
   - classify_volatility_regime() needs ≥2×window data points, returns NORMAL otherwise
   - get_all_regimes() returns a copy (dict()) to prevent external mutation
   - _fit_loop test pattern: use CancelledError from mock sleep to break after one iteration
+
+### PortfolioRiskManager VaR/CVaR Patterns
+- `PortfolioRiskManager(volatility_service=None)` — new optional param, backward compatible
+- `_get_portfolio_returns()` — shared helper extracts weighted portfolio returns from `_price_history` and `_positions`
+- `calculate_parametric_var()`, `calculate_cornish_fisher_var()`, `calculate_cvar()` — delegate to `quant.risk_metrics` functions, return percentage or None
+- `calculate_stress_var(n_simulations=1000)` — Monte Carlo with Cholesky decomposition for correlated returns, uses `np.random.default_rng(42)` for determinism
+- Stress VaR handles: single-asset (no correlation), NaN in corr_matrix (`nan_to_num`), non-PSD matrix (eigenvalue clipping), Cholesky failure (fallback to identity)
+- `pre_trade_var_check(symbol, position_value)` — simulates adding new position to portfolio, checks VaR against limit
+- `validate_new_position()` now has 6 checks: exposure → correlation → sector → heat → VaR limit → pre-trade VaR
+- `get_risk_metrics()` includes: parametric_var, cornish_fisher_var, cvar, stress_var (all new fields)
+- Config: `var_method: str = 'historical'`, `stress_var_simulations: int = 1000`
+- Dashboard: `GET /api/risk/portfolio` returns full risk metrics + position details
+- `_get_portfolio_risk_manager()` helper in dashboard finds PRM from `_engine_manager._portfolio_risk`
+
+---
+
+## 2026-02-23 - V6-006
+- **Implemented**: VaR/CVaR portfolio risk limits — real-time risk gate with parametric, Cornish-Fisher, stress VaR
+- **Files created**:
+  - `tests/risk/test_var_integration.py` — 47 tests: _get_portfolio_returns (5), parametric_var (4), cornish_fisher_var (4), cvar (3), stress_var (9), pre_trade_var_check (5), get_risk_metrics format (5), validate_with_pre_trade_var (2), backward_compat (4), config (4), dashboard endpoint (2)
+- **Files modified**:
+  - `src/bot/risk/portfolio_risk.py` — Added volatility_service param, _get_portfolio_returns(), calculate_parametric_var(), calculate_cornish_fisher_var(), calculate_cvar(), calculate_stress_var(), pre_trade_var_check(). Enhanced get_risk_metrics() with 4 new VaR fields. Added pre_trade_var_check to validate_new_position() chain.
+  - `src/bot/config.py` — Added `var_method: str = 'historical'`, `stress_var_simulations: int = 1000` + SETTINGS_METADATA entries
+  - `src/bot/dashboard/app.py` — Added risk_router with `GET /api/risk/portfolio` endpoint
+  - `scripts/ralph/prd.json` — Marked V6-006 passes: true
+- **Tests**: 47 new, 2404 total passing (+ 3 pre-existing failures)
+- **Learnings for future iterations:**
+  - `_get_portfolio_returns()` factored out to avoid code duplication across VaR methods
+  - Stress VaR uses `np.random.default_rng(42)` for deterministic results (testable)
+  - Cholesky decomposition needs PSD matrix — use eigenvalue clipping as fallback
+  - `from scipy import stats as scipy_stats` was unused — ruff caught it immediately
+  - Import ordering: ruff wants `from unittest.mock` (stdlib) before `import numpy` (third-party) — use `ruff --fix` to auto-sort
+  - pre_trade_var_check creates hypothetical portfolio with new position weight included in total value
+  - Dashboard helper `_get_portfolio_risk_manager()` uses `getattr()` for safe access to `_engine_manager._portfolio_risk`
 ---

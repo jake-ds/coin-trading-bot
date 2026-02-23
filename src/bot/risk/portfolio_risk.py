@@ -7,8 +7,15 @@ from typing import TYPE_CHECKING
 import numpy as np
 import structlog
 
+from bot.quant.risk_metrics import (
+    cornish_fisher_var,
+    cvar,
+    parametric_var,
+)
+
 if TYPE_CHECKING:
     from bot.models import OHLCV
+    from bot.risk.volatility_service import VolatilityService
 
 logger = structlog.get_logger()
 
@@ -21,6 +28,7 @@ class PortfolioRiskManager:
     - Correlation checks between positions to avoid redundant exposure
     - Sector/category limits for position grouping
     - Portfolio heat (aggregate risk) using position size * ATR
+    - VaR/CVaR risk gates (parametric, Cornish-Fisher, stress)
     """
 
     def __init__(
@@ -34,6 +42,7 @@ class PortfolioRiskManager:
         var_enabled: bool = False,
         var_confidence: float = 0.95,
         max_portfolio_var_pct: float = 5.0,
+        volatility_service: VolatilityService | None = None,
     ):
         self._max_total_exposure_pct = max_total_exposure_pct
         self._max_correlation = max_correlation
@@ -47,6 +56,9 @@ class PortfolioRiskManager:
         self._var_enabled = var_enabled
         self._var_confidence = var_confidence
         self._max_portfolio_var_pct = max_portfolio_var_pct
+
+        # Optional volatility service for enhanced risk metrics
+        self._volatility_service = volatility_service
 
         # Price history for correlation calculation: symbol -> list of returns
         self._price_history: dict[str, list[float]] = {}
@@ -353,6 +365,257 @@ class PortfolioRiskManager:
         var_value = -float(np.percentile(port_returns, percentile))
         return max(var_value * 100, 0.0)  # Return as percentage
 
+    def _get_portfolio_returns(self) -> np.ndarray | None:
+        """Compute weighted portfolio returns from position data.
+
+        Returns:
+            Array of portfolio returns, or None if insufficient data.
+        """
+        if not self._price_history or not self._positions:
+            return None
+
+        position_returns = []
+        position_weights = []
+        total_value = sum(p["value"] for p in self._positions.values())
+        if total_value <= 0:
+            return None
+
+        for symbol, pos in self._positions.items():
+            returns = self._price_history.get(symbol, [])
+            if len(returns) < 10:
+                continue
+            position_returns.append(returns[-self._correlation_window:])
+            position_weights.append(pos["value"] / total_value)
+
+        if not position_returns:
+            return None
+
+        min_len = min(len(r) for r in position_returns)
+        if min_len < 5:
+            return None
+
+        port_returns = np.zeros(min_len)
+        for ret, weight in zip(position_returns, position_weights):
+            port_returns += np.array(ret[-min_len:]) * weight
+
+        return port_returns
+
+    def calculate_parametric_var(self) -> float | None:
+        """Calculate parametric (Gaussian) VaR for the portfolio.
+
+        Returns:
+            VaR as a percentage, or None if insufficient data.
+        """
+        port_returns = self._get_portfolio_returns()
+        if port_returns is None:
+            return None
+
+        var_val = parametric_var(port_returns, confidence=self._var_confidence)
+        return max(var_val * 100, 0.0)
+
+    def calculate_cornish_fisher_var(self) -> float | None:
+        """Calculate Cornish-Fisher adjusted VaR for the portfolio.
+
+        Accounts for skewness and kurtosis in the return distribution.
+
+        Returns:
+            VaR as a percentage, or None if insufficient data.
+        """
+        port_returns = self._get_portfolio_returns()
+        if port_returns is None:
+            return None
+
+        var_val = cornish_fisher_var(port_returns, confidence=self._var_confidence)
+        return max(var_val * 100, 0.0)
+
+    def calculate_cvar(self) -> float | None:
+        """Calculate Conditional VaR (Expected Shortfall) for the portfolio.
+
+        CVaR is the expected loss given that the loss exceeds VaR.
+
+        Returns:
+            CVaR as a percentage, or None if insufficient data.
+        """
+        port_returns = self._get_portfolio_returns()
+        if port_returns is None:
+            return None
+
+        cvar_val = cvar(port_returns, confidence=self._var_confidence)
+        return max(cvar_val * 100, 0.0)
+
+    def calculate_stress_var(self, n_simulations: int = 1000) -> float | None:
+        """Calculate stress VaR using Monte Carlo simulation.
+
+        Uses Cholesky decomposition of the correlation matrix to generate
+        correlated random returns and computes VaR from the simulated
+        portfolio return distribution.
+
+        Args:
+            n_simulations: Number of Monte Carlo simulations.
+
+        Returns:
+            Stress VaR as a percentage, or None if insufficient data.
+        """
+        if not self._price_history or not self._positions:
+            return None
+
+        symbols_with_data = []
+        returns_matrix = []
+        weights = []
+        total_value = sum(p["value"] for p in self._positions.values())
+        if total_value <= 0:
+            return None
+
+        for symbol, pos in self._positions.items():
+            returns = self._price_history.get(symbol, [])
+            if len(returns) < 10:
+                continue
+            symbols_with_data.append(symbol)
+            returns_matrix.append(returns[-self._correlation_window:])
+            weights.append(pos["value"] / total_value)
+
+        if len(symbols_with_data) < 1:
+            return None
+
+        # Align lengths
+        min_len = min(len(r) for r in returns_matrix)
+        if min_len < 5:
+            return None
+
+        aligned = np.array([r[-min_len:] for r in returns_matrix])
+        weights_arr = np.array(weights)
+
+        # Mean and std per asset
+        means = np.mean(aligned, axis=1)
+        stds = np.std(aligned, axis=1, ddof=1)
+
+        # Handle single-asset case
+        if len(symbols_with_data) == 1:
+            rng = np.random.default_rng(42)
+            simulated = rng.normal(means[0], max(stds[0], 1e-10), n_simulations)
+            port_sim = simulated * weights_arr[0]
+            percentile = (1 - self._var_confidence) * 100
+            var_val = -float(np.percentile(port_sim, percentile))
+            return max(var_val * 100, 0.0)
+
+        # Correlation matrix
+        corr_matrix = np.corrcoef(aligned)
+
+        # Fix any NaN in correlation matrix (can happen with constant series)
+        if np.any(np.isnan(corr_matrix)):
+            np.fill_diagonal(corr_matrix, 1.0)
+            corr_matrix = np.nan_to_num(corr_matrix, nan=0.0)
+
+        # Ensure positive semi-definite via eigenvalue clipping
+        try:
+            eigenvalues, eigenvectors = np.linalg.eigh(corr_matrix)
+            eigenvalues = np.maximum(eigenvalues, 1e-8)
+            corr_matrix = eigenvectors @ np.diag(eigenvalues) @ eigenvectors.T
+            # Re-normalize to correlation matrix
+            d = np.sqrt(np.diag(corr_matrix))
+            corr_matrix = corr_matrix / np.outer(d, d)
+        except np.linalg.LinAlgError:
+            # Fallback: use identity matrix
+            corr_matrix = np.eye(len(symbols_with_data))
+
+        # Cholesky decomposition
+        try:
+            L = np.linalg.cholesky(corr_matrix)
+        except np.linalg.LinAlgError:
+            L = np.eye(len(symbols_with_data))
+
+        # Generate correlated random returns
+        rng = np.random.default_rng(42)
+        z = rng.standard_normal((len(symbols_with_data), n_simulations))
+        correlated_z = L @ z
+
+        # Scale to actual return distributions
+        simulated_returns = np.zeros((len(symbols_with_data), n_simulations))
+        for i in range(len(symbols_with_data)):
+            simulated_returns[i] = means[i] + stds[i] * correlated_z[i]
+
+        # Weighted portfolio returns
+        port_sim = weights_arr @ simulated_returns
+
+        percentile = (1 - self._var_confidence) * 100
+        var_val = -float(np.percentile(port_sim, percentile))
+        return max(var_val * 100, 0.0)
+
+    def pre_trade_var_check(
+        self, symbol: str, position_value: float
+    ) -> tuple[bool, str]:
+        """Simulate adding a new position and check if VaR exceeds the limit.
+
+        Creates a hypothetical portfolio with the new position added and
+        computes VaR. If the resulting VaR exceeds max_portfolio_var_pct,
+        the trade is rejected.
+
+        Args:
+            symbol: Symbol of the proposed position.
+            position_value: Notional value of the proposed position.
+
+        Returns:
+            (allowed, reason) tuple.
+        """
+        if not self._var_enabled:
+            return True, ""
+
+        # Need returns for the symbol
+        symbol_returns = self._price_history.get(symbol, [])
+        if len(symbol_returns) < 10:
+            return True, ""  # Can't calculate — allow
+
+        # Build hypothetical portfolio returns including the new position
+        total_value = sum(p["value"] for p in self._positions.values())
+        new_total = total_value + position_value
+        if new_total <= 0:
+            return True, ""
+
+        position_returns = []
+        position_weights = []
+
+        for sym, pos in self._positions.items():
+            returns = self._price_history.get(sym, [])
+            if len(returns) < 10:
+                continue
+            position_returns.append(returns[-self._correlation_window:])
+            position_weights.append(pos["value"] / new_total)
+
+        # Add the new position
+        position_returns.append(symbol_returns[-self._correlation_window:])
+        position_weights.append(position_value / new_total)
+
+        if not position_returns:
+            return True, ""
+
+        min_len = min(len(r) for r in position_returns)
+        if min_len < 5:
+            return True, ""
+
+        port_returns = np.zeros(min_len)
+        for ret, weight in zip(position_returns, position_weights):
+            port_returns += np.array(ret[-min_len:]) * weight
+
+        # Use historical VaR on the hypothetical portfolio
+        percentile = (1 - self._var_confidence) * 100
+        var_val = -float(np.percentile(port_returns, percentile))
+        projected_var = max(var_val * 100, 0.0)
+
+        if projected_var > self._max_portfolio_var_pct:
+            reason = (
+                f"projected_var {projected_var:.2f}% would exceed "
+                f"limit {self._max_portfolio_var_pct:.2f}%"
+            )
+            logger.warning(
+                "portfolio_pre_trade_var_limit",
+                symbol=symbol,
+                projected_var_pct=round(projected_var, 2),
+                limit_pct=self._max_portfolio_var_pct,
+            )
+            return False, reason
+
+        return True, ""
+
     def check_var_limit(self, symbol: str, position_value: float) -> tuple[bool, str]:
         """Check if adding a position would breach portfolio VaR limit.
 
@@ -385,12 +648,16 @@ class PortfolioRiskManager:
         """Get current portfolio risk metrics summary.
 
         Returns:
-            Dict with exposure_pct, heat, var_pct, n_positions.
+            Dict with exposure, heat, VaR variants, CVaR, positions.
         """
         return {
             "exposure_pct": round(self.get_total_exposure(), 2),
             "heat": round(self.calculate_portfolio_heat(), 4),
             "var_pct": self.calculate_portfolio_var(),
+            "parametric_var": self.calculate_parametric_var(),
+            "cornish_fisher_var": self.calculate_cornish_fisher_var(),
+            "cvar": self.calculate_cvar(),
+            "stress_var": self.calculate_stress_var(),
             "n_positions": len(self._positions),
             "portfolio_value": self._portfolio_value,
             "var_enabled": self._var_enabled,
@@ -410,6 +677,7 @@ class PortfolioRiskManager:
         3. Sector limits
         4. Portfolio heat
         5. VaR limit (if enabled)
+        6. Pre-trade VaR simulation (if enabled)
 
         Returns:
             (allowed, reason) tuple. If not allowed, reason explains why.
@@ -436,6 +704,11 @@ class PortfolioRiskManager:
 
         # 5. VaR limit
         allowed, reason = self.check_var_limit(symbol, position_value)
+        if not allowed:
+            return False, reason
+
+        # 6. Pre-trade VaR simulation
+        allowed, reason = self.pre_trade_var_check(symbol, position_value)
         if not allowed:
             return False, reason
 

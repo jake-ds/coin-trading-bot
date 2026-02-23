@@ -194,6 +194,8 @@ class Settings(BaseSettings):
     var_enabled: bool = False
     var_confidence: float = Field(default=0.95, ge=0.5, le=0.999)
     max_portfolio_var_pct: float = Field(default=5.0, ge=0, le=100)
+    var_method: str = "historical"  # historical | parametric | cornish_fisher
+    stress_var_simulations: int = Field(default=1000, ge=100, le=100000)
     quant_pairs: list[list[str]] = Field(
         default_factory=list
     )  # e.g., [["BTC/USDT", "ETH/USDT"]]
@@ -573,6 +575,19 @@ SETTINGS_METADATA: dict[str, dict[str, Any]] = {
         "section": "Risk Management",
         "description": "Max portfolio heat (risk)",
         "type": "float",
+        "requires_restart": False,
+    },
+    "var_method": {
+        "section": "Risk Management",
+        "description": "VaR calculation method: historical, parametric, or cornish_fisher",
+        "type": "select",
+        "options": ["historical", "parametric", "cornish_fisher"],
+        "requires_restart": False,
+    },
+    "stress_var_simulations": {
+        "section": "Risk Management",
+        "description": "Number of Monte Carlo simulations for stress VaR",
+        "type": "int",
         "requires_restart": False,
     },
     # Dashboard (unsafe)

@@ -1051,6 +1051,45 @@ app.include_router(research_router)
 
 
 # ---------------------------------------------------------------------------
+# Risk endpoints
+# ---------------------------------------------------------------------------
+
+risk_router = APIRouter(
+    prefix="/api/risk",
+    dependencies=[Depends(require_auth_strict)],
+)
+
+
+def _get_portfolio_risk_manager():
+    """Get PortfolioRiskManager from EngineManager if available."""
+    if _engine_manager is None:
+        return None
+    return getattr(_engine_manager, "_portfolio_risk", None)
+
+
+@risk_router.get("/portfolio")
+async def get_risk_portfolio():
+    """Get all portfolio risk metrics (exposure, heat, VaR 3 types, CVaR, positions)."""
+    prm = _get_portfolio_risk_manager()
+    if prm is None:
+        return {"error": "not_available"}
+    metrics = prm.get_risk_metrics()
+    # Add position details
+    positions = []
+    for symbol, pos in prm.positions.items():
+        positions.append({
+            "symbol": symbol,
+            "value": pos.get("value", 0),
+            "atr": pos.get("atr"),
+        })
+    metrics["positions"] = positions
+    return metrics
+
+
+app.include_router(risk_router)
+
+
+# ---------------------------------------------------------------------------
 # Scanner / opportunity discovery endpoints
 # ---------------------------------------------------------------------------
 
