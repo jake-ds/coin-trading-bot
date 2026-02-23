@@ -19,7 +19,7 @@ Started: 2026년 2월 23일 월요일 17시 18분 03초 KST
 ### Testing Patterns
 - Use `MagicMock()` for DataStore, set async methods via `AsyncMock(return_value=...)`
 - Existing 3 pre-existing test failures (not our fault): test_defaults, test_main_without_validate_runs_trading_loop, test_main_without_args_runs_trading_loop
-- Baseline: 2241 passed + 3 pre-existing failures
+- Baseline: 2274 passed + 3 pre-existing failures
 
 ---
 
@@ -69,4 +69,35 @@ Started: 2026년 2월 23일 월요일 17시 18분 03초 KST
   - Rate limit delay between symbols is 0.5s (using `asyncio.sleep`)
   - `dict.fromkeys()` preserves order while deduplicating
   - Backfill loop uses registry from `opportunity_registry` property (finds scanner engine)
+
+### Research Experiment Data Flow
+- `ResearchTask` base class stores `data_provider: HistoricalDataProvider | None` (default None for backward compat)
+- `_run_async(coro)` helper in ResearchTask: runs async code from sync `run_experiment()` — uses ThreadPoolExecutor when inside running event loop, `asyncio.run()` otherwise
+- Data priority in experiments: `kwargs` > `data_provider` > synthetic fallback
+- Each experiment adds `data_source: 'real' | 'synthetic' | 'kwargs'` to results dict
+- CointegrationExperiment accepts `stat_arb_pairs` list, OptimalGridExperiment accepts `grid_symbols` list
+- FundingPrediction: `_real_funding_data` stores raw records for time pattern analysis (hourly/daily)
+- Experiments registered in `main.py._register_research_experiments()` with data_provider from DataStore
+
+---
+
+## 2026-02-23 - V6-003
+- **Implemented**: Research experiments real data upgrade — all 4 experiments use HistoricalDataProvider
+- **Files created**:
+  - `tests/research/test_experiments_real_data.py` — 33 tests: real data mode, fallback to synthetic, data_source field, time pattern analysis, backward compatibility
+- **Files modified**:
+  - `src/bot/research/base.py` — Added `__init__(data_provider=None)` to ResearchTask ABC, `_run_async()` helper for sync→async bridging
+  - `src/bot/research/experiments/volatility_regime.py` — Added `data_provider` param, `_fetch_real_prices()`, `data_source` in results
+  - `src/bot/research/experiments/cointegration.py` — Added `data_provider` + `stat_arb_pairs` params, `_fetch_real_pairs()`, `data_source` in results
+  - `src/bot/research/experiments/optimal_grid.py` — Added `data_provider` + `grid_symbols` params, `_fetch_real_prices()`, `data_source` in results
+  - `src/bot/research/experiments/funding_prediction.py` — Added `data_provider` param, `_fetch_real_funding_rates()`, time pattern analysis (`_analyze_time_patterns()`), `data_source`/`best_entry_hour`/`avg_positive_rate`/`hourly_pattern`/`daily_pattern` in results
+  - `src/bot/main.py` — Added `_register_research_experiments()` method that creates all 4 experiments with HistoricalDataProvider and registers them on EngineManager
+  - `scripts/ralph/prd.json` — Marked V6-003 passes: true
+- **Tests**: 33 new, 2274 total passing (+ 3 pre-existing failures)
+- **Learnings for future iterations:**
+  - `_run_async()` pattern: `ThreadPoolExecutor` + `asyncio.run` for running async from sync inside event loop
+  - Each experiment's `__init__` must call `super().__init__(data_provider=data_provider)` to store on base
+  - Funding rate timestamps can be `datetime` objects or epoch milliseconds (int) — handle both
+  - experiments/__init__.py uses eager imports (not lazy) — safe since it doesn't import from engines
+  - `data_source` field is always present in results for V6-003+, enabling downstream analysis of data quality
 ---

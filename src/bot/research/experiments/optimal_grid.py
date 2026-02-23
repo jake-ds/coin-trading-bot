@@ -6,12 +6,20 @@ to find optimal parameters for grid_trading.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import numpy as np
+import structlog
 
 from bot.engines.tuner import ParamChange
 from bot.research.backtest_runner import SimpleBacktestRunner
 from bot.research.base import ResearchTask
 from bot.research.report import ResearchReport
+
+if TYPE_CHECKING:
+    from bot.research.data_provider import HistoricalDataProvider
+
+logger = structlog.get_logger(__name__)
 
 
 class OptimalGridExperiment(ResearchTask):
@@ -21,13 +29,42 @@ class OptimalGridExperiment(ResearchTask):
     def target_engine(self) -> str:
         return "grid_trading"
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        data_provider: HistoricalDataProvider | None = None,
+        grid_symbols: list[str] | None = None,
+    ) -> None:
+        super().__init__(data_provider=data_provider)
         self._last_report: ResearchReport | None = None
+        self._grid_symbols = grid_symbols or ["BTC/USDT", "ETH/USDT", "SOL/USDT"]
+
+    def _fetch_real_prices(self) -> list[float] | None:
+        """Fetch real prices for the first grid symbol."""
+        if not self.data_provider:
+            return None
+        try:
+            symbol = self._grid_symbols[0] if self._grid_symbols else "BTC/USDT"
+            prices = self._run_async(
+                self.data_provider.get_prices(symbol, "1h", lookback_days=60)
+            )
+            if len(prices) >= 30:
+                return prices
+        except Exception:
+            logger.warning("optimal_grid_real_data_fetch_failed", exc_info=True)
+        return None
 
     def run_experiment(self, **kwargs: object) -> ResearchReport:
+        # Priority: kwargs > data_provider > synthetic
         prices = kwargs.get("prices")
+        data_source = "kwargs"
         if prices is None:
-            prices = self._generate_synthetic_prices()
+            real_prices = self._fetch_real_prices()
+            if real_prices is not None:
+                prices = real_prices
+                data_source = "real"
+            else:
+                prices = self._generate_synthetic_prices()
+                data_source = "synthetic"
         prices = list(prices)  # type: ignore[arg-type]
 
         spacing_options = [0.005, 0.01, 0.015, 0.02, 0.03]
@@ -59,6 +96,8 @@ class OptimalGridExperiment(ResearchTask):
         )["sharpe"]
 
         significant = improvement > 0.1 and abs(optimal_spacing_pct - current_spacing_pct) > 0.1
+
+        grid_results["data_source"] = data_source  # type: ignore[assignment]
 
         self._last_report = ResearchReport(
             experiment_name="optimal_grid",

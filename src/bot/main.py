@@ -580,10 +580,54 @@ class TradingBot:
         for engine in self._engine_manager.engines.values():
             engine.set_on_cycle_complete(_broadcast_engine_cycle)
 
+        # Register research experiments with data_provider for real data
+        self._register_research_experiments()
+
         logger.info(
             "engine_mode_initialized",
             engines=list(self._engine_manager.engines.keys()),
             total_capital=capital,
+        )
+
+    def _register_research_experiments(self) -> None:
+        """Register all research experiments on the engine manager."""
+        from bot.research.data_provider import HistoricalDataProvider
+        from bot.research.experiments.cointegration import (
+            CointegrationExperiment,
+        )
+        from bot.research.experiments.funding_prediction import (
+            FundingPredictionExperiment,
+        )
+        from bot.research.experiments.optimal_grid import (
+            OptimalGridExperiment,
+        )
+        from bot.research.experiments.volatility_regime import (
+            VolatilityRegimeExperiment,
+        )
+
+        data_provider = None
+        if self._store:
+            data_provider = HistoricalDataProvider(self._store)
+
+        s = self._settings
+
+        self._engine_manager.register_experiment(
+            VolatilityRegimeExperiment(data_provider=data_provider)
+        )
+        self._engine_manager.register_experiment(
+            CointegrationExperiment(
+                data_provider=data_provider,
+                stat_arb_pairs=s.stat_arb_pairs if s else None,
+            )
+        )
+        self._engine_manager.register_experiment(
+            OptimalGridExperiment(
+                data_provider=data_provider,
+                grid_symbols=s.grid_symbols if s else None,
+            )
+        )
+        self._engine_manager.register_experiment(
+            FundingPredictionExperiment(data_provider=data_provider)
         )
 
     async def _run_engine_mode(self) -> None:

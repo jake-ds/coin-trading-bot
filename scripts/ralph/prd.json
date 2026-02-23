@@ -65,7 +65,7 @@
         "All existing tests pass, ruff check passes"
       ],
       "priority": 3,
-      "passes": false,
+      "passes": true,
       "notes": "핵심: data_provider=None이면 기존과 100% 동일하게 동작해야 함. 각 실험은 async run_experiment()로 바꿔야 할 수 있음 — DataProvider가 async이므로. 또는 run_experiment() 내부에서 asyncio.get_event_loop().run_until_complete() 사용. ResearchTask ABC의 run_experiment는 sync로 유지하되, 내부에서 async 호출을 sync로 래핑하는 helper 사용."
     },
     {
