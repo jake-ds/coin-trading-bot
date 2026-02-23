@@ -137,3 +137,32 @@ Started: 2026년 2월 23일 월요일 17시 18분 03초 KST
   - Pre-deploy Sharpe is cleared per-engine on rollback to prevent stale regression checks
   - `uuid.uuid4()[:8]` for snapshot IDs — short enough for logging, unique enough for tracking
 ---
+
+### VolatilityService Patterns
+- `VolatilityService(data_provider=None)` → graceful degradation: all forecasts None, all regimes NORMAL
+- `fit_symbol()` wraps GARCHModel.fit() in try/except — always returns bool success
+- `_models: dict[str, GARCHModel]` stores fitted models; `_forecasts: dict[str, float]` caches horizon=1 forecast
+- `_regimes: dict[str, VolatilityRegime]` caches classify_volatility_regime() result
+- `_last_fit: dict[str, datetime]` tracks fit timestamps for `needs_refit()` staleness check
+- `get_market_regime()` uses BTC/USDT as proxy — NORMAL if BTC not fitted
+- `_fit_loop()` has 60s initial delay, then runs fit_all() every interval_hours
+- Import asyncio at module level (not inside method) — needed for `patch()` in tests
+
+---
+
+## 2026-02-23 - V6-005
+- **Implemented**: VolatilityService — GARCH-based real-time volatility forecasting service
+- **Files created**:
+  - `src/bot/risk/volatility_service.py` — VolatilityService class with fit_symbol, fit_all, get_forecast, get_regime, get_all_regimes, get_market_regime, needs_refit, get_model, _fit_loop
+  - `tests/risk/test_volatility_service.py` — 43 tests: init, fit_symbol (success/no-provider/insufficient/empty/garch-failure/exception/timestamps), fit_all (success/partial-failure/empty), get_forecast (after-fit/not-fitted/unknown/horizon>1/no-model), get_regime (after-fit/not-fitted/unknown/all/empty), market_regime (btc/no-btc/only-eth), needs_refit (never/just-fitted/expired/not-expired/custom-age), get_model (after-fit/not-fitted), graceful degradation (6 tests), fit_loop (execution/exception-handling), import verification
+- **Files modified**:
+  - `src/bot/risk/__init__.py` — Added VolatilityService to exports
+  - `scripts/ralph/prd.json` — Marked V6-005 passes: true
+- **Tests**: 43 new, 2357 total passing (+ 3 pre-existing failures)
+- **Learnings for future iterations:**
+  - asyncio must be imported at module level to be patchable in tests (not inside method)
+  - GARCHModel.fit() requires ≥30 data points; returns `{'success': False}` on failure
+  - classify_volatility_regime() needs ≥2×window data points, returns NORMAL otherwise
+  - get_all_regimes() returns a copy (dict()) to prevent external mutation
+  - _fit_loop test pattern: use CancelledError from mock sleep to break after one iteration
+---

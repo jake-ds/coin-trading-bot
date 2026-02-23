@@ -116,7 +116,7 @@
         "All existing tests pass, ruff check passes"
       ],
       "priority": 5,
-      "passes": false,
+      "passes": true,
       "notes": "GARCHModel.fit()은 arch 패키지 사용 (이미 설치됨). fit이 실패할 수 있음 (데이터 부족, 수렴 실패) — 반드시 try/except. VolatilityService는 singleton처럼 사용될 것이지만 DI로 주입. _fit_loop의 첫 실행은 시작 후 1분 후."
     },
     {
