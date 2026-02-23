@@ -11,6 +11,7 @@ import Engines from './pages/Engines'
 import EngineDetail from './pages/EngineDetail'
 import Performance from './pages/Performance'
 import Research from './pages/Research'
+import Scanner from './pages/Scanner'
 import Login from './pages/Login'
 import ConnectionIndicator from './components/common/ConnectionIndicator'
 import ProtectedRoute from './components/common/ProtectedRoute'
@@ -24,6 +25,7 @@ const navItems = [
   { path: '/engines', label: 'Engines' },
   { path: '/performance', label: 'Performance' },
   { path: '/research', label: 'Research' },
+  { path: '/scanner', label: 'Scanner' },
   { path: '/positions', label: 'Positions' },
   { path: '/trades', label: 'Trades' },
   { path: '/strategies', label: 'Strategies' },
@@ -119,6 +121,7 @@ function App() {
             <Route path="/engines/:name" element={<EngineDetail />} />
             <Route path="/performance" element={<Performance />} />
             <Route path="/research" element={<Research />} />
+            <Route path="/scanner" element={<Scanner />} />
             <Route path="/positions" element={<Positions />} />
             <Route path="/trades" element={<Trades />} />
             <Route path="/strategies" element={<Strategies />} />

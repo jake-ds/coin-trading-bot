@@ -100,6 +100,7 @@ class Settings(BaseSettings):
             "grid_trading": 0.25,
             "stat_arb": 0.20,
             "cross_exchange_arb": 0.15,
+            "token_scanner": 0.0,
         }
     )
 
@@ -153,6 +154,19 @@ class Settings(BaseSettings):
     stat_arb_exit_zscore: float = Field(default=0.5, ge=0)
     stat_arb_stop_zscore: float = Field(default=4.0, gt=0)
     stat_arb_min_correlation: float = Field(default=0.7, ge=0, le=1.0)
+
+    # ── Token scanner ──
+    scanner_enabled: bool = True
+    scanner_interval_seconds: float = Field(default=300.0, gt=0)
+    scanner_min_volume_usdt: float = Field(default=100_000.0, ge=0)
+    scanner_top_n: int = Field(default=20, ge=1)
+    scanner_enabled_scans: list[str] = Field(
+        default_factory=lambda: ["funding_rate", "volatility"]
+    )
+    scanner_ttl_funding_hours: float = Field(default=8.0, gt=0)
+    scanner_ttl_volatility_hours: float = Field(default=1.0, gt=0)
+    scanner_ttl_spread_minutes: float = Field(default=5.0, gt=0)
+    scanner_ttl_correlation_hours: float = Field(default=24.0, gt=0)
 
     # ── Auto-tuner & rebalance ──
     tuner_enabled: bool = True
@@ -760,6 +774,61 @@ SETTINGS_METADATA: dict[str, dict[str, Any]] = {
         "type": "int",
         "requires_restart": False,
     },
+    # Token scanner
+    "scanner_enabled": {
+        "section": "Scanner",
+        "description": "Enable token scanner for dynamic opportunity discovery",
+        "type": "bool",
+        "requires_restart": True,
+    },
+    "scanner_interval_seconds": {
+        "section": "Scanner",
+        "description": "Seconds between scanner cycles",
+        "type": "float",
+        "requires_restart": False,
+    },
+    "scanner_min_volume_usdt": {
+        "section": "Scanner",
+        "description": "Minimum 24h USDT volume to consider a symbol",
+        "type": "float",
+        "requires_restart": False,
+    },
+    "scanner_top_n": {
+        "section": "Scanner",
+        "description": "Maximum opportunities per category",
+        "type": "int",
+        "requires_restart": False,
+    },
+    "scanner_enabled_scans": {
+        "section": "Scanner",
+        "description": "Enabled scan types (funding_rate, volatility, spread, corr)",
+        "type": "list",
+        "requires_restart": False,
+    },
+    "scanner_ttl_funding_hours": {
+        "section": "Scanner",
+        "description": "TTL for funding rate opportunities (hours)",
+        "type": "float",
+        "requires_restart": False,
+    },
+    "scanner_ttl_volatility_hours": {
+        "section": "Scanner",
+        "description": "TTL for volatility opportunities (hours)",
+        "type": "float",
+        "requires_restart": False,
+    },
+    "scanner_ttl_spread_minutes": {
+        "section": "Scanner",
+        "description": "TTL for spread opportunities (minutes)",
+        "type": "float",
+        "requires_restart": False,
+    },
+    "scanner_ttl_correlation_hours": {
+        "section": "Scanner",
+        "description": "TTL for correlation opportunities (hours)",
+        "type": "float",
+        "requires_restart": False,
+    },
 }
 
 
@@ -803,6 +872,16 @@ ENGINE_DESCRIPTIONS: dict[str, dict[str, str]] = {
             "평균 회귀를 이용한 롱/숏 페어트레이딩을 수행합니다."
         ),
         "key_params": "entry_zscore, exit_zscore, lookback, min_correlation",
+    },
+    "token_scanner": {
+        "role_ko": "토큰 스캐너",
+        "role_en": "Dynamic opportunity scanner",
+        "description_ko": (
+            "연결된 거래소의 모든 심볼을 배치 API로 스캔하여 "
+            "펀딩비, 변동성, 스프레드, 상관관계 기회를 발견하고 "
+            "다른 엔진에 동적으로 전달합니다."
+        ),
+        "key_params": "interval_seconds, min_volume_usdt, top_n, enabled_scans",
     },
 }
 

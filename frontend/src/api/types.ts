@@ -333,3 +333,27 @@ export interface PerformanceSummary {
   }
   window_hours: number
 }
+
+// Scanner / Opportunity types
+export type OpportunityTypeName = 'funding_rate' | 'volatility' | 'cross_exchange_spread' | 'correlation'
+
+export interface ScannerOpportunity {
+  symbol: string
+  type: OpportunityTypeName
+  score: number
+  metrics: Record<string, unknown>
+  discovered_at: string
+  expires_at: string
+  source_exchange: string
+}
+
+export interface ScannerSummaryItem {
+  count: number
+  top_score: number
+  symbols: string[]
+}
+
+export interface ScannerResponse {
+  summary: Record<OpportunityTypeName, ScannerSummaryItem>
+  opportunities: Record<OpportunityTypeName, ScannerOpportunity[]>
+}

@@ -779,6 +779,7 @@ async def list_engines():
         "grid_trading": "grid_symbols",
         "cross_exchange_arb": "cross_arb_symbols",
         "stat_arb": "stat_arb_pairs",
+        "token_scanner": None,  # scanner scans all symbols
     }
     for name, info in status.items():
         desc = ENGINE_DESCRIPTIONS.get(name, {})
@@ -1032,6 +1033,71 @@ async def list_reports():
 
 
 app.include_router(research_router)
+
+
+# ---------------------------------------------------------------------------
+# Scanner / opportunity discovery endpoints
+# ---------------------------------------------------------------------------
+
+scanner_router = APIRouter(
+    prefix="/api/scanner",
+    dependencies=[Depends(require_auth_strict)],
+)
+
+
+@scanner_router.get("/opportunities")
+async def scanner_opportunities():
+    """Get all discovered opportunities with summary."""
+    if _engine_manager is None:
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "Engine mode not enabled"},
+        )
+    registry = _engine_manager.opportunity_registry
+    if registry is None:
+        return {"summary": {}, "opportunities": {}}
+    return {
+        "summary": registry.get_summary(),
+        "opportunities": registry.get_all_opportunities(),
+    }
+
+
+@scanner_router.get("/opportunities/{opp_type}")
+async def scanner_opportunities_by_type(
+    opp_type: str,
+    n: int = Query(20, ge=1, le=100, description="Max results"),
+    min_score: float = Query(0.0, ge=0, le=100, description="Min score"),
+):
+    """Get opportunities of a specific type."""
+    if _engine_manager is None:
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "Engine mode not enabled"},
+        )
+    registry = _engine_manager.opportunity_registry
+    if registry is None:
+        return {"type": opp_type, "opportunities": []}
+
+    from bot.engines.opportunity_registry import OpportunityType
+
+    try:
+        otype = OpportunityType(opp_type)
+    except ValueError:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "detail": f"Unknown opportunity type: {opp_type}. "
+                f"Valid: {[t.value for t in OpportunityType]}"
+            },
+        )
+    items = registry.get_top(otype, n=n, min_score=min_score)
+    return {
+        "type": opp_type,
+        "opportunities": [o.to_dict() for o in items],
+    }
+
+
+app.include_router(scanner_router)
 
 
 # ---------------------------------------------------------------------------

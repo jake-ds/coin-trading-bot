@@ -15,6 +15,7 @@ import structlog
 
 from bot.engines.base import BaseEngine, DecisionStep, EngineCycleResult
 from bot.engines.cost_model import CostModel
+from bot.engines.opportunity_registry import OpportunityRegistry, OpportunityType
 
 if TYPE_CHECKING:
     from bot.config import Settings
@@ -66,6 +67,7 @@ class GridTradingEngine(BaseEngine):
         self._symbols = list(s.grid_symbols) if s else ["BTC/USDT", "ETH/USDT"]
 
         self._cost_model = CostModel()
+        self._registry: OpportunityRegistry | None = None
 
         # Grid state per symbol: list of GridLevel
         self._grids: dict[str, list[GridLevel]] = {}
@@ -80,6 +82,10 @@ class GridTradingEngine(BaseEngine):
     def description(self) -> str:
         return "Automated grid trading with limit order grid"
 
+    def set_registry(self, registry: OpportunityRegistry) -> None:
+        """Attach a shared OpportunityRegistry for dynamic symbol discovery."""
+        self._registry = registry
+
     @property
     def grids(self) -> dict[str, list[GridLevel]]:
         return dict(self._grids)
@@ -92,7 +98,17 @@ class GridTradingEngine(BaseEngine):
         decisions: list[DecisionStep] = []
         pnl_update = 0.0
 
-        for symbol in self._symbols:
+        # Build symbol list: static config + dynamic from registry
+        symbols = list(self._symbols)
+        if self._registry:
+            discovered = self._registry.get_symbols(
+                OpportunityType.VOLATILITY, n=10, min_score=20.0,
+            )
+            for sym in discovered:
+                if sym not in symbols:
+                    symbols.append(sym)
+
+        for symbol in symbols:
             price = await self._get_current_price(symbol)
             if price is None or price <= 0:
                 decisions.append(DecisionStep(

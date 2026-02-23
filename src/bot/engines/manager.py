@@ -345,6 +345,18 @@ class EngineManager:
         return params
 
     # ------------------------------------------------------------------
+    # Opportunity registry
+    # ------------------------------------------------------------------
+
+    @property
+    def opportunity_registry(self):
+        """Return the OpportunityRegistry from the scanner engine, if any."""
+        scanner = self._engines.get("token_scanner")
+        if scanner and hasattr(scanner, "registry"):
+            return scanner.registry
+        return None
+
+    # ------------------------------------------------------------------
     # Status
     # ------------------------------------------------------------------
 

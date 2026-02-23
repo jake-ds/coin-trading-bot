@@ -540,6 +540,30 @@ class TradingBot:
         except ImportError:
             logger.debug("stat_arb_engine_not_available")
 
+        # Token scanner — dynamic opportunity discovery
+        from bot.engines.opportunity_registry import OpportunityRegistry
+        from bot.engines.scanner import TokenScannerEngine
+
+        registry = OpportunityRegistry()
+
+        if self._settings.scanner_enabled:
+            try:
+                scanner = TokenScannerEngine(
+                    portfolio_manager=self._portfolio_mgr,
+                    exchanges=futures_exchanges,
+                    paper_mode=is_paper,
+                    settings=self._settings,
+                    registry=registry,
+                )
+                self._engine_manager.register(scanner)
+            except Exception:
+                logger.debug("token_scanner_engine_not_available", exc_info=True)
+
+        # Wire registry to each trading engine
+        for engine in self._engine_manager.engines.values():
+            if hasattr(engine, "set_registry") and engine.name != "token_scanner":
+                engine.set_registry(registry)
+
         # Register cycle-complete callback for WebSocket broadcast
         async def _broadcast_engine_cycle(result):
             try:

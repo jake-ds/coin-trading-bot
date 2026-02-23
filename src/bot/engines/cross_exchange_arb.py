@@ -17,6 +17,7 @@ import structlog
 
 from bot.engines.base import BaseEngine, DecisionStep, EngineCycleResult
 from bot.engines.cost_model import CostModel
+from bot.engines.opportunity_registry import OpportunityRegistry, OpportunityType
 
 if TYPE_CHECKING:
     from bot.config import Settings
@@ -54,6 +55,7 @@ class CrossExchangeArbEngine(BaseEngine):
         )
 
         self._cost_model = CostModel()
+        self._registry: OpportunityRegistry | None = None
 
         # Inventory tracking per exchange per symbol
         self._inventory: dict[str, dict[str, float]] = {}
@@ -66,6 +68,10 @@ class CrossExchangeArbEngine(BaseEngine):
     @property
     def description(self) -> str:
         return "Cross-exchange spot arbitrage (buy cheap, sell expensive)"
+
+    def set_registry(self, registry: OpportunityRegistry) -> None:
+        """Attach a shared OpportunityRegistry for dynamic symbol discovery."""
+        self._registry = registry
 
     async def _run_cycle(self) -> EngineCycleResult:
         cycle_start = datetime.now(timezone.utc)
@@ -91,7 +97,17 @@ class CrossExchangeArbEngine(BaseEngine):
                 decisions=decisions,
             )
 
-        for symbol in self._symbols:
+        # Build symbol list: static config + dynamic from registry
+        symbols = list(self._symbols)
+        if self._registry:
+            discovered = self._registry.get_symbols(
+                OpportunityType.CROSS_EXCHANGE_SPREAD, n=10, min_score=20.0,
+            )
+            for sym in discovered:
+                if sym not in symbols:
+                    symbols.append(sym)
+
+        for symbol in symbols:
             spread_info = await self._check_spread(symbol)
             if spread_info is None:
                 decisions.append(DecisionStep(

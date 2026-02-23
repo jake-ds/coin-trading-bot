@@ -19,6 +19,7 @@ import structlog
 
 from bot.engines.base import BaseEngine, DecisionStep, EngineCycleResult
 from bot.engines.cost_model import CostModel
+from bot.engines.opportunity_registry import OpportunityRegistry, OpportunityType
 
 if TYPE_CHECKING:
     from bot.config import Settings
@@ -57,6 +58,11 @@ class FundingRateArbEngine(BaseEngine):
         self._symbols = list(s.funding_arb_symbols) if s else ["BTC/USDT", "ETH/USDT"]
         self._funding_monitor = None
         self._cost_model = CostModel()
+        self._registry: OpportunityRegistry | None = None
+
+    def set_registry(self, registry: OpportunityRegistry) -> None:
+        """Attach a shared OpportunityRegistry for dynamic symbol discovery."""
+        self._registry = registry
 
     # ------------------------------------------------------------------
     # ABC implementation
@@ -78,7 +84,17 @@ class FundingRateArbEngine(BaseEngine):
         decisions: list[DecisionStep] = []
         pnl_update = 0.0
 
-        for symbol in self._symbols:
+        # Build symbol list: static config + dynamic from registry
+        symbols = list(self._symbols)
+        if self._registry:
+            discovered = self._registry.get_symbols(
+                OpportunityType.FUNDING_RATE, n=10, min_score=20.0,
+            )
+            for sym in discovered:
+                if sym not in symbols:
+                    symbols.append(sym)
+
+        for symbol in symbols:
             rate_info = await self._fetch_funding_rate(symbol)
             if rate_info is None:
                 decisions.append(DecisionStep(
@@ -186,7 +202,8 @@ class FundingRateArbEngine(BaseEngine):
             signals=signals,
             pnl_update=pnl_update,
             metadata={
-                "symbols_monitored": len(self._symbols),
+                "symbols_monitored": len(symbols),
+                "symbols_from_scanner": len(symbols) - len(self._symbols),
                 "open_positions": len(self._positions),
             },
             decisions=decisions,

@@ -17,6 +17,7 @@ import structlog
 
 from bot.engines.base import BaseEngine, DecisionStep, EngineCycleResult
 from bot.engines.cost_model import CostModel
+from bot.engines.opportunity_registry import OpportunityRegistry
 
 if TYPE_CHECKING:
     from bot.config import Settings
@@ -54,6 +55,7 @@ class StatisticalArbEngine(BaseEngine):
         self._min_correlation = s.stat_arb_min_correlation if s else 0.7
 
         self._cost_model = CostModel()
+        self._registry: OpportunityRegistry | None = None
 
         # Price history cache: symbol -> list of close prices
         self._price_cache: dict[str, list[float]] = {}
@@ -66,6 +68,10 @@ class StatisticalArbEngine(BaseEngine):
     def description(self) -> str:
         return "Statistical arbitrage (pairs trading with z-score mean reversion)"
 
+    def set_registry(self, registry: OpportunityRegistry) -> None:
+        """Attach a shared OpportunityRegistry for dynamic symbol discovery."""
+        self._registry = registry
+
     async def _run_cycle(self) -> EngineCycleResult:
         cycle_start = datetime.now(timezone.utc)
         actions: list[dict] = []
@@ -76,7 +82,16 @@ class StatisticalArbEngine(BaseEngine):
         # Update price caches
         await self._update_price_cache()
 
-        for pair in self._pairs:
+        # Build pairs list: static config + dynamic from registry
+        pairs = [list(p) for p in self._pairs]
+        if self._registry:
+            discovered_pairs = self._registry.get_pairs(n=10, min_score=70.0)
+            existing = {tuple(p) for p in pairs}
+            for dp in discovered_pairs:
+                if tuple(dp) not in existing and tuple(reversed(dp)) not in existing:
+                    pairs.append(dp)
+
+        for pair in pairs:
             if len(pair) != 2:
                 continue
             sym_a, sym_b = pair[0], pair[1]
@@ -218,7 +233,10 @@ class StatisticalArbEngine(BaseEngine):
             positions=list(self._positions.values()),
             signals=signals,
             pnl_update=pnl_update,
-            metadata={"pairs_monitored": len(self._pairs)},
+            metadata={
+                "pairs_monitored": len(pairs),
+                "pairs_from_scanner": len(pairs) - len(self._pairs),
+            },
             decisions=decisions,
         )
 
