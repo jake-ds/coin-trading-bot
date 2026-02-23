@@ -182,6 +182,11 @@ class Settings(BaseSettings):
     metrics_snapshot_interval_minutes: float = Field(default=5.0, gt=0)
     metrics_retention_days: int = Field(default=90, ge=1)
 
+    # ── Market regime ──
+    regime_detection_enabled: bool = True
+    regime_crisis_threshold: float = Field(default=2.5, gt=0)
+    regime_detection_interval_seconds: float = Field(default=300.0, gt=0)
+
     # ── Data backfill ──
     data_backfill_enabled: bool = True
     data_backfill_interval_hours: float = Field(default=6.0, gt=0)
@@ -926,6 +931,25 @@ SETTINGS_METADATA: dict[str, dict[str, Any]] = {
         "description": "Days to retain persisted metrics before cleanup",
         "type": "int",
         "requires_restart": False,
+    },
+    # Market Regime
+    "regime_detection_enabled": {
+        "section": "Market Regime",
+        "description": "Enable real-time market regime detection",
+        "type": "bool",
+        "requires_restart": True,
+    },
+    "regime_crisis_threshold": {
+        "section": "Market Regime",
+        "description": "Volatility ratio threshold for CRISIS regime",
+        "type": "float",
+        "requires_restart": False,
+    },
+    "regime_detection_interval_seconds": {
+        "section": "Market Regime",
+        "description": "Seconds between regime detection checks",
+        "type": "float",
+        "requires_restart": True,
     },
     # Data Collection (backfill)
     "data_backfill_enabled": {

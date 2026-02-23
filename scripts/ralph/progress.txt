@@ -374,4 +374,72 @@ Started: 2026년 2월 23일 월요일 17시 18분 03초 KST
   - RadialBarChart semicircle: `startAngle=180 endAngle=0` with `cx="50%" cy="80%"` for bottom alignment
   - AreaChart reversed Y-axis: `reversed` prop on YAxis for drawdown (higher=worse)
   - `datetime.now(timezone.utc)` for timestamp generation in drawdown history
+
+### MetricsPersistence Patterns
+- `MetricsPersistence(data_store, tracker)` — takes DataStore and EngineTracker instances
+- `save_trade(engine_name, trade)` — converts TradeRecord to EngineTradeRecord ORM model, saves to DB
+- `save_metrics_snapshot()` — iterates `tracker.get_metrics(engine_name)` for all known engines, saves EngineMetricSnapshot
+- `load_trades(since_hours=24)` — queries EngineTradeRecord, converts back to TradeRecord dict grouped by engine
+- `restore_tracker()` — loads trades and calls `tracker.bulk_load_trades()` for each engine
+- `_snapshot_loop(interval_minutes=5)` — background loop with asyncio.sleep, saves periodic snapshots
+- `cleanup(max_days=90)` — deletes old EngineTradeRecord + EngineMetricSnapshot records
+- `EngineTracker.bulk_load_trades(engine_name, trades)` — appends trades + rebuilds _pnl_history with cumulative PnL
+- DataStore attribute on TradingBot is `self._store` (NOT `self._data_store`) — important for wiring
+- `data_store._session_factory()` returns async context manager for DB sessions
+- Config: `metrics_persistence_enabled`, `metrics_snapshot_interval_minutes`, `metrics_retention_days` (section: Metrics)
 ---
+
+## 2026-02-23 - V6-012
+- **Implemented**: Metrics Persistence Layer — EngineTracker trades/snapshots to SQLite
+- **Files created**:
+  - `src/bot/engines/metrics_persistence.py` — MetricsPersistence class with save_trade, save_metrics_snapshot, load_trades, restore_tracker, _snapshot_loop, cleanup
+  - `tests/engines/test_metrics_persistence.py` — 23 tests: TestSaveTrade (success, error), TestSaveMetricsSnapshot (all_engines, empty, error), TestLoadTrades (success, empty, error), TestRestoreTracker (populates, empty_db), TestCleanup (executes, error), TestBulkLoadTrades (populates, pnl_history, appends, empty), TestSnapshotLoop (calls_save), TestConfig (defaults, metadata), TestEngineManagerIntegration (set/default), TestDBModels (trade_record, metric_snapshot)
+- **Files modified**:
+  - `src/bot/data/models.py` — Added EngineTradeRecord (engine_trades table) and EngineMetricSnapshot (engine_metric_snapshots table) SQLAlchemy models with indexes
+  - `src/bot/engines/tracker.py` — Added `bulk_load_trades(engine_name, trades)` method to EngineTracker
+  - `src/bot/engines/manager.py` — Added `_metrics_persistence`, `_snapshot_task`, `set_metrics_persistence()`. Updated `_record_cycle_to_tracker()` to call save_trade. Updated `start_background_loops()` to start snapshot loop
+  - `src/bot/config.py` — Added `metrics_persistence_enabled: bool = True`, `metrics_snapshot_interval_minutes: float = 5.0`, `metrics_retention_days: int = 90` + SETTINGS_METADATA entries
+  - `src/bot/main.py` — Added MetricsPersistence wiring in `_init_engine_mode()` using `self._store`
+  - `scripts/ralph/prd.json` — Marked V6-012 passes: true
+- **Tests**: 23 new, 2551 total passing (+ 3 pre-existing failures)
+- **Learnings for future iterations:**
+  - TradingBot's DataStore is `self._store` (NOT `self._data_store`) — caused 80+ test failures before fix
+  - `data_store._session_factory()` returns context manager that supports `__aenter__`/`__aexit__`
+  - `tracker._trades` is dict[str, list[TradeRecord]], `tracker._pnl_history` is dict[str, list[dict]]
+  - `bulk_load_trades` calculates cumulative PnL from existing history tail + new trades
+  - `asyncio.ensure_future()` for fire-and-forget save_trade calls in EngineManager
+  - `_snapshot_loop` test uses CancelledError pattern (same as VolatilityService _fit_loop)
+
+### Historical Analysis API Patterns
+- `metrics_history_router` on `/api/metrics` prefix with `require_auth_strict`
+- `GET /api/metrics/history?engine=X&days=N` — returns {timestamps, sharpe, win_rate, total_pnl, max_drawdown} arrays from EngineMetricSnapshot
+- `GET /api/metrics/compare?engines=a,b&metric=sharpe&days=N` — per-engine time-series of a single metric
+- `GET /api/metrics/daily-summary?days=N` — daily aggregated PnL/trades from EngineTradeRecord (fallback to in-memory tracker)
+- `_aggregate_daily(trades)` — shared helper for both DB and in-memory paths
+- `_daily_summary_from_tracker(days)` — fallback when MetricsPersistence unavailable
+- `valid_metrics` dict maps API param names to DB field names (sharpe→sharpe_ratio, etc.)
+- DataStore new methods: `get_engine_metric_snapshots()`, `get_engine_trades()` with engine/date/limit filters
+- Performance.tsx: two tabs (Current/Historical), date range buttons (7D/30D/90D), engine selector for trend
+- LineChart for Sharpe/Win Rate trend, BarChart with Cell per-bar coloring for daily PnL
+- Engine comparison LineChart with `connectNulls` for sparse time-series alignment
+- `Promise.allSettled()` for parallel fetch of daily-summary, history, compare APIs
+---
+
+## 2026-02-23 - V6-013
+- **Implemented**: Historical Analysis API + Frontend — long-term performance analysis
+- **Files created**:
+  - `tests/dashboard/test_metrics_history_api.py` — 21 tests: TestMetricsHistory (no_manager, no_persistence, with_snapshots, response_values, empty), TestMetricsCompare (no_manager, no_persistence, multiple_engines, metric_field_mapping, invalid_metric_defaults), TestDailySummary (no_manager, with_db_trades, daily_aggregation, sorted_chronologically, empty_trades), TestDailySummaryFallback (no_persistence), TestAggregateDaily (empty, multiple_days, no_exit_time), TestDataStoreQueries (snapshots_import, trades_import)
+- **Files modified**:
+  - `src/bot/data/store.py` — Added `get_engine_metric_snapshots()` and `get_engine_trades()` query methods with engine/date/limit filters. Imported EngineMetricSnapshot, EngineTradeRecord models
+  - `src/bot/dashboard/app.py` — Added metrics_history_router with GET /api/metrics/history, GET /api/metrics/compare, GET /api/metrics/daily-summary. Added _aggregate_daily() and _daily_summary_from_tracker() helpers
+  - `frontend/src/pages/Performance.tsx` — Added Historical tab with date range selector (7D/30D/90D), daily PnL bar chart (green/red per bar), metrics trend LineChart (Sharpe + Win Rate), engine comparison LineChart with metric selector
+  - `frontend/src/api/types.ts` — Added DailySummaryEntry, MetricsHistoryResponse, MetricsCompareResponse interfaces
+  - `scripts/ralph/prd.json` — Marked V6-013 passes: true
+- **Tests**: 21 new, 2572 total passing (+ 3 pre-existing failures)
+- **Learnings for future iterations:**
+  - `getattr(_engine_manager, "_metrics_persistence", None)` for safe access to persistence layer
+  - Daily aggregation: slice exit_time[:10] for YYYY-MM-DD grouping key
+  - Fallback pattern: check DB first, fall back to in-memory tracker if no persistence or empty
+  - LineChart `connectNulls` prop handles sparse time-series (not all engines have same timestamps)
+  - `Promise.allSettled()` required for parallel fetch with graceful degradation
+  - Compare endpoint: `valid_metrics` dict maps user-friendly names to DB column names

@@ -1112,6 +1112,45 @@ app.include_router(risk_router)
 
 
 # ---------------------------------------------------------------------------
+# Market regime endpoints (V6-014)
+# ---------------------------------------------------------------------------
+
+market_router = APIRouter(
+    prefix="/api/market",
+    dependencies=[Depends(require_auth_strict)],
+)
+
+
+@market_router.get("/regime")
+async def get_market_regime():
+    """Return current market regime, duration, and transition history."""
+    if _engine_manager is None:
+        return {
+            "current": "NORMAL",
+            "since": None,
+            "duration_minutes": 0,
+            "history": [],
+        }
+    detector = getattr(_engine_manager, "_regime_detector", None)
+    if detector is None:
+        return {
+            "current": "NORMAL",
+            "since": None,
+            "duration_minutes": 0,
+            "history": [],
+        }
+    return {
+        "current": detector.get_current_regime().value,
+        "since": detector._regime_since.isoformat(),
+        "duration_minutes": round(detector.get_regime_duration(), 1),
+        "history": detector.get_regime_history()[-20:],
+    }
+
+
+app.include_router(market_router)
+
+
+# ---------------------------------------------------------------------------
 # Trade detail / explorer endpoints
 # ---------------------------------------------------------------------------
 
@@ -1717,12 +1756,26 @@ def _build_full_state_payload() -> dict:
         "portfolio": _bot_state["portfolio"],
         "metrics": _bot_state["metrics"],
         "regime": _bot_state["regime"],
+        "market_regime": _get_market_regime_info(),
         "trades": _bot_state["trades"][-50:],
         "strategy_stats": _bot_state["strategy_stats"],
         "open_positions": _bot_state["open_positions"],
         "cycle_log_latest": cycle_log[-1] if cycle_log else None,
         "emergency": _bot_state.get("emergency", {"active": False}),
         "engine_performance": _build_engine_performance_summary(),
+    }
+
+
+def _get_market_regime_info() -> dict | None:
+    """Build market regime info for WebSocket payload."""
+    if _engine_manager is None:
+        return None
+    detector = getattr(_engine_manager, "_regime_detector", None)
+    if detector is None:
+        return None
+    return {
+        "current": detector.get_current_regime().value,
+        "duration_minutes": round(detector.get_regime_duration(), 1),
     }
 
 

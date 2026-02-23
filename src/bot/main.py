@@ -641,6 +641,20 @@ class TradingBot:
             )
             self._engine_manager.set_metrics_persistence(persistence)
 
+        # Wire MarketRegimeDetector (V6-014)
+        if getattr(self._settings, "regime_detection_enabled", True):
+            from bot.risk.regime_detector import MarketRegimeDetector
+
+            vol_svc = getattr(self, "_volatility_service", None)
+            crisis_thresh = getattr(
+                self._settings, "regime_crisis_threshold", 2.5,
+            )
+            detector = MarketRegimeDetector(
+                volatility_service=vol_svc,
+                crisis_threshold=crisis_thresh,
+            )
+            self._engine_manager.set_regime_detector(detector)
+
         logger.info(
             "engine_mode_initialized",
             engines=list(self._engine_manager.engines.keys()),

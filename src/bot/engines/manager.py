@@ -52,6 +52,8 @@ class EngineManager:
         self._correlation_controller = None
         self._metrics_persistence = None
         self._snapshot_task: asyncio.Task | None = None
+        self._regime_detector = None
+        self._regime_task: asyncio.Task | None = None
 
     def set_collector(self, collector) -> None:
         """Set the DataCollector for backfill background loop."""
@@ -68,6 +70,10 @@ class EngineManager:
     def set_metrics_persistence(self, persistence) -> None:
         """Set the MetricsPersistence for saving trades/metrics to DB."""
         self._metrics_persistence = persistence
+
+    def set_regime_detector(self, detector) -> None:
+        """Set the MarketRegimeDetector for real-time regime detection."""
+        self._regime_detector = detector
 
     # ------------------------------------------------------------------
     # Registration
@@ -258,6 +264,17 @@ class EngineManager:
             self._snapshot_task = asyncio.create_task(
                 self._metrics_persistence._snapshot_loop(interval),
                 name="metrics-snapshot-loop",
+            )
+        if (
+            self._regime_detector is not None
+            and getattr(s, "regime_detection_enabled", True)
+        ):
+            interval_s = getattr(
+                s, "regime_detection_interval_seconds", 300.0,
+            )
+            self._regime_task = asyncio.create_task(
+                self._regime_detector._detection_loop(interval_s),
+                name="regime-detection-loop",
             )
 
     async def _tuner_loop(self) -> None:
