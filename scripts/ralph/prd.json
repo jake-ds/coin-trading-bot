@@ -416,7 +416,7 @@
         "All existing tests pass, ruff check passes"
       ],
       "priority": 19,
-      "passes": false,
+      "passes": true,
       "notes": "이 스토리가 V6의 마지막. 전체 통합 검증만 수행."
     }
   ]
