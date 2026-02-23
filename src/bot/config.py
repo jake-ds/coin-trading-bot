@@ -1,5 +1,6 @@
 """Configuration system using pydantic-settings with .env and optional YAML override."""
 
+import os
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -251,6 +252,7 @@ class Settings(BaseSettings):
 
     # Logging
     log_level: str = "INFO"
+    trading_env: str = "development"  # production | staging | development
 
     # Dashboard
     dashboard_port: int = Field(default=8000, ge=1, le=65535)
@@ -276,6 +278,14 @@ class Settings(BaseSettings):
             return v.lower()
         return v
 
+    @field_validator("trading_env", mode="before")
+    @classmethod
+    def validate_trading_env(cls, v: Any) -> str:
+        valid = {"production", "staging", "development"}
+        if isinstance(v, str) and v.lower() in valid:
+            return v.lower()
+        return "development"
+
     @field_validator("log_level")
     @classmethod
     def validate_log_level(cls, v: str) -> str:
@@ -295,6 +305,18 @@ class Settings(BaseSettings):
                 for key, value in yaml_config.items():
                     if hasattr(self, key):
                         object.__setattr__(self, key, value)
+
+        # Apply TRADING_ENV-based log_level when TRADING_ENV is set but LOG_LEVEL is not
+        if os.environ.get("TRADING_ENV") and not os.environ.get("LOG_LEVEL"):
+            env_log_levels = {
+                "production": "WARNING",
+                "staging": "INFO",
+                "development": "DEBUG",
+            }
+            env_level = env_log_levels.get(self.trading_env)
+            if env_level:
+                object.__setattr__(self, "log_level", env_level)
+
         return self
 
 
@@ -647,6 +669,14 @@ SETTINGS_METADATA: dict[str, dict[str, Any]] = {
         "section": "Notifications",
         "description": "Telegram chat ID",
         "type": "secret",
+        "requires_restart": True,
+    },
+    # Environment
+    "trading_env": {
+        "section": "Dashboard",
+        "description": "Deployment environment (production, staging, development)",
+        "type": "select",
+        "options": ["production", "staging", "development"],
         "requires_restart": True,
     },
     # Logging (safe)

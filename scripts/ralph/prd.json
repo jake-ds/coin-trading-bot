@@ -385,7 +385,7 @@
         "All existing tests pass, ruff check passes"
       ],
       "priority": 17,
-      "passes": false,
+      "passes": true,
       "notes": "Docker 없어도 파일이 정확하면 충분. docker build는 실행하지 않아도 됨."
     },
     {

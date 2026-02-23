@@ -505,3 +505,32 @@ Started: 2026년 2월 23일 월요일 17시 18분 03초 KST
   - `engine.status.value` comparison works for mock and real EngineStatus enum
   - WebSocket tests (`test_v4_014_integration`, `test_websocket`) hang on event loop — pre-existing, exclude with `--ignore` for faster runs
   - `asyncio.CancelledError` pattern used in loop tests (same as other _loop tests)
+
+### Docker / Config Patterns
+- Dockerfile uses multi-stage build: node:20-alpine (frontend) → python:3.11-slim (runtime)
+- Non-root user `botuser` created with `groupadd`/`useradd`; `chown -R` for /app
+- `curl` installed in runtime stage for Docker healthcheck
+- docker-compose: `stop_grace_period: 35s` for graceful shutdown, bind mount `./data:/app/data`
+- `TRADING_ENV` env var: production→WARNING, staging→INFO, development→DEBUG (log_level default)
+- TRADING_ENV log_level override only applies when `TRADING_ENV` is set but `LOG_LEVEL` is not
+- `os.environ.get("TRADING_ENV")` check in model_validator avoids breaking tests that don't set env vars
+- requirements.txt must match pyproject.toml deps (missing statsmodels, scipy, arch was a gap)
+---
+
+## 2026-02-24 - V6-017
+- **Implemented**: Dockerfile + docker-compose + .dockerignore + TRADING_ENV logging
+- **Files modified**:
+  - `Dockerfile` — Multi-stage build: node:20-alpine frontend builder + python:3.11-slim runtime. Non-root user (botuser), curl for healthcheck, TRADING_ENV env var, healthcheck on /api/health
+  - `docker-compose.yml` — Bind mount ./data:/app/data (was named volume), stop_grace_period: 35s, curl healthcheck on /api/health, TRADING_ENV environment variable
+  - `.dockerignore` — Changed `data/` glob to `data/*.db` + `data/*.sqlite` for bind mount compatibility
+  - `requirements.txt` — Added missing statsmodels>=0.14.0, scipy>=1.11.0, arch>=6.0.0, numpy>=1.24.0 (synced with pyproject.toml)
+  - `pyproject.toml` — Added numpy>=1.24.0 to explicit dependencies
+  - `src/bot/config.py` — Added `trading_env: str = "development"` field, `validate_trading_env()` field_validator, TRADING_ENV-based log_level override in `apply_yaml_overrides()` model_validator, `trading_env` in SETTINGS_METADATA
+  - `scripts/ralph/prd.json` — Marked V6-017 passes: true
+- **Tests**: 0 new, 2580 total passing (+ 3 pre-existing failures)
+- **Learnings for future iterations:**
+  - Model validator that reads os.environ must guard with explicit env check to avoid breaking tests
+  - `trading_env` default "development" + unconditional log_level override = all tests see DEBUG log level → breaks test_defaults
+  - Fix: only override log_level when `os.environ.get("TRADING_ENV")` is truthy
+  - .dockerignore `data/` blocks bind mounts; use `data/*.db` pattern instead
+  - requirements.txt was out of sync with pyproject.toml (quant deps missing)
