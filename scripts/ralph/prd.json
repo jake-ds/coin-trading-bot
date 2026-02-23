@@ -187,7 +187,7 @@
         "All existing tests pass, ruff check passes"
       ],
       "priority": 8,
-      "passes": false,
+      "passes": true,
       "notes": "cross_engine_correlation은 포지션 심볼 기반 계산 (가격 상관관계 아님). 같은 BTC/USDT를 3개 엔진이 가지면 concentration=high. check_symbol_concentration은 비교적 lightweight하므로 매 사이클 호출 가능."
     },
     {

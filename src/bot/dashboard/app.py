@@ -1086,6 +1086,17 @@ async def get_risk_portfolio():
     return metrics
 
 
+@risk_router.get("/correlation")
+async def get_risk_correlation():
+    """Get cross-engine correlation and symbol concentration report."""
+    if _engine_manager is None:
+        return {"error": "not_available"}
+    controller = getattr(_engine_manager, "_correlation_controller", None)
+    if controller is None:
+        return {"error": "not_available"}
+    return controller.get_concentration_report()
+
+
 app.include_router(risk_router)
 
 

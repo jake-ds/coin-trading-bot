@@ -49,6 +49,7 @@ class EngineManager:
         self._regression_task: asyncio.Task | None = None
         self._collector = None
         self._backfill_task: asyncio.Task | None = None
+        self._correlation_controller = None
 
     def set_collector(self, collector) -> None:
         """Set the DataCollector for backfill background loop."""
@@ -57,6 +58,10 @@ class EngineManager:
     def set_deployer(self, deployer: ResearchDeployer) -> None:
         """Set the ResearchDeployer for auto-deploying research findings."""
         self._deployer = deployer
+
+    def set_correlation_controller(self, controller) -> None:
+        """Set the CorrelationRiskController for cross-engine risk monitoring."""
+        self._correlation_controller = controller
 
     # ------------------------------------------------------------------
     # Registration
@@ -160,6 +165,10 @@ class EngineManager:
     ) -> None:
         """Record cycle and extract trade records from cycle result."""
         self.tracker.record_cycle(engine_name, result)
+
+        # Update correlation controller with latest positions
+        if self._correlation_controller is not None:
+            self._sync_correlation_positions()
 
         # Extract trades from actions_taken (PnL-bearing actions)
         if result.pnl_update != 0 and result.actions_taken:
@@ -286,6 +295,19 @@ class EngineManager:
                     continue
 
                 all_metrics = self.tracker.get_all_metrics(window_hours=24)
+
+                # Factor in concentration risk when rebalancing
+                if self._correlation_controller is not None:
+                    self._sync_correlation_positions()
+                    report = (
+                        self._correlation_controller.get_concentration_report()
+                    )
+                    if report.get("alerts"):
+                        logger.warning(
+                            "rebalance_concentration_alerts",
+                            alerts=report["alerts"],
+                        )
+
                 new_allocs = self._portfolio_manager.rebalance_allocations(
                     all_metrics
                 )
@@ -419,6 +441,28 @@ class EngineManager:
                 logger.exception("regression_check_loop_error")
 
             await asyncio.sleep(interval)
+
+    def _sync_correlation_positions(self) -> None:
+        """Gather positions from all engines and push to correlation controller."""
+        if self._correlation_controller is None:
+            return
+        engine_positions: dict[str, list[dict]] = {}
+        for name, engine in self._engines.items():
+            positions = []
+            for sym, pos in engine.positions.items():
+                notional = pos.get("notional", 0)
+                if notional == 0:
+                    # Estimate notional from quantity * entry_price
+                    qty = pos.get("quantity", 0)
+                    price = pos.get("entry_price", 0)
+                    notional = abs(qty * price)
+                positions.append({
+                    "symbol": sym,
+                    "side": pos.get("side", "long"),
+                    "notional": abs(notional),
+                })
+            engine_positions[name] = positions
+        self._correlation_controller.update_positions(engine_positions)
 
     def _get_engine_params(self, engine_name: str) -> dict:
         """Read current engine-specific params from settings."""

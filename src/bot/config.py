@@ -173,6 +173,10 @@ class Settings(BaseSettings):
     vol_scale_factor: float = Field(default=1.0, gt=0)
     max_position_scale: float = Field(default=2.0, gt=0)
 
+    # ── Cross-engine correlation risk ──
+    cross_engine_correlation_enabled: bool = True
+    max_symbol_concentration_pct: float = Field(default=40.0, ge=0, le=100)
+
     # ── Data backfill ──
     data_backfill_enabled: bool = True
     data_backfill_interval_hours: float = Field(default=6.0, gt=0)
@@ -884,6 +888,18 @@ SETTINGS_METADATA: dict[str, dict[str, Any]] = {
     "max_position_scale": {
         "section": "Risk Management",
         "description": "Maximum position scale multiplier (vol_multiplier upper bound)",
+        "type": "float",
+        "requires_restart": False,
+    },
+    "cross_engine_correlation_enabled": {
+        "section": "Risk Management",
+        "description": "Enable cross-engine symbol concentration monitoring",
+        "type": "bool",
+        "requires_restart": False,
+    },
+    "max_symbol_concentration_pct": {
+        "section": "Risk Management",
+        "description": "Maximum symbol concentration as % of total capital across all engines",
         "type": "float",
         "requires_restart": False,
     },

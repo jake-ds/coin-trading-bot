@@ -238,4 +238,42 @@ Started: 2026년 2월 23일 월요일 17시 18분 03초 KST
   - ATR is passed as absolute value, converted to fraction of price internally: `atr_pct = atr / price`
   - cross_exchange_arb's notional now uses `quantity * buy_price` (actual) instead of `_max_position_per_symbol` when dynamic sizer is active
   - stat_arb splits total `notional_value / 2` across pair legs
+
+### CorrelationRiskController Patterns
+- `CorrelationRiskController(portfolio_risk=None, max_cross_engine_correlation=0.85, max_symbol_concentration=0.4)`
+- `update_positions(engine_positions: dict[str, list[dict]])` — full engine→positions map refresh each cycle
+- `calculate_cross_engine_correlation()` — symbol-based overlap (not price correlation); returns overlap_pct, concentration_score per engine pair
+- `check_symbol_concentration(symbol)` — total notional across all engines vs portfolio value; returns (bool, reason)
+- `get_concentration_report()` — per_symbol breakdown, cross_engine_correlations, alerts
+- BaseEngine `_has_capacity(symbol=None)` — optional symbol param triggers correlation check if controller is set; no symbol → no check (backward compat)
+- EngineManager `_sync_correlation_positions()` — gathers positions from all engines, estimates notional from qty*price if not provided
+- Called in `_record_cycle_to_tracker()` after each cycle, and in `_rebalance_loop()` before rebalancing
+- Dashboard: `GET /api/risk/correlation` returns concentration report via `getattr(_engine_manager, "_correlation_controller")`
+- Config: `cross_engine_correlation_enabled: bool = True`, `max_symbol_concentration_pct: float = 40.0`
+
+---
+
+## 2026-02-23 - V6-008
+- **Implemented**: CorrelationRiskController — cross-engine symbol concentration monitoring and limiting
+- **Files created**:
+  - `src/bot/risk/correlation_controller.py` — CorrelationRiskController class with EnginePosition dataclass, update_positions, calculate_cross_engine_correlation, check_symbol_concentration, get_concentration_report
+  - `tests/risk/test_correlation_controller.py` — 40 tests: init (2), update_positions (3), cross_engine_correlation (7: no/single/no_overlap/full/partial/three_engines/empty), check_symbol_concentration (7: within/exceeds/exact/not_present/no_prm/zero_value/engines_in_reason), get_concentration_report (5: empty/structure/concentration_alert/cross_engine_alert/no_portfolio), BaseEngine integration (5: without_ctrl/allowed/blocked/no_symbol_skips/max_positions_precedence), EngineManager integration (4: set_ctrl/sync_positions/estimates_notional/no_ctrl), dashboard endpoint (3: no_manager/no_controller/with_controller), config (2), imports (2)
+- **Files modified**:
+  - `src/bot/engines/base.py` — Added `_correlation_controller: Any | None = None`, `set_correlation_controller()`, modified `_has_capacity(symbol=None)` with optional cross-engine check
+  - `src/bot/engines/manager.py` — Added `_correlation_controller`, `set_correlation_controller()`, `_sync_correlation_positions()`. Updated `_record_cycle_to_tracker()` to sync positions. Updated `_rebalance_loop()` to log concentration alerts
+  - `src/bot/engines/funding_arb.py` — Pass symbol to `_has_capacity(symbol)` in `_run_cycle()`
+  - `src/bot/engines/stat_arb.py` — Pass pair_key to `_has_capacity(pair_key)` in `_run_cycle()`
+  - `src/bot/dashboard/app.py` — Added `GET /api/risk/correlation` endpoint on risk_router
+  - `src/bot/config.py` — Added `cross_engine_correlation_enabled: bool = True`, `max_symbol_concentration_pct: float = 40.0` + SETTINGS_METADATA entries
+  - `src/bot/main.py` — Added CorrelationRiskController creation and wiring to EngineManager + engines in `_init_engine_mode()`
+  - `src/bot/risk/__init__.py` — Added CorrelationRiskController to exports
+  - `scripts/ralph/prd.json` — Marked V6-008 passes: true
+- **Tests**: 40 new, 2483 total passing (+ 3 pre-existing failures)
+- **Learnings for future iterations:**
+  - `_has_capacity(symbol=None)` default None ensures 100% backward compat — existing callers without args still work
+  - Position overlap is symbol-based (Jaccard index), not price-correlation — much cheaper to compute
+  - `_sync_correlation_positions()` estimates notional from qty * entry_price when "notional" key is absent
+  - `getattr(_engine_manager, "_correlation_controller", None)` pattern for dashboard access — avoids tight coupling
+  - Engine tests with MagicMock portfolio manager need `request_capital.return_value` and `get_max_allocation.return_value`
+  - pytest-asyncio is needed for async test methods in full suite (event loop issue with `asyncio.get_event_loop()`)
 ---

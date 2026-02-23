@@ -594,6 +594,26 @@ class TradingBot:
             )
             self._engine_manager.set_deployer(deployer)
 
+        # Wire CorrelationRiskController to engines (V6-008)
+        if self._settings.cross_engine_correlation_enabled:
+            from bot.risk.correlation_controller import (
+                CorrelationRiskController,
+            )
+
+            correlation_ctrl = CorrelationRiskController(
+                portfolio_risk=self._portfolio_risk,
+                max_symbol_concentration=(
+                    self._settings.max_symbol_concentration_pct / 100.0
+                ),
+            )
+            self._engine_manager.set_correlation_controller(correlation_ctrl)
+            for engine in self._engine_manager.engines.values():
+                if (
+                    hasattr(engine, "set_correlation_controller")
+                    and engine.name != "token_scanner"
+                ):
+                    engine.set_correlation_controller(correlation_ctrl)
+
         # Wire DynamicPositionSizer to each engine (V6-007)
         if self._settings.dynamic_sizing_enabled:
             from bot.risk.dynamic_sizer import DynamicPositionSizer

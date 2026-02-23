@@ -204,7 +204,7 @@ class StatisticalArbEngine(BaseEngine):
                 continue
 
             # Check for new entry
-            if self._has_capacity():
+            if self._has_capacity(pair_key):
                 entry = self._check_entry(
                     pair_key, sym_a, sym_b, zscore, a[-1], b[-1]
                 )

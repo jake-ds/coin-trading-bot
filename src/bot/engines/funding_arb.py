@@ -171,7 +171,7 @@ class FundingRateArbEngine(BaseEngine):
 
             # Check if we should open a new position
             if self._should_open(funding_rate, spread_pct):
-                if not self._has_capacity():
+                if not self._has_capacity(symbol):
                     rate_step.result = "SKIP - 기준 충족이나 포지션 한도 초과"
                     rate_step.category = "skip"
                     continue

@@ -110,6 +110,7 @@ class BaseEngine(ABC):
         self._error_message: str | None = None
         self._on_cycle_complete: Callable[[EngineCycleResult], Any] | None = None
         self._dynamic_sizer: Any | None = None  # DynamicPositionSizer (V6-007)
+        self._correlation_controller: Any | None = None  # CorrelationRiskController (V6-008)
 
     # ------------------------------------------------------------------
     # Abstract interface — subclasses must implement
@@ -182,6 +183,10 @@ class BaseEngine(ABC):
     def set_sizer(self, sizer: Any) -> None:
         """Attach a DynamicPositionSizer for volatility-based sizing."""
         self._dynamic_sizer = sizer
+
+    def set_correlation_controller(self, controller: Any) -> None:
+        """Attach a CorrelationRiskController for cross-engine checks."""
+        self._correlation_controller = controller
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -331,9 +336,21 @@ class BaseEngine(ABC):
         """Remove and return a tracked position."""
         return self._positions.pop(symbol, None)
 
-    def _has_capacity(self) -> bool:
-        """Check if the engine can open more positions."""
-        return len(self._positions) < self._max_positions
+    def _has_capacity(self, symbol: str | None = None) -> bool:
+        """Check if the engine can open more positions.
+
+        Args:
+            symbol: Optional symbol to check cross-engine concentration for.
+        """
+        if len(self._positions) >= self._max_positions:
+            return False
+        if symbol and self._correlation_controller is not None:
+            allowed, _ = self._correlation_controller.check_symbol_concentration(
+                symbol
+            )
+            if not allowed:
+                return False
+        return True
 
     def get_status_dict(self) -> dict[str, Any]:
         """Build a status summary for the dashboard."""
