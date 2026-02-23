@@ -50,6 +50,8 @@ class EngineManager:
         self._collector = None
         self._backfill_task: asyncio.Task | None = None
         self._correlation_controller = None
+        self._metrics_persistence = None
+        self._snapshot_task: asyncio.Task | None = None
 
     def set_collector(self, collector) -> None:
         """Set the DataCollector for backfill background loop."""
@@ -62,6 +64,10 @@ class EngineManager:
     def set_correlation_controller(self, controller) -> None:
         """Set the CorrelationRiskController for cross-engine risk monitoring."""
         self._correlation_controller = controller
+
+    def set_metrics_persistence(self, persistence) -> None:
+        """Set the MetricsPersistence for saving trades/metrics to DB."""
+        self._metrics_persistence = persistence
 
     # ------------------------------------------------------------------
     # Registration
@@ -195,6 +201,12 @@ class EngineManager:
                     hold_time_seconds=action.get("hold_time_seconds", 0),
                 )
                 self.tracker.record_trade(engine_name, trade)
+                if self._metrics_persistence is not None:
+                    asyncio.ensure_future(
+                        self._metrics_persistence.save_trade(
+                            engine_name, trade,
+                        )
+                    )
 
     # ------------------------------------------------------------------
     # Tuner and rebalance loops
@@ -235,6 +247,17 @@ class EngineManager:
         if self._deployer and getattr(s, "research_auto_deploy", True):
             self._regression_task = asyncio.create_task(
                 self._regression_check_loop(), name="regression-check-loop"
+            )
+        if (
+            self._metrics_persistence is not None
+            and getattr(s, "metrics_persistence_enabled", True)
+        ):
+            interval = getattr(
+                s, "metrics_snapshot_interval_minutes", 5.0,
+            )
+            self._snapshot_task = asyncio.create_task(
+                self._metrics_persistence._snapshot_loop(interval),
+                name="metrics-snapshot-loop",
             )
 
     async def _tuner_loop(self) -> None:

@@ -177,6 +177,11 @@ class Settings(BaseSettings):
     cross_engine_correlation_enabled: bool = True
     max_symbol_concentration_pct: float = Field(default=40.0, ge=0, le=100)
 
+    # ── Metrics persistence ──
+    metrics_persistence_enabled: bool = True
+    metrics_snapshot_interval_minutes: float = Field(default=5.0, gt=0)
+    metrics_retention_days: int = Field(default=90, ge=1)
+
     # ── Data backfill ──
     data_backfill_enabled: bool = True
     data_backfill_interval_hours: float = Field(default=6.0, gt=0)
@@ -901,6 +906,25 @@ SETTINGS_METADATA: dict[str, dict[str, Any]] = {
         "section": "Risk Management",
         "description": "Maximum symbol concentration as % of total capital across all engines",
         "type": "float",
+        "requires_restart": False,
+    },
+    # Metrics persistence
+    "metrics_persistence_enabled": {
+        "section": "Metrics",
+        "description": "Enable persisting engine trades and metrics to DB",
+        "type": "bool",
+        "requires_restart": False,
+    },
+    "metrics_snapshot_interval_minutes": {
+        "section": "Metrics",
+        "description": "Minutes between metric snapshots",
+        "type": "float",
+        "requires_restart": False,
+    },
+    "metrics_retention_days": {
+        "section": "Metrics",
+        "description": "Days to retain persisted metrics before cleanup",
+        "type": "int",
         "requires_restart": False,
     },
     # Data Collection (backfill)

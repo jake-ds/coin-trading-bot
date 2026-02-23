@@ -628,6 +628,19 @@ class TradingBot:
                 if hasattr(engine, "set_sizer") and engine.name != "token_scanner":
                     engine.set_sizer(sizer)
 
+        # Wire MetricsPersistence (V6-012)
+        if (
+            getattr(self._settings, "metrics_persistence_enabled", True)
+            and self._store is not None
+        ):
+            from bot.engines.metrics_persistence import MetricsPersistence
+
+            persistence = MetricsPersistence(
+                data_store=self._store,
+                tracker=self._engine_manager.tracker,
+            )
+            self._engine_manager.set_metrics_persistence(persistence)
+
         logger.info(
             "engine_mode_initialized",
             engines=list(self._engine_manager.engines.keys()),
