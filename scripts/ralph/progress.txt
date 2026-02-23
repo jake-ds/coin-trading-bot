@@ -309,4 +309,37 @@ Started: 2026년 2월 23일 월요일 17시 18분 03초 KST
   - Client-side sorting on already-paginated data (20 items per page) is efficient enough
   - PnL waterfall uses negative cost value (`-Math.abs(cost)`) for visual clarity
   - `set_engine_manager()` is essential for test injection — called from tests directly
+
+### Heatmap API Patterns
+- `heatmap_router` on `/api/analytics` prefix with `require_auth_strict`
+- Single endpoint `GET /api/analytics/heatmap?type=X` dispatches to helper functions
+- `_heatmap_hourly_dow()` returns 168 cells (7×24) with pre-populated grid (always returns all cells)
+- `_heatmap_engine_symbol()` returns only cells with data (dynamic)
+- `_heatmap_monthly()` returns only months with data, sorted chronologically
+- All heatmap cells include: pnl, trade_count, win_rate
+- Reuses `_collect_tracker_trades()` from trade detail endpoints for data gathering
+- Optional `engine` and `days` params for filtering before aggregation
+- Frontend uses custom div grid (not recharts) for heatmaps with rgba color scaling
+- `pnlColor()` calculates rgba intensity from value/maxAbs ratio
+- Tooltip follows mouse via `onMouseEnter`/`onMouseMove`/`onMouseLeave` with fixed positioning
+---
+
+## 2026-02-23 - V6-010
+- **Implemented**: Performance Heatmap — hourly/DOW PnL, engine×symbol matrix, monthly calendar
+- **Files created**:
+  - `frontend/src/pages/Heatmaps.tsx` — Three heatmap views: hourly×DOW grid (7×24 cells), engine×symbol matrix, monthly PnL calendar with year navigation. Custom tooltip, color scaling, engine/period filters
+  - `tests/dashboard/test_heatmap_api.py` — 18 tests: TestHeatmapHourlyDow (no_manager, grid_size=168, fields, pnl_values, loss_cell, empty_cell), TestHeatmapEngineSymbol (data_count, fields, aggregation, engine_filter), TestHeatmapMonthly (data, fields, chronological_sort, pnl_aggregation), TestHeatmapUnknownType (error), TestHeatmapEmptyTracker (3 types)
+- **Files modified**:
+  - `src/bot/dashboard/app.py` — Added heatmap_router with GET /api/analytics/heatmap, _heatmap_hourly_dow(), _heatmap_engine_symbol(), _heatmap_monthly() helpers
+  - `frontend/src/api/types.ts` — Added HeatmapHourlyDow, HeatmapEngineSymbol, HeatmapMonthly interfaces
+  - `frontend/src/App.tsx` — Added Heatmaps import, /heatmaps nav item, and Route
+  - `scripts/ralph/prd.json` — Marked V6-010 passes: true
+- **Tests**: 18 new, 2518 total passing (+ 3 pre-existing failures)
+- **Learnings for future iterations:**
+  - Hourly×DOW grid must pre-populate all 168 cells (empty cells have pnl=0, count=0)
+  - `datetime.fromisoformat()` needs "Z" → "+00:00" replacement for Python 3.10
+  - `datetime.weekday()` returns 0=Mon..6=Sun (matches DOW_LABELS order)
+  - `_collect_tracker_trades()` reuse avoids code duplication between trade detail and heatmap endpoints
+  - Frontend rgba color scaling: `rgba(r, g, b, intensity)` where intensity = abs(value)/maxAbs
+  - Monthly calendar sorted by (year, month) for chronological display
 ---

@@ -357,6 +357,31 @@ export interface TradeDetailResponse {
   offset: number
 }
 
+// Heatmap types (V6-010)
+export interface HeatmapHourlyDow {
+  hour: number
+  dow: number
+  pnl: number
+  trade_count: number
+  win_rate: number
+}
+
+export interface HeatmapEngineSymbol {
+  engine: string
+  symbol: string
+  pnl: number
+  trade_count: number
+  win_rate: number
+}
+
+export interface HeatmapMonthly {
+  year: number
+  month: number
+  pnl: number
+  trade_count: number
+  win_rate: number
+}
+
 // Scanner / Opportunity types
 export type OpportunityTypeName = 'funding_rate' | 'volatility' | 'cross_exchange_spread' | 'correlation'
 

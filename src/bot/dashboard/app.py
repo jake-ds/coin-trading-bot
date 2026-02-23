@@ -1243,6 +1243,178 @@ app.include_router(trades_detail_router)
 
 
 # ---------------------------------------------------------------------------
+# Heatmap / analytics endpoints
+# ---------------------------------------------------------------------------
+
+heatmap_router = APIRouter(
+    prefix="/api/analytics",
+    dependencies=[Depends(require_auth_strict)],
+)
+
+
+@heatmap_router.get("/heatmap")
+async def get_heatmap(
+    type: str = "hourly_dow",
+    engine: str | None = None,
+    days: int | None = None,
+):
+    """Get heatmap data for various analytics views.
+
+    type=hourly_dow: PnL by hour (0-23) and day-of-week (0=Mon .. 6=Sun)
+    type=engine_symbol: PnL by engine × symbol
+    type=monthly: PnL by year/month
+    """
+    if _engine_manager is None:
+        return {"data": []}
+
+    trades = _collect_tracker_trades(engine, None, None, None, None)
+
+    # Optional period filter
+    if days is not None:
+        from datetime import datetime, timedelta, timezone
+
+        cutoff = (
+            datetime.now(timezone.utc) - timedelta(days=days)
+        ).isoformat()
+        trades = [t for t in trades if t.get("exit_time", "") >= cutoff]
+
+    if type == "hourly_dow":
+        return {"data": _heatmap_hourly_dow(trades)}
+    elif type == "engine_symbol":
+        return {"data": _heatmap_engine_symbol(trades)}
+    elif type == "monthly":
+        return {"data": _heatmap_monthly(trades)}
+    else:
+        return {"data": [], "error": f"Unknown heatmap type: {type}"}
+
+
+def _heatmap_hourly_dow(trades: list[dict]) -> list[dict]:
+    """Compute PnL by hour × day-of-week grid."""
+    from datetime import datetime
+
+    grid: dict[tuple[int, int], dict] = {}
+    for dow in range(7):
+        for hour in range(24):
+            grid[(dow, hour)] = {"hour": hour, "dow": dow, "pnl": 0.0, "trade_count": 0, "wins": 0}
+
+    for t in trades:
+        exit_time = t.get("exit_time", "")
+        if not exit_time:
+            continue
+        try:
+            dt = datetime.fromisoformat(exit_time.replace("Z", "+00:00"))
+            dow = dt.weekday()  # 0=Mon .. 6=Sun
+            hour = dt.hour
+            cell = grid[(dow, hour)]
+            cell["pnl"] = round(cell["pnl"] + t.get("net_pnl", 0), 4)
+            cell["trade_count"] += 1
+            if t.get("net_pnl", 0) > 0:
+                cell["wins"] += 1
+        except (ValueError, KeyError):
+            continue
+
+    result = []
+    for cell in grid.values():
+        win_rate = (
+            round(cell["wins"] / cell["trade_count"], 4)
+            if cell["trade_count"] > 0
+            else 0.0
+        )
+        result.append({
+            "hour": cell["hour"],
+            "dow": cell["dow"],
+            "pnl": cell["pnl"],
+            "trade_count": cell["trade_count"],
+            "win_rate": win_rate,
+        })
+
+    return result
+
+
+def _heatmap_engine_symbol(trades: list[dict]) -> list[dict]:
+    """Compute PnL by engine × symbol matrix."""
+    grid: dict[tuple[str, str], dict] = {}
+
+    for t in trades:
+        eng = t.get("engine_name", "")
+        sym = t.get("symbol", "")
+        key = (eng, sym)
+        if key not in grid:
+            grid[key] = {"engine": eng, "symbol": sym, "pnl": 0.0, "trade_count": 0, "wins": 0}
+        cell = grid[key]
+        cell["pnl"] = round(cell["pnl"] + t.get("net_pnl", 0), 4)
+        cell["trade_count"] += 1
+        if t.get("net_pnl", 0) > 0:
+            cell["wins"] += 1
+
+    result = []
+    for cell in grid.values():
+        win_rate = (
+            round(cell["wins"] / cell["trade_count"], 4)
+            if cell["trade_count"] > 0
+            else 0.0
+        )
+        result.append({
+            "engine": cell["engine"],
+            "symbol": cell["symbol"],
+            "pnl": cell["pnl"],
+            "trade_count": cell["trade_count"],
+            "win_rate": win_rate,
+        })
+
+    return result
+
+
+def _heatmap_monthly(trades: list[dict]) -> list[dict]:
+    """Compute PnL by year/month."""
+    from datetime import datetime
+
+    grid: dict[tuple[int, int], dict] = {}
+
+    for t in trades:
+        exit_time = t.get("exit_time", "")
+        if not exit_time:
+            continue
+        try:
+            dt = datetime.fromisoformat(exit_time.replace("Z", "+00:00"))
+            key = (dt.year, dt.month)
+            if key not in grid:
+                grid[key] = {
+                    "year": dt.year, "month": dt.month,
+                    "pnl": 0.0, "trade_count": 0, "wins": 0,
+                }
+            cell = grid[key]
+            cell["pnl"] = round(cell["pnl"] + t.get("net_pnl", 0), 4)
+            cell["trade_count"] += 1
+            if t.get("net_pnl", 0) > 0:
+                cell["wins"] += 1
+        except (ValueError, KeyError):
+            continue
+
+    result = []
+    for cell in grid.values():
+        win_rate = (
+            round(cell["wins"] / cell["trade_count"], 4)
+            if cell["trade_count"] > 0
+            else 0.0
+        )
+        result.append({
+            "year": cell["year"],
+            "month": cell["month"],
+            "pnl": cell["pnl"],
+            "trade_count": cell["trade_count"],
+            "win_rate": win_rate,
+        })
+
+    # Sort chronologically
+    result.sort(key=lambda x: (x["year"], x["month"]))
+    return result
+
+
+app.include_router(heatmap_router)
+
+
+# ---------------------------------------------------------------------------
 # Scanner / opportunity discovery endpoints
 # ---------------------------------------------------------------------------
 

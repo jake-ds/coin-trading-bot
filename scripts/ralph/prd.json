@@ -234,7 +234,7 @@
         "All existing tests pass, ruff check passes"
       ],
       "priority": 10,
-      "passes": false,
+      "passes": true,
       "notes": "시간대×요일 히트맵은 7×24=168개 셀. 빈 셀은 PnL=0, count=0. recharts에 HeatMap이 없으므로 div 기반 커스텀 그리드 추천. 각 셀 크기: min-width 30px, height 30px. 색상 스케일은 min/max PnL 기준 동적 계산."
     },
     {
