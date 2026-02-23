@@ -564,6 +564,10 @@ class TradingBot:
             if hasattr(engine, "set_registry") and engine.name != "token_scanner":
                 engine.set_registry(registry)
 
+        # Wire DataCollector to EngineManager for backfill loop
+        if self._collector:
+            self._engine_manager.set_collector(self._collector)
+
         # Register cycle-complete callback for WebSocket broadcast
         async def _broadcast_engine_cycle(result):
             try:
@@ -592,6 +596,7 @@ class TradingBot:
         logger.info("engine_mode_started")
 
         await self._engine_manager.start_all()
+        await self._engine_manager.start_background_loops()
 
         try:
             while self._running:

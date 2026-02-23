@@ -168,6 +168,11 @@ class Settings(BaseSettings):
     scanner_ttl_spread_minutes: float = Field(default=5.0, gt=0)
     scanner_ttl_correlation_hours: float = Field(default=24.0, gt=0)
 
+    # ── Data backfill ──
+    data_backfill_enabled: bool = True
+    data_backfill_interval_hours: float = Field(default=6.0, gt=0)
+    data_backfill_days: int = Field(default=30, ge=1)
+
     # ── Auto-tuner & rebalance ──
     tuner_enabled: bool = True
     tuner_interval_hours: int = Field(default=24, ge=1)
@@ -827,6 +832,25 @@ SETTINGS_METADATA: dict[str, dict[str, Any]] = {
         "section": "Scanner",
         "description": "TTL for correlation opportunities (hours)",
         "type": "float",
+        "requires_restart": False,
+    },
+    # Data Collection (backfill)
+    "data_backfill_enabled": {
+        "section": "Data Collection",
+        "description": "Enable automatic data backfill for scanner-discovered symbols",
+        "type": "bool",
+        "requires_restart": False,
+    },
+    "data_backfill_interval_hours": {
+        "section": "Data Collection",
+        "description": "Hours between backfill cycles",
+        "type": "float",
+        "requires_restart": False,
+    },
+    "data_backfill_days": {
+        "section": "Data Collection",
+        "description": "Number of days of history to backfill per symbol",
+        "type": "int",
         "requires_restart": False,
     },
 }

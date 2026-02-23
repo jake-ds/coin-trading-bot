@@ -44,7 +44,7 @@
         "All existing tests pass, ruff check passes"
       ],
       "priority": 2,
-      "passes": false,
+      "passes": true,
       "notes": "Rate limiting이 핵심. ccxt exchange.fetchOHLCV는 보통 500-1000개 캔들 반환. 30일 1h = 720캔들이므로 1회 호출로 충분. 4h면 180캔들. bulk_backfill에서 각 심볼별로 1회 API 콜이면 충분하고, 0.5초 간격이면 20개 심볼 = 10초."
     },
     {

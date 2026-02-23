@@ -44,6 +44,12 @@ class EngineManager:
         self._rebalance_history: list[dict] = []
         self._research_experiments: list[ResearchTask] = []
         self._research_reports: list[dict] = []
+        self._collector = None
+        self._backfill_task: asyncio.Task | None = None
+
+    def set_collector(self, collector) -> None:
+        """Set the DataCollector for backfill background loop."""
+        self._collector = collector
 
     # ------------------------------------------------------------------
     # Registration
@@ -188,7 +194,7 @@ class EngineManager:
         )
 
     async def start_background_loops(self) -> None:
-        """Start tuner, rebalance, and research background loops."""
+        """Start tuner, rebalance, research, and backfill background loops."""
         s = self._settings
         if s and getattr(s, "tuner_enabled", False):
             self._tuner_task = asyncio.create_task(
@@ -201,6 +207,14 @@ class EngineManager:
         if s and getattr(s, "research_enabled", False):
             self._research_task = asyncio.create_task(
                 self._research_loop(), name="research-loop"
+            )
+        if self._collector and getattr(s, "data_backfill_enabled", True):
+            self._backfill_task = asyncio.create_task(
+                self._collector._backfill_loop(
+                    registry=self.opportunity_registry,
+                    settings=s,
+                ),
+                name="backfill-loop",
             )
 
     async def _tuner_loop(self) -> None:

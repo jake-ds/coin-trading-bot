@@ -19,7 +19,7 @@ Started: 2026년 2월 23일 월요일 17시 18분 03초 KST
 ### Testing Patterns
 - Use `MagicMock()` for DataStore, set async methods via `AsyncMock(return_value=...)`
 - Existing 3 pre-existing test failures (not our fault): test_defaults, test_main_without_validate_runs_trading_loop, test_main_without_args_runs_trading_loop
-- Baseline: 2219 passed + 3 pre-existing failures
+- Baseline: 2241 passed + 3 pre-existing failures
 
 ---
 
@@ -37,4 +37,36 @@ Started: 2026년 2월 23일 월요일 17시 18분 03초 KST
   - _CANDLES_PER_DAY mapping handles timeframe→limit conversion (1h=24, 4h=6, 1d=1, etc.)
   - get_multi_prices uses asyncio.gather for parallel fetching
   - Funding rates come 3/day (8h interval), so limit = days × 3
+
+### DataCollector Patterns
+- `_dynamic_symbols: set[str]` holds scanner-discovered symbols
+- `collect_once()` iterates over `dict.fromkeys(self._symbols + sorted(self._dynamic_symbols))` for dedup
+- `bulk_backfill()` uses existing `backfill()` per symbol with 0.5s rate limit between calls
+- `TIMEFRAME_SECONDS` dict maps timeframe→seconds; use `86400 // tf_seconds` for candles/day
+- `auto_discover_symbols()` takes an OpportunityRegistry and iterates all OpportunityType enum values
+- `_backfill_loop()` takes registry + settings as args (not stored), runs every `data_backfill_interval_hours`
+
+### EngineManager Wiring
+- `set_collector(collector)` stores DataCollector reference for backfill loop
+- `start_background_loops()` starts backfill task if `data_backfill_enabled` and collector is set
+- `opportunity_registry` property fetches registry from token_scanner engine
+- `start_background_loops()` was NOT called in main.py `_run_engine_mode()` — added it after `start_all()`
+
+---
+
+## 2026-02-23 - V6-002
+- **Implemented**: DataCollector batch backfill + scanner auto-discovery
+- **Files created**:
+  - `tests/data/test_backfill.py` — 22 tests: bulk_backfill, auto_discover, dynamic_symbols merge, backfill_loop, config, EngineManager wiring
+- **Files modified**:
+  - `src/bot/data/collector.py` — Added `_dynamic_symbols`, `bulk_backfill()`, `auto_discover_symbols()`, `_backfill_loop()`. Modified `collect_once()` to include dynamic symbols
+  - `src/bot/config.py` — Added `data_backfill_enabled`, `data_backfill_interval_hours`, `data_backfill_days` settings + SETTINGS_METADATA
+  - `src/bot/engines/manager.py` — Added `_collector`, `_backfill_task`, `set_collector()`. Updated `start_background_loops()` to start backfill loop
+  - `src/bot/main.py` — Added `set_collector()` call in `_init_engine_mode()`, added `start_background_loops()` call in `_run_engine_mode()`
+- **Tests**: 22 new, 2241 total passing (+ 3 pre-existing failures)
+- **Learnings for future iterations:**
+  - `start_background_loops()` was defined but never called — fixed
+  - Rate limit delay between symbols is 0.5s (using `asyncio.sleep`)
+  - `dict.fromkeys()` preserves order while deduplicating
+  - Backfill loop uses registry from `opportunity_registry` property (finds scanner engine)
 ---
