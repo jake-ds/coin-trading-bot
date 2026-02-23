@@ -594,6 +594,20 @@ class TradingBot:
             )
             self._engine_manager.set_deployer(deployer)
 
+        # Wire DynamicPositionSizer to each engine (V6-007)
+        if self._settings.dynamic_sizing_enabled:
+            from bot.risk.dynamic_sizer import DynamicPositionSizer
+
+            sizer = DynamicPositionSizer(
+                volatility_service=None,  # Will use GARCH when VolatilityService is wired
+                portfolio_risk=self._portfolio_risk,
+                base_risk_pct=self._settings.risk_per_trade_pct,
+                vol_scale_factor=self._settings.vol_scale_factor,
+            )
+            for engine in self._engine_manager.engines.values():
+                if hasattr(engine, "set_sizer") and engine.name != "token_scanner":
+                    engine.set_sizer(sizer)
+
         logger.info(
             "engine_mode_initialized",
             engines=list(self._engine_manager.engines.keys()),

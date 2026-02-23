@@ -163,7 +163,7 @@
         "All existing tests pass, ruff check passes"
       ],
       "priority": 7,
-      "passes": false,
+      "passes": true,
       "notes": "엔진들의 기존 사이징 로직은 건드리지 않음. _dynamic_sizer=None이면 기존과 100% 동일. GARCH forecast가 0이면 vol_multiplier=1.0으로 fallback. median_vol은 conditional_volatility의 중간값."
     },
     {

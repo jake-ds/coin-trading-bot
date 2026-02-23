@@ -109,6 +109,7 @@ class BaseEngine(ABC):
         self._cycle_history: list[EngineCycleResult] = []
         self._error_message: str | None = None
         self._on_cycle_complete: Callable[[EngineCycleResult], Any] | None = None
+        self._dynamic_sizer: Any | None = None  # DynamicPositionSizer (V6-007)
 
     # ------------------------------------------------------------------
     # Abstract interface — subclasses must implement
@@ -177,6 +178,10 @@ class BaseEngine(ABC):
     ) -> None:
         """Register a callback invoked after each successful cycle."""
         self._on_cycle_complete = callback
+
+    def set_sizer(self, sizer: Any) -> None:
+        """Attach a DynamicPositionSizer for volatility-based sizing."""
+        self._dynamic_sizer = sizer
 
     # ------------------------------------------------------------------
     # Lifecycle

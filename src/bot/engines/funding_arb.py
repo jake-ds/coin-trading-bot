@@ -175,6 +175,25 @@ class FundingRateArbEngine(BaseEngine):
                     rate_step.result = "SKIP - 기준 충족이나 포지션 한도 초과"
                     rate_step.category = "skip"
                     continue
+                # Log dynamic sizing decision
+                if self._dynamic_sizer:
+                    price = rate_info.get("mark_price", 0) or rate_info.get("spot_price", 0)
+                    if price > 0 and self._allocated_capital > 0:
+                        ps = self._dynamic_sizer.calculate_size(
+                            symbol=symbol,
+                            price=price,
+                            portfolio_value=self._allocated_capital,
+                        )
+                        decisions.append(DecisionStep(
+                            label="포지션 사이징",
+                            observation=(
+                                f"방법: {ps.method}, 변동성 배수: {ps.vol_multiplier:.2f}, "
+                                f"수량: {ps.quantity:.6f}"
+                            ),
+                            threshold="변동성 배수 범위: [0.25, 2.0]",
+                            result=f"사이즈 결정: ${ps.notional_value:.2f}",
+                            category="evaluate",
+                        ))
                 opened = await self._open_position(symbol, rate_info)
                 if opened:
                     actions.append({
@@ -242,9 +261,21 @@ class FundingRateArbEngine(BaseEngine):
             price = rate_info.get("mark_price", 0) or rate_info.get("spot_price", 0)
             if price <= 0:
                 return False
-            # Size: allocate equal share of capital across max_positions
-            position_capital = self._allocated_capital / max(self._max_positions, 1)
-            quantity = position_capital / price if price > 0 else 0
+
+            # Dynamic sizing if available, else fixed
+            if self._dynamic_sizer and self._allocated_capital > 0:
+                from bot.risk.dynamic_sizer import PositionSize
+
+                ps: PositionSize = self._dynamic_sizer.calculate_size(
+                    symbol=symbol,
+                    price=price,
+                    portfolio_value=self._allocated_capital,
+                )
+                quantity = ps.quantity
+            else:
+                # Size: allocate equal share of capital across max_positions
+                position_capital = self._allocated_capital / max(self._max_positions, 1)
+                quantity = position_capital / price if price > 0 else 0
             if quantity <= 0:
                 return False
 

@@ -199,4 +199,43 @@ Started: 2026년 2월 23일 월요일 17시 18분 03초 KST
   - Import ordering: ruff wants `from unittest.mock` (stdlib) before `import numpy` (third-party) — use `ruff --fix` to auto-sort
   - pre_trade_var_check creates hypothetical portfolio with new position weight included in total value
   - Dashboard helper `_get_portfolio_risk_manager()` uses `getattr()` for safe access to `_engine_manager._portfolio_risk`
+
+### DynamicPositionSizer Patterns
+- `DynamicPositionSizer(volatility_service=None, portfolio_risk=None, base_risk_pct=1.0, vol_scale_factor=1.0)`
+- `calculate_size(symbol, price, portfolio_value, atr=None) -> PositionSize`
+- Sizing priority: GARCH (median_cond_vol / forecast) → ATR (target_atr / actual_atr_pct) → fixed (1.0)
+- vol_multiplier always clamped to [0.25, 2.0]
+- `validate_size(position_size, portfolio_value, max_pct) -> PositionSize` — clips notional to max_pct of portfolio
+- BaseEngine has `_dynamic_sizer: Any | None = None` + `set_sizer(sizer)` method
+- When `_dynamic_sizer is None` → all engines use existing fixed sizing (100% backward compat)
+- Each engine imports `PositionSize` inside the method body (lazy) to avoid circular imports
+- DecisionStep for sizing: label="포지션 사이징", category="evaluate"
+- Config: `dynamic_sizing_enabled`, `vol_scale_factor`, `max_position_scale` (section: Risk Management)
+- main.py wires sizer after deployer, iterates engines with `set_sizer()` (excludes token_scanner)
+
+---
+
+## 2026-02-23 - V6-007
+- **Implemented**: DynamicPositionSizer — GARCH + ATR integrated volatility-based dynamic position sizing
+- **Files created**:
+  - `src/bot/risk/dynamic_sizer.py` — DynamicPositionSizer class with PositionSize dataclass, calculate_size (GARCH/ATR/fixed fallback), validate_size (clipping)
+  - `tests/risk/test_dynamic_sizer.py` — 39 tests: PositionSize dataclass, init, fixed sizing (5), GARCH sizing (10: high/low vol, clamped bounds, zero/None forecast, no model/cond_vol, zero median), ATR sizing (6: high/low/moderate vol, zero/negative, GARCH precedence), validate_size (6: within/exceeds/zero/boundary), vol_multiplier bounds (2), DecisionStep (1), BaseEngine integration (2), config (3), imports (2)
+- **Files modified**:
+  - `src/bot/engines/base.py` — Added `_dynamic_sizer: Any | None = None` field, `set_sizer()` method
+  - `src/bot/engines/funding_arb.py` — `_open_position()` uses dynamic sizer when available, DecisionStep for sizing in `_run_cycle()`
+  - `src/bot/engines/grid_trading.py` — `_check_fills()` uses dynamic sizer for notional_qty, DecisionStep for sizing on grid init
+  - `src/bot/engines/cross_exchange_arb.py` — `_execute_arb()` uses dynamic sizer for quantity, DecisionStep for sizing, fixed notional calc to use actual quantity
+  - `src/bot/engines/stat_arb.py` — `_check_entry()` uses dynamic sizer to split notional across pair legs, DecisionStep for sizing
+  - `src/bot/config.py` — Added `dynamic_sizing_enabled: bool = True`, `vol_scale_factor: float = 1.0`, `max_position_scale: float = 2.0` + SETTINGS_METADATA entries
+  - `src/bot/main.py` — Added DynamicPositionSizer creation and `set_sizer()` wiring in `_init_engine_mode()`
+  - `src/bot/risk/__init__.py` — Added DynamicPositionSizer, PositionSize to exports
+  - `scripts/ralph/prd.json` — Marked V6-007 passes: true
+- **Tests**: 39 new, 2443 total passing (+ 3 pre-existing failures)
+- **Learnings for future iterations:**
+  - `Any` type hint for `_dynamic_sizer` in BaseEngine avoids importing from risk package (no circular dep)
+  - Lazy `from bot.risk.dynamic_sizer import PositionSize` inside engine methods — safe since dynamic_sizer doesn't import engines
+  - GARCH median_vol from `model.conditional_volatility` (np.ndarray) via `np.median()`
+  - ATR is passed as absolute value, converted to fraction of price internally: `atr_pct = atr / price`
+  - cross_exchange_arb's notional now uses `quantity * buy_price` (actual) instead of `_max_position_per_symbol` when dynamic sizer is active
+  - stat_arb splits total `notional_value / 2` across pair legs
 ---

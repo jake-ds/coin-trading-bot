@@ -215,6 +215,29 @@ class StatisticalArbEngine(BaseEngine):
                         f"Z-Score {float(zscore):.4f}"
                     )
                     decisions[-1].category = "execute"
+                    # Log dynamic sizing if available
+                    if self._dynamic_sizer and self._allocated_capital > 0:
+                        avg_price = (
+                            (a[-1] + b[-1]) / 2
+                            if (a[-1] > 0 and b[-1] > 0)
+                            else a[-1] or b[-1]
+                        )
+                        if avg_price > 0:
+                            ps = self._dynamic_sizer.calculate_size(
+                                symbol=sym_a,
+                                price=float(avg_price),
+                                portfolio_value=self._allocated_capital,
+                            )
+                            decisions.append(DecisionStep(
+                                label="포지션 사이징",
+                                observation=(
+                                    f"방법: {ps.method}, 변동성 배수: {ps.vol_multiplier:.2f}, "
+                                    f"수량: {ps.quantity:.6f}"
+                                ),
+                                threshold="변동성 배수 범위: [0.25, 2.0]",
+                                result=f"사이즈 결정: ${ps.notional_value:.2f}",
+                                category="evaluate",
+                            ))
                 else:
                     decisions[-1].result = (
                         f"HOLD - Z-Score {float(zscore):.4f}, 진입 기준 미달"
@@ -264,9 +287,31 @@ class StatisticalArbEngine(BaseEngine):
         else:
             side_a, side_b = "long", "short"
 
-        position_capital = self._allocated_capital / max(self._max_positions, 1)
-        qty_a = position_capital / 2 / price_a if price_a > 0 else 0
-        qty_b = position_capital / 2 / price_b if price_b > 0 else 0
+        # Dynamic sizing if available
+        if self._dynamic_sizer and self._allocated_capital > 0:
+            # Use the average of the two prices for sizing
+            avg_price = (
+                (price_a + price_b) / 2
+                if (price_a > 0 and price_b > 0)
+                else price_a or price_b
+            )
+            if avg_price > 0:
+                ps = self._dynamic_sizer.calculate_size(
+                    symbol=sym_a,
+                    price=avg_price,
+                    portfolio_value=self._allocated_capital,
+                )
+                # Split total quantity equally between the two legs
+                total_notional = ps.notional_value
+                qty_a = total_notional / 2 / price_a if price_a > 0 else 0
+                qty_b = total_notional / 2 / price_b if price_b > 0 else 0
+            else:
+                qty_a = 0
+                qty_b = 0
+        else:
+            position_capital = self._allocated_capital / max(self._max_positions, 1)
+            qty_a = position_capital / 2 / price_a if price_a > 0 else 0
+            qty_b = position_capital / 2 / price_b if price_b > 0 else 0
 
         self._add_position(
             symbol=pair_key,

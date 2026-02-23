@@ -139,6 +139,26 @@ class GridTradingEngine(BaseEngine):
                     result=f"INIT - {len(self._grids[symbol])}개 레벨 생성",
                     category="execute",
                 ))
+                # Log dynamic sizing if available
+                if self._dynamic_sizer and self._allocated_capital > 0:
+                    ps = self._dynamic_sizer.calculate_size(
+                        symbol=symbol,
+                        price=price,
+                        portfolio_value=self._allocated_capital,
+                    )
+                    decisions.append(DecisionStep(
+                        label="포지션 사이징",
+                        observation=(
+                            f"방법: {ps.method}, 변동성 배수: {ps.vol_multiplier:.2f}, "
+                            f"수량: {ps.quantity:.6f}"
+                        ),
+                        threshold="변동성 배수 범위: [0.25, 2.0]",
+                        result=(
+                            f"그리드당 사이즈: "
+                            f"${ps.notional_value / max(self._grid_levels_count, 1):.2f}"
+                        ),
+                        category="evaluate",
+                    ))
 
             # Check for fills and react
             grid_actions, grid_pnl = self._check_fills(symbol, price)
@@ -288,9 +308,17 @@ class GridTradingEngine(BaseEngine):
                 gross_profit = level.price - buy_price
                 # Scale by a notional quantity (capital / max_orders / price)
                 if self._allocated_capital > 0 and level.price > 0:
-                    notional_qty = (
-                        self._allocated_capital / self._max_open_orders / level.price
-                    )
+                    if self._dynamic_sizer:
+                        ps = self._dynamic_sizer.calculate_size(
+                            symbol=symbol,
+                            price=level.price,
+                            portfolio_value=self._allocated_capital,
+                        )
+                        notional_qty = ps.quantity / max(self._grid_levels_count, 1)
+                    else:
+                        notional_qty = (
+                            self._allocated_capital / self._max_open_orders / level.price
+                        )
                     gross_profit *= notional_qty
                     # Deduct maker fees (grid uses limit orders)
                     fill_notional = notional_qty * level.price

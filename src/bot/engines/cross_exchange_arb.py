@@ -142,6 +142,25 @@ class CrossExchangeArbEngine(BaseEngine):
             ))
 
             if spread_abs >= effective_min:
+                # Log dynamic sizing if available
+                if self._dynamic_sizer and self._allocated_capital > 0:
+                    mid = spread_info.get("mid_price", 0)
+                    if mid > 0:
+                        ps = self._dynamic_sizer.calculate_size(
+                            symbol=symbol,
+                            price=mid,
+                            portfolio_value=self._allocated_capital,
+                        )
+                        decisions.append(DecisionStep(
+                            label="포지션 사이징",
+                            observation=(
+                                f"방법: {ps.method}, 변동성 배수: {ps.vol_multiplier:.2f}, "
+                                f"수량: {ps.quantity:.6f}"
+                            ),
+                            threshold="변동성 배수 범위: [0.25, 2.0]",
+                            result=f"사이즈 결정: ${ps.notional_value:.2f}",
+                            category="evaluate",
+                        ))
                 arb_result = await self._execute_arb(symbol, spread_info)
                 if arb_result:
                     actions.append(arb_result)
@@ -235,14 +254,22 @@ class CrossExchangeArbEngine(BaseEngine):
             buy_price = spread_info["price_a"]
             sell_price = spread_info["price_b"]
 
-        # Calculate quantity based on max position
-        quantity = self._max_position_per_symbol / buy_price if buy_price > 0 else 0
+        # Calculate quantity based on max position (dynamic sizer if available)
+        if self._dynamic_sizer and self._allocated_capital > 0 and buy_price > 0:
+            ps = self._dynamic_sizer.calculate_size(
+                symbol=symbol,
+                price=buy_price,
+                portfolio_value=self._allocated_capital,
+            )
+            quantity = ps.quantity
+        else:
+            quantity = self._max_position_per_symbol / buy_price if buy_price > 0 else 0
         if quantity <= 0:
             return None
 
         gross_profit = (sell_price - buy_price) * quantity
         # Deduct round-trip costs (4 legs: buy+sell on each exchange)
-        notional = self._max_position_per_symbol
+        notional = quantity * buy_price
         cost = self._cost_model.round_trip_cost(notional, legs=4)
         net_profit = gross_profit - cost
 

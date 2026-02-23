@@ -168,6 +168,11 @@ class Settings(BaseSettings):
     scanner_ttl_spread_minutes: float = Field(default=5.0, gt=0)
     scanner_ttl_correlation_hours: float = Field(default=24.0, gt=0)
 
+    # ── Dynamic position sizing ──
+    dynamic_sizing_enabled: bool = True
+    vol_scale_factor: float = Field(default=1.0, gt=0)
+    max_position_scale: float = Field(default=2.0, gt=0)
+
     # ── Data backfill ──
     data_backfill_enabled: bool = True
     data_backfill_interval_hours: float = Field(default=6.0, gt=0)
@@ -860,6 +865,25 @@ SETTINGS_METADATA: dict[str, dict[str, Any]] = {
     "scanner_ttl_correlation_hours": {
         "section": "Scanner",
         "description": "TTL for correlation opportunities (hours)",
+        "type": "float",
+        "requires_restart": False,
+    },
+    # Dynamic Position Sizing
+    "dynamic_sizing_enabled": {
+        "section": "Risk Management",
+        "description": "Enable GARCH/ATR-based dynamic position sizing across engines",
+        "type": "bool",
+        "requires_restart": False,
+    },
+    "vol_scale_factor": {
+        "section": "Risk Management",
+        "description": "Volatility scale factor for dynamic position sizing",
+        "type": "float",
+        "requires_restart": False,
+    },
+    "max_position_scale": {
+        "section": "Risk Management",
+        "description": "Maximum position scale multiplier (vol_multiplier upper bound)",
         "type": "float",
         "requires_restart": False,
     },
