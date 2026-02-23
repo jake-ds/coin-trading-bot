@@ -101,6 +101,23 @@ class DataStore:
                 for r in reversed(records)
             ]
 
+    async def get_available_symbols(
+        self,
+        timeframe: str = "1h",
+        min_count: int = 100,
+    ) -> list[str]:
+        """Get symbols that have at least min_count candles for the given timeframe."""
+        async with self._session_factory() as session:
+            stmt = (
+                select(OHLCVRecord.symbol)
+                .where(OHLCVRecord.timeframe == timeframe)
+                .group_by(OHLCVRecord.symbol)
+                .having(func.count() >= min_count)
+                .order_by(OHLCVRecord.symbol)
+            )
+            result = await session.execute(stmt)
+            return [row[0] for row in result.all()]
+
     # --- Trade Operations ---
 
     async def save_trade(self, order: Order) -> None:

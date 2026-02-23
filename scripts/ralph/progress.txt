@@ -1,184 +1,40 @@
 # Ralph Progress Log
-Started: 2026년 2월 23일 월요일 01시 08분 44초 KST
+Started: 2026년 2월 23일 월요일 17시 18분 03초 KST
 ---
 
 ## Codebase Patterns
-- **CostModel fees as percentages**: 0.02 means 0.02%, NOT 0.0002. Formula: `notional * (fee_pct + slippage_pct) * legs / 100`
-- **DecisionStep labels**: Use Korean (e.g., '비용 분석') with category = "evaluate"/"decide"/"execute"/"skip"
-- **Engine defaults**: Binance VIP0 spot: maker=0.02%, taker=0.04%, slippage=0.01%
-- **Pre-existing test failures (3)**: `test_defaults`, `test_main_without_validate_runs_trading_loop`, `test_main_without_args_runs_trading_loop` — these fail on main, not caused by V5 changes
-- **Test count baseline**: 2028 passing (2013 on main + 29 CostModel + 15 cost integration - 29 overlap from earlier count)
-- **Engines __init__.py**: exports must be alphabetically sorted in __all__
-- **dataclass pattern**: Use `@dataclass` from stdlib for simple data holders (CostModel, DecisionStep, EngineCycleResult)
+
+### Circular Import: research ↔ engines
+- `bot.research.base` → `bot.engines.tuner` (ParamChange) → `bot.engines.__init__` → `bot.engines.manager` → `bot.research.base` (circular!)
+- Fix: `bot.research/__init__.py` uses lazy `__getattr__` imports instead of module-level imports
+- Existing tests work only because they import engines before research (by coincidence)
+- Any new module in research/ can be imported directly (`from bot.research.data_provider import X`) without triggering the circular chain
+
+### DataStore Patterns
+- `get_candles()` returns `list[OHLCV]` (Pydantic models), sorted oldest→newest
+- `get_funding_rates()` returns `list[dict]` with keys: symbol, timestamp, funding_rate, funding_timestamp, mark_price, spot_price, spread_pct
+- New query methods: just add async methods using `self._session_factory()` context manager
+- `func.count()` from sqlalchemy for aggregate queries
+
+### Testing Patterns
+- Use `MagicMock()` for DataStore, set async methods via `AsyncMock(return_value=...)`
+- Existing 3 pre-existing test failures (not our fault): test_defaults, test_main_without_validate_runs_trading_loop, test_main_without_args_runs_trading_loop
+- Baseline: 2219 passed + 3 pre-existing failures
 
 ---
 
-## 2026-02-23 - V5-001
-- **Implemented**: CostModel — reusable trading cost calculator module
+## 2026-02-23 - V6-001
+- **Implemented**: HistoricalDataProvider — thin wrapper over DataStore for research experiments
 - **Files created**:
-  - `src/bot/engines/cost_model.py` — CostModel dataclass with round_trip_cost(), net_profit(), min_spread_for_profit(), is_profitable()
-  - `tests/engines/test_cost_model.py` — 29 comprehensive tests
+  - `src/bot/research/data_provider.py` — HistoricalDataProvider class with get_prices, get_ohlcv, get_returns, get_funding_rates, get_multi_prices, get_available_symbols
+  - `tests/research/test_data_provider.py` — 20 tests covering all methods, empty data, lookback filtering
 - **Files modified**:
-  - `src/bot/engines/__init__.py` — added CostModel to exports
-- **Tests added**: 29
+  - `src/bot/data/store.py` — Added `get_available_symbols(timeframe, min_count)` async method (DISTINCT symbol with GROUP BY HAVING)
+  - `src/bot/research/__init__.py` — Converted to lazy `__getattr__` imports to fix circular dependency; exports HistoricalDataProvider
+- **Tests**: 20 new, 2219 total passing (+ 3 pre-existing failures)
 - **Learnings for future iterations:**
-  - All fees are percentages (0.04 = 0.04%), division by 100 in cost calculation
-  - is_maker keyword-only arg for maker/taker distinction
-  - Break-even (net=0) counts as NOT profitable (strict >0 check)
----
-
-## 2026-02-23 - V5-002
-- **Implemented**: Fee-aware engine integration — all 4 engines use CostModel
-- **Files modified**:
-  - `src/bot/engines/funding_arb.py` — CostModel integration: cost DecisionStep, net PnL on close (4 legs)
-  - `src/bot/engines/grid_trading.py` — maker fee deduction per sell fill, skip unprofitable fills
-  - `src/bot/engines/cross_exchange_arb.py` — cost-based min spread (max of config vs fee-based), cost deduction in arb execution
-  - `src/bot/engines/stat_arb.py` — replaced magic 0.005 with cost-model-derived scale, cost deduction on exit
-  - `tests/engines/test_funding_arb.py` — updated test_close_position_returns_pnl for net PnL
-- **Files created**:
-  - `tests/engines/test_engine_cost_integration.py` — 15 tests covering all 4 engines
-- **Tests added**: 15
-- **Learnings for future iterations:**
-  - `decisions[-1]` pattern breaks when inserting extra DecisionSteps — save reference to the step instead
-  - Grid uses is_maker=True (limit orders), other engines use taker fees
-  - Cross-exchange arb uses `max(config_min, cost_min)` to ensure cost-based floor
-  - stat_arb PnL scale factor 0.005 = (taker_fee + slippage) / 10 = (0.04 + 0.01) / 10
-  - Cost deduction for stat_arb happens in _check_exit, not _estimate_pairs_pnl, to preserve backward compat
----
-
-## 2026-02-23 - V5-003
-- **Implemented**: Multi-pair config expansion + engine description metadata
-- **Files modified**:
-  - `src/bot/config.py` — expanded default symbols (funding: 5, grid: 3, cross: 3, stat: 2 pairs), added ENGINE_DESCRIPTIONS dict, added SETTINGS_METADATA entries for all engine config fields
-  - `src/bot/dashboard/app.py` — enriched GET /api/engines with descriptions/symbols, added GET /api/engines/{name}/params endpoint
-  - `frontend/src/api/types.ts` — added role_ko, role_en, description_ko, key_params, symbols to EngineInfo
-- **Files created**:
-  - `tests/dashboard/test_engine_api.py` — 10 tests for engine API + description metadata
-- **Tests added**: 10
-- **Learnings for future iterations:**
-  - ENGINE_DESCRIPTIONS is a static dict in config.py (not base.py) — co-located with SETTINGS_METADATA
-  - /api/engines/{name}/params dynamically reads Settings fields using SETTINGS_METADATA prefix matching
-  - Frontend types use optional fields (?) for new metadata to maintain backward compat
----
-
-## 2026-02-23 - V5-004
-- **Implemented**: Engine role cards with descriptions in frontend
-- **Files modified**:
-  - `frontend/src/pages/Engines.tsx` — added collapsible description section with role name (KR/EN), how-it-works, tracked symbols as chips, key parameters with current values, cost info. Lazy-fetches `/api/engines/{name}/params` on first expand.
-- **Tests**: Frontend builds successfully, all 1959 Python tests pass (same 3 pre-existing failures)
-- **Learnings for future iterations:**
-  - stat_arb symbols come as nested arrays (pairs) — handle both `string[]` and `string[][]` in display
-  - Use lazy param fetching to avoid unnecessary API calls until user expands the section
----
-
-## 2026-02-23 - V5-005
-- **Implemented**: EngineTracker — performance tracking and metrics
-- **Files created**:
-  - `src/bot/engines/tracker.py` — TradeRecord, EngineMetrics dataclasses + EngineTracker class with record_trade(), record_cycle(), get_metrics(), get_all_metrics(), get_pnl_history()
-  - `tests/engines/test_tracker.py` — 36 comprehensive tests covering metrics, Sharpe, drawdown, PnL history, window filtering
-- **Files modified**:
-  - `src/bot/engines/__init__.py` — added EngineTracker to exports
-- **Tests added**: 36
-- **Learnings for future iterations:**
-  - Sharpe annualization: mean/std * sqrt(365*24) assuming hourly returns
-  - Max drawdown only tracks from positive peaks (all-loss sequences have 0 drawdown)
-  - profit_factor = 0 when no losses (guard against div-by-zero, not infinity)
-  - Window filtering uses exit_time for trade age calculation
----
-
-## 2026-02-23 - V5-006
-- **Implemented**: Tracker integration + performance API endpoints
-- **Files modified**:
-  - `src/bot/engines/manager.py` — added EngineTracker instance, wired cycle callback via register(), _record_cycle_to_tracker() extracts TradeRecords from cycle results
-  - `src/bot/dashboard/app.py` — added GET /api/engines/{name}/metrics, GET /api/performance/summary, performance data in WebSocket broadcasts
-  - `frontend/src/api/types.ts` — added EngineMetrics and PerformanceSummary interfaces
-- **Files created**:
-  - `tests/engines/test_tracker_integration.py` — 11 tests for manager integration + API endpoints
-- **Tests added**: 11
-- **Learnings for future iterations:**
-  - EngineManager.register() wraps existing callback to preserve it while adding tracker recording
-  - Trade extraction from actions_taken uses common keys (pnl/profit, cost, symbol/pair)
-  - Performance summary aggregates Sharpe as simple average across engines
----
-
-## 2026-02-23 - V5-007
-- **Implemented**: Performance dashboard page
-- **Files created**:
-  - `frontend/src/pages/Performance.tsx` — metrics cards, cost analysis bar chart (recharts), capital allocation pie chart, loading/error/empty states, 10s auto-refresh
-- **Files modified**:
-  - `frontend/src/App.tsx` — added /performance route and nav link
-- **Tests**: Frontend builds successfully, all Python tests pass
-- **Learnings for future iterations:**
-  - recharts Tooltip formatter needs `value: number | undefined` type for TypeScript compatibility
-  - Removed LineChart/Line imports and pnlHistories state since PnL curve endpoint not ready yet
----
-
-## 2026-02-23 - V5-008
-- **Implemented**: ParameterTuner — automatic strategy parameter adjustment
-- **Files created**:
-  - `src/bot/engines/tuner.py` — ParamChange, TunerBounds, TUNER_CONFIG, ParameterTuner class with evaluate_and_adjust(), get_history(), apply_changes(), get_decisions()
-  - `tests/engines/test_tuner.py` — 23 tests for all adjustment scenarios, bounds, history, apply
-- **Files modified**:
-  - `src/bot/engines/__init__.py` — added ParameterTuner to exports
-- **Tests added**: 23
-- **Learnings for future iterations:**
-  - Adjustment ranges: conservative = +15%, slight conservative = +5%, aggressive = -10%
-  - "threshold" params (min_rate, entry_zscore) go UP for conservative, DOWN for aggressive
-  - "size" params (levels, lookback) go DOWN for conservative, UP for aggressive
-  - Integer params (grid_levels) rounded after adjustment
-  - 0.5 <= Sharpe < 1.0 = "steady" — no changes made
----
-
-## 2026-02-23 - V5-009
-- **Implemented**: Capital rebalance + tuner/rebalance integration in manager
-- **Files modified**:
-  - `src/bot/engines/portfolio_manager.py` — added rebalance_allocations() with Lagrange projection onto bounded simplex [0.10, 0.40]
-  - `src/bot/engines/manager.py` — added ParameterTuner instance, settings param, start_background_loops(), _tuner_loop(), _rebalance_loop(), _get_engine_params(), _rebalance_history
-  - `src/bot/config.py` — added tuner_enabled, tuner_interval_hours, engine_rebalance_enabled, engine_rebalance_interval_hours fields + SETTINGS_METADATA entries
-- **Files created**:
-  - `tests/engines/test_rebalance.py` — 15 tests for rebalance allocation, manager integration, config fields
-- **Tests added**: 15
-- **Learnings for future iterations:**
-  - [0.10, 0.40] bounds infeasible with N<3 engines (N*MAX < 1.0). Solution: dynamic effective_max = max(MAX, 1 - (N-1)*MIN)
-  - Lagrange projection (binary search for lambda in clip(y_i - lambda, min, max) summing to 1.0) is the correct algorithm for bounded simplex
-  - Single clip + normalize NEVER enforces hard max cap (needs N>=7 engines for that)
-  - EngineManager.settings is optional; _get_engine_params() reads settings fields by prefix matching engine name
----
-
-## 2026-02-23 - V5-010
-- **Implemented**: Research framework — base module, experiments, and backtest runner
-- **Files created**:
-  - `src/bot/research/__init__.py` — exports ResearchTask, ResearchReport
-  - `src/bot/research/base.py` — ResearchTask ABC with run_experiment(), apply_findings(), target_engine
-  - `src/bot/research/report.py` — ResearchReport dataclass with to_dict()
-  - `src/bot/research/backtest_runner.py` — SimpleBacktestRunner with BacktestResult
-  - `src/bot/research/experiments/__init__.py` — exports all 4 experiments
-  - `src/bot/research/experiments/volatility_regime.py` — ATR-based volatility regime detection
-  - `src/bot/research/experiments/cointegration.py` — Engle-Granger cointegration test
-  - `src/bot/research/experiments/optimal_grid.py` — grid spacing optimization via simulation
-  - `src/bot/research/experiments/funding_prediction.py` — funding rate pattern analysis
-  - `tests/research/test_research.py` — 31 tests
-- **Tests added**: 31
-- **Learnings for future iterations:**
-  - numpy bool (np.True_) is not Python True for identity checks — use bool() conversion
-  - statsmodels coint() returns numpy scalars, must convert for dict storage
-  - Each experiment generates synthetic data via np.random.default_rng(seed) for reproducibility
----
-
-## 2026-02-23 - V5-011
-- **Implemented**: Research loop integration + research dashboard + final verification
-- **Files modified**:
-  - `src/bot/engines/manager.py` — added register_experiment(), _research_loop(), _research_experiments list, _research_reports list, research_task in start_background_loops()
-  - `src/bot/dashboard/app.py` — added GET /api/research/experiments and GET /api/research/reports endpoints
-  - `src/bot/config.py` — added research_enabled, research_interval_hours fields + SETTINGS_METADATA entries
-  - `frontend/src/App.tsx` — added /research route, nav link, Research import
-- **Files created**:
-  - `frontend/src/pages/Research.tsx` — experiment cards, collapsible report cards with color-coded results, before->after param changes, 30s auto-refresh
-  - `tests/research/test_integration.py` — 10 tests for manager integration, config, and experiment serialization
-- **Tests added**: 10
-- **Final verification**: 2085 tests pass, ruff clean, frontend builds
-
-## V5 COMPLETE
-All 11 user stories (V5-001 through V5-011) implemented and passing.
-Total new tests added: ~220 (from baseline ~1865 to 2085+)
+  - research/__init__.py MUST use lazy imports — never add eager imports there
+  - _CANDLES_PER_DAY mapping handles timeframe→limit conversion (1h=24, 4h=6, 1d=1, etc.)
+  - get_multi_prices uses asyncio.gather for parallel fetching
+  - Funding rates come 3/day (8h interval), so limit = days × 3
 ---
