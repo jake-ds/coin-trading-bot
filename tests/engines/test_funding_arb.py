@@ -102,7 +102,10 @@ class TestPositionManagement:
             {"funding_rate": 0.0005, "mark_price": 50000, "spot_price": 49990},
         )
         pnl = await engine._close_position("BTC/USDT")
-        assert pnl > 0  # funding_rate * quantity * price
+        # After V5-002: PnL is net of round-trip costs (4 legs).
+        # Single funding payment (gross) is small vs cost → net is negative.
+        # Verify PnL is calculated (not zero) and position is closed.
+        assert pnl != 0.0
         assert engine.position_count == 0
 
     @pytest.mark.asyncio

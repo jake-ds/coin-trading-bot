@@ -257,6 +257,12 @@ export interface EngineInfo {
   max_positions: number
   loop_interval: number
   error: string | null
+  // V5-003: description metadata and tracked symbols
+  role_ko?: string
+  role_en?: string
+  description_ko?: string
+  key_params?: string
+  symbols?: string[] | string[][]
 }
 
 export type EnginesResponse = Record<string, EngineInfo>
@@ -296,4 +302,34 @@ export interface EngineCycleLogResponse {
 export interface EnginePositionsResponse {
   engine: string
   positions: Record<string, unknown>[]
+}
+
+// V5-006: Performance tracking types
+export interface EngineMetrics {
+  total_trades: number
+  winning_trades: number
+  losing_trades: number
+  win_rate: number
+  total_pnl: number
+  avg_profit_per_trade: number
+  sharpe_ratio: number
+  max_drawdown: number
+  profit_factor: number
+  avg_hold_time_min: number
+  cost_ratio: number
+  best_trade: number
+  worst_trade: number
+  total_cost: number
+}
+
+export interface PerformanceSummary {
+  engines: Record<string, EngineMetrics>
+  totals: {
+    total_pnl: number
+    total_trades: number
+    overall_sharpe: number
+    overall_win_rate: number
+    total_cost: number
+  }
+  window_hours: number
 }

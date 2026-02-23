@@ -139,6 +139,84 @@ class PortfolioManager:
         return self.get_global_drawdown() >= self._max_drawdown_pct
 
     # ------------------------------------------------------------------
+    # Rebalancing
+    # ------------------------------------------------------------------
+
+    def rebalance_allocations(
+        self, metrics: dict[str, object]
+    ) -> dict[str, float]:
+        """Rebalance engine allocations based on Sharpe-weighted performance.
+
+        Args:
+            metrics: dict mapping engine_name -> EngineMetrics (with sharpe_ratio attr).
+
+        Returns:
+            New allocation fractions after rebalancing.
+        """
+        if not self._engine_allocations:
+            return {}
+
+        # Compute Sharpe-weighted allocations
+        weights: dict[str, float] = {}
+        for name in self._engine_allocations:
+            m = metrics.get(name)
+            sharpe = getattr(m, "sharpe_ratio", 0.0) if m else 0.0
+            weights[name] = max(sharpe, 0.1)
+
+        # Normalize to sum to 1.0
+        total_weight = sum(weights.values())
+        if total_weight <= 0:
+            return dict(self._engine_allocations)
+
+        normalized = {k: v / total_weight for k, v in weights.items()}
+
+        # Project onto bounded simplex {x: sum=1, min<=x_i<=max}
+        MIN_ALLOC = 0.10
+        MAX_ALLOC = 0.40
+        n = len(normalized)
+
+        # Ensure feasibility: n * max >= 1.0
+        if n * MAX_ALLOC < 1.0:
+            effective_max = 1.0 - (n - 1) * MIN_ALLOC
+        else:
+            effective_max = MAX_ALLOC
+
+        keys = list(normalized.keys())
+        y = [normalized[k] for k in keys]
+
+        # Binary search for Lagrange multiplier lambda such that
+        # sum(clip(y_i - lambda, MIN, MAX)) = 1.0
+        lo = min(y) - effective_max - 1.0
+        hi = max(y) + 1.0
+        for _ in range(100):
+            mid = (lo + hi) / 2.0
+            s = sum(
+                max(MIN_ALLOC, min(effective_max, yi - mid)) for yi in y
+            )
+            if s > 1.0 + 1e-12:
+                lo = mid
+            elif s < 1.0 - 1e-12:
+                hi = mid
+            else:
+                break
+
+        lam = (lo + hi) / 2.0
+        clipped = {
+            keys[i]: max(MIN_ALLOC, min(effective_max, y[i] - lam))
+            for i in range(n)
+        }
+
+        old = dict(self._engine_allocations)
+        self._engine_allocations = clipped
+
+        logger.info(
+            "portfolio_rebalanced",
+            old_allocations=old,
+            new_allocations={k: round(v, 4) for k, v in clipped.items()},
+        )
+        return clipped
+
+    # ------------------------------------------------------------------
     # Status
     # ------------------------------------------------------------------
 

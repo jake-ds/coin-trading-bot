@@ -6,13 +6,19 @@ PortfolioManager.
 """
 
 from bot.engines.base import BaseEngine, EngineCycleResult, EngineStatus
+from bot.engines.cost_model import CostModel
 from bot.engines.manager import EngineManager
 from bot.engines.portfolio_manager import PortfolioManager
+from bot.engines.tracker import EngineTracker
+from bot.engines.tuner import ParameterTuner
 
 __all__ = [
     "BaseEngine",
+    "CostModel",
     "EngineCycleResult",
     "EngineManager",
     "EngineStatus",
+    "EngineTracker",
+    "ParameterTuner",
     "PortfolioManager",
 ]

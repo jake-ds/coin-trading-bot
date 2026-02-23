@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from bot.config import SETTINGS_METADATA
+from bot.config import ENGINE_DESCRIPTIONS, SETTINGS_METADATA
 from bot.dashboard.auth import (
     blacklist_refresh_token,
     create_access_token,
@@ -766,13 +766,33 @@ engine_router = APIRouter(
 
 @engine_router.get("")
 async def list_engines():
-    """List all engines with status."""
+    """List all engines with status, descriptions, and symbols."""
     if _engine_manager is None:
         return JSONResponse(
             status_code=503,
             content={"detail": "Engine mode not enabled"},
         )
-    return _engine_manager.get_status()
+    status = _engine_manager.get_status()
+    # Enrich with description metadata and tracked symbols
+    _symbol_map = {
+        "funding_rate_arb": "funding_arb_symbols",
+        "grid_trading": "grid_symbols",
+        "cross_exchange_arb": "cross_arb_symbols",
+        "stat_arb": "stat_arb_pairs",
+    }
+    for name, info in status.items():
+        desc = ENGINE_DESCRIPTIONS.get(name, {})
+        info["role_ko"] = desc.get("role_ko", "")
+        info["role_en"] = desc.get("role_en", "")
+        info["description_ko"] = desc.get("description_ko", "")
+        info["key_params"] = desc.get("key_params", "")
+        # Add tracked symbols from settings
+        sym_field = _symbol_map.get(name)
+        if sym_field and _settings and hasattr(_settings, sym_field):
+            info["symbols"] = getattr(_settings, sym_field)
+        else:
+            info["symbols"] = []
+    return status
 
 
 @engine_router.post("/{name}/start")
@@ -855,6 +875,43 @@ async def engine_cycle_log(name: str):
     return {"engine": name, "cycle_log": logs}
 
 
+@engine_router.get("/{name}/params")
+async def engine_params(name: str):
+    """Get engine-specific config params, description metadata, and symbols."""
+    if _engine_manager is None:
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "Engine mode not enabled"},
+        )
+    # Engine param prefix mapping
+    _prefix_map = {
+        "funding_rate_arb": "funding_arb_",
+        "grid_trading": "grid_",
+        "cross_exchange_arb": "cross_arb_",
+        "stat_arb": "stat_arb_",
+    }
+    prefix = _prefix_map.get(name)
+    if prefix is None:
+        return JSONResponse(
+            status_code=404,
+            content={"detail": f"Unknown engine: {name}"},
+        )
+
+    # Gather config params for this engine
+    params = {}
+    if _settings:
+        for field_name in type(_settings).model_fields:
+            if field_name.startswith(prefix):
+                params[field_name] = getattr(_settings, field_name, None)
+
+    desc = ENGINE_DESCRIPTIONS.get(name, {})
+    return {
+        "engine": name,
+        "description": desc,
+        "params": params,
+    }
+
+
 @engine_router.get("/{name}/positions")
 async def engine_positions(name: str):
     """Get current positions for a specific engine."""
@@ -867,7 +924,114 @@ async def engine_positions(name: str):
     return {"engine": name, "positions": positions}
 
 
+@engine_router.get("/{name}/metrics")
+async def engine_metrics(
+    name: str,
+    hours: float = Query(24, ge=0, description="Time window in hours"),
+):
+    """Get performance metrics for a specific engine."""
+    if _engine_manager is None:
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "Engine mode not enabled"},
+        )
+    metrics = _engine_manager.tracker.get_metrics(name, window_hours=hours)
+    return {"engine": name, "metrics": metrics.to_dict(), "window_hours": hours}
+
+
 app.include_router(engine_router)
+
+
+# ---------------------------------------------------------------------------
+# Performance summary endpoint
+# ---------------------------------------------------------------------------
+
+perf_router = APIRouter(
+    prefix="/api/performance", dependencies=[Depends(require_auth_strict)]
+)
+
+
+@perf_router.get("/summary")
+async def performance_summary(
+    hours: float = Query(24, ge=0, description="Time window in hours"),
+):
+    """Get aggregated performance summary across all engines."""
+    if _engine_manager is None:
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "Engine mode not enabled"},
+        )
+    all_metrics = _engine_manager.tracker.get_all_metrics(window_hours=hours)
+    engines_data = {name: m.to_dict() for name, m in all_metrics.items()}
+
+    # Compute totals
+    total_pnl = sum(m.total_pnl for m in all_metrics.values())
+    total_trades = sum(m.total_trades for m in all_metrics.values())
+    total_cost = sum(m.total_cost for m in all_metrics.values())
+    total_wins = sum(m.winning_trades for m in all_metrics.values())
+    overall_win_rate = total_wins / total_trades if total_trades > 0 else 0.0
+
+    # Overall Sharpe (simple average of per-engine Sharpes)
+    sharpes = [m.sharpe_ratio for m in all_metrics.values() if m.total_trades >= 2]
+    overall_sharpe = sum(sharpes) / len(sharpes) if sharpes else 0.0
+
+    return {
+        "engines": engines_data,
+        "totals": {
+            "total_pnl": round(total_pnl, 4),
+            "total_trades": total_trades,
+            "overall_sharpe": round(overall_sharpe, 4),
+            "overall_win_rate": round(overall_win_rate, 4),
+            "total_cost": round(total_cost, 4),
+        },
+        "window_hours": hours,
+    }
+
+
+app.include_router(perf_router)
+
+
+# ---------------------------------------------------------------------------
+# Research endpoints
+# ---------------------------------------------------------------------------
+
+research_router = APIRouter(
+    prefix="/api/research",
+    dependencies=[Depends(require_auth_strict)],
+)
+
+
+@research_router.get("/experiments")
+async def list_experiments():
+    """List registered research experiments with status."""
+    if _engine_manager is None:
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "Engine mode not enabled"},
+        )
+    experiments = []
+    for exp in _engine_manager._research_experiments:
+        experiments.append({
+            "name": exp.__class__.__name__,
+            "target_engine": exp.target_engine,
+            "status": "registered",
+        })
+    return {"experiments": experiments}
+
+
+@research_router.get("/reports")
+async def list_reports():
+    """List research reports, most recent first."""
+    if _engine_manager is None:
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "Engine mode not enabled"},
+        )
+    reports = list(reversed(_engine_manager._research_reports))
+    return {"reports": reports}
+
+
+app.include_router(research_router)
 
 
 # ---------------------------------------------------------------------------
@@ -894,6 +1058,24 @@ async def websocket_endpoint(websocket: WebSocket):
         ws_manager.disconnect(websocket)
 
 
+def _build_engine_performance_summary() -> dict:
+    """Build abbreviated per-engine performance for WebSocket broadcasts."""
+    if _engine_manager is None:
+        return {}
+    try:
+        all_metrics = _engine_manager.tracker.get_all_metrics(window_hours=24)
+        return {
+            name: {
+                "pnl": round(m.total_pnl, 4),
+                "win_rate": round(m.win_rate, 4),
+                "total_trades": m.total_trades,
+            }
+            for name, m in all_metrics.items()
+        }
+    except Exception:
+        return {}
+
+
 def _build_full_state_payload() -> dict:
     """Build a complete state payload for WebSocket broadcast."""
     cycle_log = _bot_state.get("cycle_log", [])
@@ -909,6 +1091,7 @@ def _build_full_state_payload() -> dict:
         "open_positions": _bot_state["open_positions"],
         "cycle_log_latest": cycle_log[-1] if cycle_log else None,
         "emergency": _bot_state.get("emergency", {"active": False}),
+        "engine_performance": _build_engine_performance_summary(),
     }
 
 

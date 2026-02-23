@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 import structlog
 
 from bot.engines.base import BaseEngine, DecisionStep, EngineCycleResult
+from bot.engines.cost_model import CostModel
 
 if TYPE_CHECKING:
     from bot.config import Settings
@@ -63,6 +64,8 @@ class GridTradingEngine(BaseEngine):
         self._range_atr_multiplier = s.grid_range_atr_multiplier if s else 3.0
         self._max_open_orders = s.grid_max_open_orders if s else 20
         self._symbols = list(s.grid_symbols) if s else ["BTC/USDT", "ETH/USDT"]
+
+        self._cost_model = CostModel()
 
         # Grid state per symbol: list of GridLevel
         self._grids: dict[str, list[GridLevel]] = {}
@@ -130,6 +133,8 @@ class GridTradingEngine(BaseEngine):
             filled_count = sum(1 for lvl in grid if lvl.filled)
             buy_fills = sum(1 for a in grid_actions if a.get("action") == "grid_buy_filled")
             sell_fills = sum(1 for a in grid_actions if a.get("action") == "grid_sell_filled")
+            skipped_fills = sum(1 for a in grid_actions if a.get("action") == "grid_sell_skipped")
+            total_cost = sum(a.get("cost", 0) for a in grid_actions if a.get("cost"))
 
             decisions.append(DecisionStep(
                 label=f"{symbol} 그리드 체크",
@@ -145,6 +150,20 @@ class GridTradingEngine(BaseEngine):
                 ),
                 category="execute" if buy_fills or sell_fills else "evaluate",
             ))
+
+            # Cost analysis for fills
+            if sell_fills or skipped_fills:
+                decisions.append(DecisionStep(
+                    label=f"{symbol} 비용 분석",
+                    observation=(
+                        f"매도 체결 {sell_fills}건, "
+                        f"비용초과 스킵 {skipped_fills}건, "
+                        f"총비용=${total_cost:.2f}"
+                    ),
+                    threshold="순수익 > 0",
+                    result="수익" if grid_pnl > 0 else "손실",
+                    category="evaluate",
+                ))
 
             # Check if price is outside the grid range — reset
             if self._is_outside_range(symbol, price):
@@ -250,25 +269,50 @@ class GridTradingEngine(BaseEngine):
                 # the spacing below (approximation for paper mode)
                 spacing = self._grid_spacing_pct / 100.0
                 buy_price = level.price / (1 + spacing)
-                profit = level.price - buy_price
+                gross_profit = level.price - buy_price
                 # Scale by a notional quantity (capital / max_orders / price)
                 if self._allocated_capital > 0 and level.price > 0:
                     notional_qty = (
                         self._allocated_capital / self._max_open_orders / level.price
                     )
-                    profit *= notional_qty
-                pnl += profit
+                    gross_profit *= notional_qty
+                    # Deduct maker fees (grid uses limit orders)
+                    fill_notional = notional_qty * level.price
+                    cost = self._cost_model.round_trip_cost(
+                        fill_notional, legs=2, is_maker=True,
+                    )
+                    net_profit = gross_profit - cost
+                    # Skip unprofitable fills
+                    if net_profit <= 0:
+                        actions.append({
+                            "action": "grid_sell_skipped",
+                            "symbol": symbol,
+                            "price": level.price,
+                            "gross_profit": round(gross_profit, 4),
+                            "cost": round(cost, 4),
+                            "reason": "unprofitable_after_fees",
+                        })
+                        continue
+                    pnl += net_profit
+                else:
+                    net_profit = gross_profit
+                    cost = 0.0
+                    pnl += gross_profit
                 actions.append({
                     "action": "grid_sell_filled",
                     "symbol": symbol,
                     "price": level.price,
-                    "profit": round(profit, 4),
+                    "gross_profit": round(gross_profit, 4),
+                    "cost": round(cost, 4),
+                    "profit": round(net_profit, 4),
                 })
                 logger.debug(
                     "grid_sell_filled",
                     symbol=symbol,
                     level_price=level.price,
-                    profit=round(profit, 4),
+                    gross_profit=round(gross_profit, 4),
+                    cost=round(cost, 4),
+                    net_profit=round(net_profit, 4),
                 )
 
         self._grid_pnl[symbol] = self._grid_pnl.get(symbol, 0) + pnl

@@ -9,6 +9,8 @@ import Settings from './pages/Settings'
 import CycleLog from './pages/CycleLog'
 import Engines from './pages/Engines'
 import EngineDetail from './pages/EngineDetail'
+import Performance from './pages/Performance'
+import Research from './pages/Research'
 import Login from './pages/Login'
 import ConnectionIndicator from './components/common/ConnectionIndicator'
 import ProtectedRoute from './components/common/ProtectedRoute'
@@ -20,6 +22,8 @@ import type { Trade } from './api/types'
 const navItems = [
   { path: '/', label: 'Dashboard' },
   { path: '/engines', label: 'Engines' },
+  { path: '/performance', label: 'Performance' },
+  { path: '/research', label: 'Research' },
   { path: '/positions', label: 'Positions' },
   { path: '/trades', label: 'Trades' },
   { path: '/strategies', label: 'Strategies' },
@@ -113,6 +117,8 @@ function App() {
             <Route path="/" element={<Dashboard />} />
             <Route path="/engines" element={<Engines />} />
             <Route path="/engines/:name" element={<EngineDetail />} />
+            <Route path="/performance" element={<Performance />} />
+            <Route path="/research" element={<Research />} />
             <Route path="/positions" element={<Positions />} />
             <Route path="/trades" element={<Trades />} />
             <Route path="/strategies" element={<Strategies />} />

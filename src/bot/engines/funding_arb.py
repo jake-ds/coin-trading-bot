@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any
 import structlog
 
 from bot.engines.base import BaseEngine, DecisionStep, EngineCycleResult
+from bot.engines.cost_model import CostModel
 
 if TYPE_CHECKING:
     from bot.config import Settings
@@ -55,6 +56,7 @@ class FundingRateArbEngine(BaseEngine):
         self._leverage = s.funding_arb_leverage if s else 1
         self._symbols = list(s.funding_arb_symbols) if s else ["BTC/USDT", "ETH/USDT"]
         self._funding_monitor = None
+        self._cost_model = CostModel()
 
     # ------------------------------------------------------------------
     # ABC implementation
@@ -99,7 +101,7 @@ class FundingRateArbEngine(BaseEngine):
                 "annualised_pct": ann_pct,
             })
 
-            decisions.append(DecisionStep(
+            rate_step = DecisionStep(
                 label=f"{symbol} 펀딩비 체크",
                 observation=(
                     f"펀딩비 {funding_rate:.6f} ({ann_pct:.1f}% 연환산), "
@@ -112,6 +114,19 @@ class FundingRateArbEngine(BaseEngine):
                     f"or spread > {self._max_spread_pct * 2}%"
                 ),
                 result="",  # filled below
+                category="evaluate",
+            )
+            decisions.append(rate_step)
+
+            # Cost analysis
+            position_capital = self._allocated_capital / max(self._max_positions, 1)
+            cost = self._cost_model.round_trip_cost(position_capital, legs=4)
+            expected_daily = funding_rate * position_capital * 3  # 3 periods/day
+            decisions.append(DecisionStep(
+                label="비용 분석",
+                observation=f"총비용=${cost:.2f}, 일일 예상수익=${expected_daily:.2f}",
+                threshold="일일 예상수익 > 총비용",
+                result="수익" if expected_daily > cost else "손실",
                 category="evaluate",
             ))
 
@@ -131,18 +146,18 @@ class FundingRateArbEngine(BaseEngine):
                         "reason": reason,
                         "pnl": pnl,
                     })
-                    decisions[-1].result = f"CLOSE - {reason}, PnL: {pnl:.4f}"
-                    decisions[-1].category = "execute"
+                    rate_step.result = f"CLOSE - {reason}, PnL: {pnl:.4f}"
+                    rate_step.category = "execute"
                 else:
-                    decisions[-1].result = "HOLD - 기존 포지션 유지"
-                    decisions[-1].category = "decide"
+                    rate_step.result = "HOLD - 기존 포지션 유지"
+                    rate_step.category = "decide"
                 continue
 
             # Check if we should open a new position
             if self._should_open(funding_rate, spread_pct):
                 if not self._has_capacity():
-                    decisions[-1].result = "SKIP - 기준 충족이나 포지션 한도 초과"
-                    decisions[-1].category = "skip"
+                    rate_step.result = "SKIP - 기준 충족이나 포지션 한도 초과"
+                    rate_step.category = "skip"
                     continue
                 opened = await self._open_position(symbol, rate_info)
                 if opened:
@@ -152,14 +167,14 @@ class FundingRateArbEngine(BaseEngine):
                         "funding_rate": funding_rate,
                         "annualised_pct": ann_pct,
                     })
-                    decisions[-1].result = "OPEN - 기준 충족, 델타중립 포지션 오픈"
-                    decisions[-1].category = "execute"
+                    rate_step.result = "OPEN - 기준 충족, 델타중립 포지션 오픈"
+                    rate_step.category = "execute"
                 else:
-                    decisions[-1].result = "SKIP - 포지션 오픈 실패"
-                    decisions[-1].category = "skip"
+                    rate_step.result = "SKIP - 포지션 오픈 실패"
+                    rate_step.category = "skip"
             else:
-                decisions[-1].result = "SKIP - 진입 기준 미달"
-                decisions[-1].category = "skip"
+                rate_step.result = "SKIP - 진입 기준 미달"
+                rate_step.category = "skip"
 
         return EngineCycleResult(
             engine_name=self.name,
@@ -251,13 +266,18 @@ class FundingRateArbEngine(BaseEngine):
             quantity = pos.get("quantity", 0)
             entry_price = pos.get("entry_price", 0)
             # Approximate one funding payment
-            pnl = funding_rate * quantity * entry_price
+            gross_pnl = funding_rate * quantity * entry_price
+            # Deduct round-trip trading costs (4 legs: open+close on spot+perp)
+            notional = quantity * entry_price
+            net_pnl = self._cost_model.net_profit(gross_pnl, notional, legs=4)
             logger.info(
                 "funding_arb_position_closed",
                 symbol=symbol,
-                estimated_pnl=round(pnl, 4),
+                gross_pnl=round(gross_pnl, 4),
+                cost=round(gross_pnl - net_pnl, 4),
+                net_pnl=round(net_pnl, 4),
             )
-            return pnl
+            return net_pnl
 
         return 0.0
 

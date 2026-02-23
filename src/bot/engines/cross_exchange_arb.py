@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 import structlog
 
 from bot.engines.base import BaseEngine, DecisionStep, EngineCycleResult
+from bot.engines.cost_model import CostModel
 
 if TYPE_CHECKING:
     from bot.config import Settings
@@ -51,6 +52,8 @@ class CrossExchangeArbEngine(BaseEngine):
         self._rebalance_threshold_pct = (
             s.cross_arb_rebalance_threshold_pct if s else 20.0
         )
+
+        self._cost_model = CostModel()
 
         # Inventory tracking per exchange per symbol
         self._inventory: dict[str, dict[str, float]] = {}
@@ -103,6 +106,10 @@ class CrossExchangeArbEngine(BaseEngine):
             signals.append(spread_info)
             spread_abs = abs(spread_info["spread_pct"])
 
+            # Use cost-based minimum spread (at least break-even after fees)
+            cost_min_spread = self._cost_model.min_spread_for_profit(legs=4)
+            effective_min = max(self._min_spread_pct, cost_min_spread)
+
             decisions.append(DecisionStep(
                 label=f"{symbol} 거래소간 스프레드",
                 observation=(
@@ -110,12 +117,15 @@ class CrossExchangeArbEngine(BaseEngine):
                     f"{spread_info['exchange_b']}: ${spread_info['price_b']:,.2f} | "
                     f"스프레드: {spread_info['spread_pct']:+.4f}%"
                 ),
-                threshold=f"최소 스프레드 >= {self._min_spread_pct}%",
+                threshold=(
+                    f"최소 스프레드 >= {effective_min}% "
+                    f"(비용 기반: {cost_min_spread:.2f}%)"
+                ),
                 result="",  # filled below
                 category="evaluate",
             ))
 
-            if spread_abs >= self._min_spread_pct:
+            if spread_abs >= effective_min:
                 arb_result = await self._execute_arb(symbol, spread_info)
                 if arb_result:
                     actions.append(arb_result)
@@ -132,7 +142,7 @@ class CrossExchangeArbEngine(BaseEngine):
             else:
                 decisions[-1].result = (
                     f"NO ACTION - 스프레드 {spread_abs:.4f}% < "
-                    f"최소 {self._min_spread_pct}%"
+                    f"최소 {effective_min:.2f}%"
                 )
                 decisions[-1].category = "skip"
 
@@ -214,10 +224,14 @@ class CrossExchangeArbEngine(BaseEngine):
         if quantity <= 0:
             return None
 
-        profit = (sell_price - buy_price) * quantity
+        gross_profit = (sell_price - buy_price) * quantity
+        # Deduct round-trip costs (4 legs: buy+sell on each exchange)
+        notional = self._max_position_per_symbol
+        cost = self._cost_model.round_trip_cost(notional, legs=4)
+        net_profit = gross_profit - cost
 
         if self._paper_mode:
-            self._arb_pnl += profit
+            self._arb_pnl += net_profit
             logger.info(
                 "cross_arb_executed",
                 symbol=symbol,
@@ -226,7 +240,9 @@ class CrossExchangeArbEngine(BaseEngine):
                 buy_price=buy_price,
                 sell_price=sell_price,
                 quantity=round(quantity, 6),
-                profit=round(profit, 4),
+                gross_profit=round(gross_profit, 4),
+                cost=round(cost, 4),
+                net_profit=round(net_profit, 4),
             )
             return {
                 "action": "arb_trade",
@@ -236,7 +252,9 @@ class CrossExchangeArbEngine(BaseEngine):
                 "buy_price": buy_price,
                 "sell_price": sell_price,
                 "quantity": round(quantity, 6),
-                "profit": round(profit, 4),
+                "gross_profit": round(gross_profit, 4),
+                "cost": round(cost, 4),
+                "profit": round(net_profit, 4),
                 "spread_pct": abs(spread),
             }
 

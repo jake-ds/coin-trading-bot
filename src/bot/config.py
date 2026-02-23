@@ -115,7 +115,9 @@ class Settings(BaseSettings):
     funding_arb_max_positions: int = Field(default=3, ge=1)
     funding_arb_leverage: int = Field(default=1, ge=1)
     funding_arb_symbols: list[str] = Field(
-        default_factory=lambda: ["BTC/USDT", "ETH/USDT"]
+        default_factory=lambda: [
+            "BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT", "DOGE/USDT",
+        ]
     )
 
     # Grid trading engine
@@ -125,7 +127,7 @@ class Settings(BaseSettings):
     grid_range_atr_multiplier: float = Field(default=3.0, gt=0)
     grid_max_open_orders: int = Field(default=20, ge=2)
     grid_symbols: list[str] = Field(
-        default_factory=lambda: ["BTC/USDT", "ETH/USDT"]
+        default_factory=lambda: ["BTC/USDT", "ETH/USDT", "SOL/USDT"]
     )
 
     # Cross-exchange arbitrage engine
@@ -134,20 +136,31 @@ class Settings(BaseSettings):
         default_factory=lambda: ["binance", "upbit"]
     )
     cross_arb_symbols: list[str] = Field(
-        default_factory=lambda: ["BTC/USDT", "ETH/USDT"]
+        default_factory=lambda: ["BTC/USDT", "ETH/USDT", "SOL/USDT"]
     )
     cross_arb_max_position_per_symbol: float = Field(default=1000.0, gt=0)
     cross_arb_rebalance_threshold_pct: float = Field(default=20.0, ge=0)
 
     # Statistical arbitrage engine
     stat_arb_pairs: list[list[str]] = Field(
-        default_factory=lambda: [["BTC/USDT", "ETH/USDT"]]
+        default_factory=lambda: [
+            ["BTC/USDT", "ETH/USDT"],
+            ["SOL/USDT", "ETH/USDT"],
+        ]
     )
     stat_arb_lookback: int = Field(default=100, ge=10)
     stat_arb_entry_zscore: float = Field(default=2.0, gt=0)
     stat_arb_exit_zscore: float = Field(default=0.5, ge=0)
     stat_arb_stop_zscore: float = Field(default=4.0, gt=0)
     stat_arb_min_correlation: float = Field(default=0.7, ge=0, le=1.0)
+
+    # ── Auto-tuner & rebalance ──
+    tuner_enabled: bool = True
+    tuner_interval_hours: int = Field(default=24, ge=1)
+    engine_rebalance_enabled: bool = True
+    engine_rebalance_interval_hours: int = Field(default=24, ge=1)
+    research_enabled: bool = True
+    research_interval_hours: int = Field(default=24, ge=1)
 
     # Funding rate strategy
     funding_extreme_positive_rate: float = Field(default=0.0005, ge=0)
@@ -586,6 +599,210 @@ SETTINGS_METADATA: dict[str, dict[str, Any]] = {
         "type": "select",
         "options": ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
         "requires_restart": False,
+    },
+    # Funding rate arb engine
+    "funding_arb_min_rate": {
+        "section": "Engines",
+        "description": "Minimum funding rate to enter position",
+        "type": "float",
+        "requires_restart": False,
+    },
+    "funding_arb_exit_rate": {
+        "section": "Engines",
+        "description": "Funding rate below which to exit position",
+        "type": "float",
+        "requires_restart": False,
+    },
+    "funding_arb_max_spread_pct": {
+        "section": "Engines",
+        "description": "Maximum basis spread % to enter position",
+        "type": "float",
+        "requires_restart": False,
+    },
+    "funding_arb_max_positions": {
+        "section": "Engines",
+        "description": "Maximum concurrent funding arb positions",
+        "type": "int",
+        "requires_restart": False,
+    },
+    "funding_arb_leverage": {
+        "section": "Engines",
+        "description": "Leverage for funding arb positions",
+        "type": "int",
+        "requires_restart": False,
+    },
+    "funding_arb_symbols": {
+        "section": "Engines",
+        "description": "Symbols to monitor for funding rate arbitrage",
+        "type": "list",
+        "requires_restart": True,
+    },
+    # Grid trading engine
+    "grid_levels": {
+        "section": "Engines",
+        "description": "Number of grid levels per side",
+        "type": "int",
+        "requires_restart": False,
+    },
+    "grid_spacing_pct": {
+        "section": "Engines",
+        "description": "Grid spacing as percentage between levels",
+        "type": "float",
+        "requires_restart": False,
+    },
+    "grid_auto_range": {
+        "section": "Engines",
+        "description": "Auto-adjust grid range based on volatility",
+        "type": "bool",
+        "requires_restart": False,
+    },
+    "grid_max_open_orders": {
+        "section": "Engines",
+        "description": "Maximum open grid orders",
+        "type": "int",
+        "requires_restart": False,
+    },
+    "grid_symbols": {
+        "section": "Engines",
+        "description": "Symbols for grid trading",
+        "type": "list",
+        "requires_restart": True,
+    },
+    # Cross-exchange arb engine
+    "cross_arb_min_spread_pct": {
+        "section": "Engines",
+        "description": "Minimum spread % to execute cross-exchange arb",
+        "type": "float",
+        "requires_restart": False,
+    },
+    "cross_arb_symbols": {
+        "section": "Engines",
+        "description": "Symbols for cross-exchange arbitrage",
+        "type": "list",
+        "requires_restart": True,
+    },
+    "cross_arb_max_position_per_symbol": {
+        "section": "Engines",
+        "description": "Max USDT notional per symbol for cross-exchange arb",
+        "type": "float",
+        "requires_restart": False,
+    },
+    # Stat arb engine
+    "stat_arb_pairs": {
+        "section": "Engines",
+        "description": "Symbol pairs for statistical arbitrage",
+        "type": "list",
+        "requires_restart": True,
+    },
+    "stat_arb_lookback": {
+        "section": "Engines",
+        "description": "Lookback period (candles) for z-score calculation",
+        "type": "int",
+        "requires_restart": False,
+    },
+    "stat_arb_entry_zscore": {
+        "section": "Engines",
+        "description": "Z-score threshold to enter pairs trade",
+        "type": "float",
+        "requires_restart": False,
+    },
+    "stat_arb_exit_zscore": {
+        "section": "Engines",
+        "description": "Z-score threshold to exit pairs trade (profit)",
+        "type": "float",
+        "requires_restart": False,
+    },
+    "stat_arb_stop_zscore": {
+        "section": "Engines",
+        "description": "Z-score threshold for stop-loss exit",
+        "type": "float",
+        "requires_restart": False,
+    },
+    "stat_arb_min_correlation": {
+        "section": "Engines",
+        "description": "Minimum correlation required between pairs",
+        "type": "float",
+        "requires_restart": False,
+    },
+    "tuner_enabled": {
+        "section": "Engines",
+        "description": "Enable automatic parameter tuning based on performance",
+        "type": "bool",
+        "requires_restart": False,
+    },
+    "tuner_interval_hours": {
+        "section": "Engines",
+        "description": "Hours between auto-tuner runs",
+        "type": "int",
+        "requires_restart": False,
+    },
+    "engine_rebalance_enabled": {
+        "section": "Engines",
+        "description": "Enable Sharpe-weighted capital rebalancing across engines",
+        "type": "bool",
+        "requires_restart": False,
+    },
+    "engine_rebalance_interval_hours": {
+        "section": "Engines",
+        "description": "Hours between capital rebalancing",
+        "type": "int",
+        "requires_restart": False,
+    },
+    "research_enabled": {
+        "section": "Research",
+        "description": "Enable automated research experiments",
+        "type": "bool",
+        "requires_restart": False,
+    },
+    "research_interval_hours": {
+        "section": "Research",
+        "description": "Hours between research experiment runs",
+        "type": "int",
+        "requires_restart": False,
+    },
+}
+
+
+# ---------------------------------------------------------------------------
+# Engine description metadata
+# ---------------------------------------------------------------------------
+
+ENGINE_DESCRIPTIONS: dict[str, dict[str, str]] = {
+    "funding_rate_arb": {
+        "role_ko": "델타중립 펀딩비 차익거래",
+        "role_en": "Delta-neutral funding rate arbitrage",
+        "description_ko": (
+            "선물 펀딩비가 양수일 때 현물 매수 + 선물 매도로 "
+            "시장 중립 포지션을 구성하여 펀딩비 수익을 추구합니다."
+        ),
+        "key_params": "min_rate, max_spread_pct, leverage",
+    },
+    "grid_trading": {
+        "role_ko": "그리드 자동매매",
+        "role_en": "Automated grid trading",
+        "description_ko": (
+            "현재 가격 위아래에 일정 간격으로 매수/매도 주문을 배치하여 "
+            "횡보장에서 가격 진동으로 수익을 추구합니다."
+        ),
+        "key_params": "grid_spacing_pct, grid_levels, auto_range",
+    },
+    "cross_exchange_arb": {
+        "role_ko": "거래소간 차익거래",
+        "role_en": "Cross-exchange spot arbitrage",
+        "description_ko": (
+            "동일 심볼의 거래소 간 가격 차이를 감시하여, "
+            "스프레드가 비용을 초과할 때 동시 매수/매도로 차익을 실현합니다."
+        ),
+        "key_params": "min_spread_pct, max_position_per_symbol",
+    },
+    "stat_arb": {
+        "role_ko": "통계적 차익거래",
+        "role_en": "Statistical pairs arbitrage",
+        "description_ko": (
+            "상관관계가 높은 자산 쌍의 가격 비율 Z-Score를 추적하여, "
+            "평균 회귀를 이용한 롱/숏 페어트레이딩을 수행합니다."
+        ),
+        "key_params": "entry_zscore, exit_zscore, lookback, min_correlation",
     },
 }
 

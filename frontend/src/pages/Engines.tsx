@@ -10,11 +10,120 @@ const statusColors: Record<string, string> = {
   error: 'bg-red-500',
 }
 
+/** Chevron that rotates when expanded */
+function ChevronIcon({ expanded }: { expanded: boolean }) {
+  return (
+    <svg
+      className={`w-4 h-4 text-gray-400 transition-transform ${expanded ? 'rotate-90' : ''}`}
+      fill="none"
+      viewBox="0 0 24 24"
+      stroke="currentColor"
+      strokeWidth={2}
+    >
+      <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+    </svg>
+  )
+}
+
+/** Collapsible description section for an engine card */
+function EngineDescription({
+  engine,
+  params,
+}: {
+  engine: EngineInfo
+  params: Record<string, unknown> | null
+}) {
+  const hasDescription = engine.role_ko || engine.description_ko
+
+  if (!hasDescription) return null
+
+  return (
+    <div className="space-y-3 text-sm">
+      {/* Role name + English explanation */}
+      <div>
+        {engine.role_ko && (
+          <p className="font-semibold text-gray-100">{engine.role_ko}</p>
+        )}
+        {engine.role_en && (
+          <p className="text-gray-400 text-xs">{engine.role_en}</p>
+        )}
+      </div>
+
+      {/* How it works */}
+      {engine.description_ko && (
+        <p className="text-gray-400 text-xs leading-relaxed">
+          {engine.description_ko}
+        </p>
+      )}
+
+      {/* Tracked Symbols */}
+      {engine.symbols && engine.symbols.length > 0 && (
+        <div>
+          <p className="text-xs text-gray-500 mb-1.5">Tracked Symbols</p>
+          <div className="flex flex-wrap gap-1.5">
+            {engine.symbols.map((sym, i) => {
+              const label = Array.isArray(sym) ? sym.join(' / ') : sym
+              return (
+                <span
+                  key={i}
+                  className="text-xs px-2 py-0.5 rounded-full bg-gray-700 text-gray-300"
+                >
+                  {label}
+                </span>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Key Parameters */}
+      {params && Object.keys(params).length > 0 && (
+        <div>
+          <p className="text-xs text-gray-500 mb-1.5">Key Parameters</p>
+          <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+            {Object.entries(params).map(([key, value]) => (
+              <div key={key} className="flex justify-between text-xs">
+                <span className="text-gray-400 truncate">{key}</span>
+                <span className="font-mono text-gray-200 ml-2">
+                  {formatParamValue(value)}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Cost info */}
+      {engine.key_params && (
+        <div className="text-xs text-gray-500">
+          <span>Key: </span>
+          <span className="text-gray-400">{engine.key_params}</span>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function formatParamValue(value: unknown): string {
+  if (Array.isArray(value)) {
+    if (value.length <= 3) return value.join(', ')
+    return `${value.slice(0, 2).join(', ')}... (${value.length})`
+  }
+  if (typeof value === 'number') {
+    return value % 1 === 0 ? String(value) : value.toFixed(4)
+  }
+  return String(value)
+}
+
 function Engines() {
   const [engines, setEngines] = useState<Record<string, EngineInfo>>({})
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [actionLoading, setActionLoading] = useState<string | null>(null)
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({})
+  const [engineParams, setEngineParams] = useState<
+    Record<string, Record<string, unknown>>
+  >({})
 
   const fetchEngines = useCallback(async () => {
     try {
@@ -42,6 +151,31 @@ function Engines() {
     const interval = setInterval(fetchEngines, 5000)
     return () => clearInterval(interval)
   }, [fetchEngines])
+
+  // Fetch params when an engine is expanded
+  const toggleExpand = useCallback(
+    async (name: string) => {
+      setExpanded((prev) => {
+        const next = { ...prev, [name]: !prev[name] }
+        // Fetch params on first expand
+        if (next[name] && !engineParams[name]) {
+          apiClient
+            .get(`/engines/${name}/params`)
+            .then((res) => {
+              setEngineParams((prev) => ({
+                ...prev,
+                [name]: res.data.params || {},
+              }))
+            })
+            .catch(() => {
+              // Params not available — OK
+            })
+        }
+        return next
+      })
+    },
+    [engineParams],
+  )
 
   const handleAction = async (name: string, action: string) => {
     setActionLoading(`${name}-${action}`)
@@ -105,7 +239,28 @@ function Engines() {
                 </span>
               </div>
 
-              <p className="text-sm text-gray-400 mb-4">{engine.description}</p>
+              <p className="text-sm text-gray-400 mb-3">{engine.description}</p>
+
+              {/* Collapsible description section */}
+              {(engine.role_ko || engine.description_ko) && (
+                <div className="mb-4">
+                  <button
+                    onClick={() => toggleExpand(engine.name)}
+                    className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-gray-200 transition-colors mb-2"
+                  >
+                    <ChevronIcon expanded={!!expanded[engine.name]} />
+                    <span>Details</span>
+                  </button>
+                  {expanded[engine.name] && (
+                    <div className="bg-gray-900/50 rounded p-3 border border-gray-700/50">
+                      <EngineDescription
+                        engine={engine}
+                        params={engineParams[engine.name] || null}
+                      />
+                    </div>
+                  )}
+                </div>
+              )}
 
               <div className="grid grid-cols-2 gap-3 text-sm mb-4">
                 <div>
