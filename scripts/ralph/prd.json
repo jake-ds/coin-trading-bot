@@ -210,7 +210,7 @@
         "All existing tests pass, ruff check passes"
       ],
       "priority": 9,
-      "passes": false,
+      "passes": true,
       "notes": "EngineTracker._trades 데이터를 API로 노출. CSV export는 서버에서 text/csv 응답 생성. 프론트엔드의 CSV 다운로드는 Blob + URL.createObjectURL 패턴 사용. 기존 Trades 페이지는 유지하고, TradeExplorer는 추가 페이지."
     },
     {

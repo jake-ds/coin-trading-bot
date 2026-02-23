@@ -1101,6 +1101,148 @@ app.include_router(risk_router)
 
 
 # ---------------------------------------------------------------------------
+# Trade detail / explorer endpoints
+# ---------------------------------------------------------------------------
+
+trades_detail_router = APIRouter(
+    prefix="/api/trades",
+    dependencies=[Depends(require_auth_strict)],
+)
+
+
+@trades_detail_router.get("/detail")
+async def get_trade_detail(
+    engine: str | None = None,
+    symbol: str | None = None,
+    start: str | None = None,
+    end: str | None = None,
+    win_only: bool | None = None,
+    limit: int = 20,
+    offset: int = 0,
+):
+    """Get detailed trade records from EngineTracker with filtering."""
+    if _engine_manager is None:
+        return {"trades": [], "total": 0, "limit": limit, "offset": offset}
+
+    all_trades = _collect_tracker_trades(engine, symbol, start, end, win_only)
+    total = len(all_trades)
+    page_trades = all_trades[offset: offset + limit]
+
+    return {
+        "trades": page_trades,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+@trades_detail_router.get("/export")
+async def export_trades(
+    format: str = "csv",
+    engine: str | None = None,
+    symbol: str | None = None,
+    start: str | None = None,
+    end: str | None = None,
+):
+    """Export trade records as CSV."""
+    from fastapi.responses import Response
+
+    if _engine_manager is None:
+        return Response(content="", media_type="text/csv")
+
+    all_trades = _collect_tracker_trades(engine, symbol, start, end, None)
+
+    header = (
+        "timestamp,engine,symbol,side,entry_price,exit_price,"
+        "quantity,gross_pnl,cost,net_pnl,hold_time"
+    )
+    rows = [header]
+    for t in all_trades:
+        hold_secs = t.get("hold_time_seconds", 0)
+        hold_str = _format_hold_time(hold_secs)
+        rows.append(
+            f"{t.get('exit_time', '')},{t.get('engine_name', '')},"
+            f"{t.get('symbol', '')},{t.get('side', '')},"
+            f"{t.get('entry_price', 0)},{t.get('exit_price', 0)},"
+            f"{t.get('quantity', 0)},{t.get('pnl', 0)},"
+            f"{t.get('cost', 0)},{t.get('net_pnl', 0)},{hold_str}"
+        )
+    csv_content = "\n".join(rows)
+    return Response(
+        content=csv_content,
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=trades.csv"},
+    )
+
+
+def _collect_tracker_trades(
+    engine: str | None,
+    symbol: str | None,
+    start: str | None,
+    end: str | None,
+    win_only: bool | None,
+) -> list[dict]:
+    """Gather and filter trade records from EngineTracker."""
+    if _engine_manager is None:
+        return []
+
+    tracker = _engine_manager.tracker
+    result: list[dict] = []
+
+    engines = [engine] if engine else list(tracker._trades.keys())
+
+    for eng_name in engines:
+        trades = tracker._trades.get(eng_name, [])
+        for t in trades:
+            trade_dict = {
+                "engine_name": t.engine_name,
+                "symbol": t.symbol,
+                "side": t.side,
+                "entry_price": t.entry_price,
+                "exit_price": t.exit_price,
+                "quantity": t.quantity,
+                "pnl": round(t.pnl, 4),
+                "cost": round(t.cost, 4),
+                "net_pnl": round(t.net_pnl, 4),
+                "entry_time": t.entry_time,
+                "exit_time": t.exit_time,
+                "hold_time_seconds": t.hold_time_seconds,
+            }
+
+            # Apply filters
+            if symbol and t.symbol != symbol:
+                continue
+            if start and t.exit_time < start:
+                continue
+            if end and t.exit_time > end:
+                continue
+            if win_only is True and t.net_pnl <= 0:
+                continue
+            if win_only is False and t.net_pnl >= 0:
+                continue
+
+            result.append(trade_dict)
+
+    # Sort by exit_time descending (newest first)
+    result.sort(key=lambda x: x.get("exit_time", ""), reverse=True)
+    return result
+
+
+def _format_hold_time(seconds: float) -> str:
+    """Format hold time in seconds to human-readable 'Xh Ym' format."""
+    if seconds <= 0:
+        return "0m"
+    hours = int(seconds // 3600)
+    minutes = int((seconds % 3600) // 60)
+    if hours > 0:
+        return f"{hours}h {minutes}m"
+    return f"{minutes}m"
+
+
+app.include_router(trades_detail_router)
+
+
+# ---------------------------------------------------------------------------
 # Scanner / opportunity discovery endpoints
 # ---------------------------------------------------------------------------
 

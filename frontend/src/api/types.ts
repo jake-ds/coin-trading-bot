@@ -334,6 +334,29 @@ export interface PerformanceSummary {
   window_hours: number
 }
 
+// Trade Explorer types (V6-009)
+export interface TradeDetail {
+  engine_name: string
+  symbol: string
+  side: string
+  entry_price: number
+  exit_price: number
+  quantity: number
+  pnl: number       // gross
+  cost: number
+  net_pnl: number
+  entry_time: string
+  exit_time: string
+  hold_time_seconds: number
+}
+
+export interface TradeDetailResponse {
+  trades: TradeDetail[]
+  total: number
+  limit: number
+  offset: number
+}
+
 // Scanner / Opportunity types
 export type OpportunityTypeName = 'funding_rate' | 'volatility' | 'cross_exchange_spread' | 'correlation'
 

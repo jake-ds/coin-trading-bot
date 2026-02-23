@@ -277,3 +277,36 @@ Started: 2026년 2월 23일 월요일 17시 18분 03초 KST
   - Engine tests with MagicMock portfolio manager need `request_capital.return_value` and `get_max_allocation.return_value`
   - pytest-asyncio is needed for async test methods in full suite (event loop issue with `asyncio.get_event_loop()`)
 ---
+
+### Trade Explorer / Dashboard API Patterns
+- `trades_detail_router` uses `require_auth_strict` dependency for auth
+- `_collect_tracker_trades()` shared helper gathers from `tracker._trades` (dict of engine→list[TradeRecord])
+- Filters: engine (exact match), symbol (exact match), start/end (ISO string comparison on exit_time), win_only (True=wins, False=losses, None=all)
+- Results sorted by exit_time descending (newest first), paginated by limit/offset
+- CSV export via `fastapi.responses.Response(content=csv, media_type="text/csv")` with Content-Disposition header
+- `_format_hold_time(seconds)` → "Xh Ym" or "Ym" format
+- Frontend: `apiClient.get('/trades/export', { params, responseType: 'blob' })` + Blob + URL.createObjectURL for download
+- TradeExplorer uses client-side sorting (sortField/sortDir) on server-paginated data
+- PnL waterfall chart uses recharts BarChart with Cell components for per-bar colors
+- `set_engine_manager(mgr)` function allows tests to inject mock EngineManager
+
+---
+
+## 2026-02-23 - V6-009
+- **Implemented**: Trade Explorer page — individual trade detail analysis with filtering, PnL breakdown, CSV export
+- **Files created**:
+  - `frontend/src/pages/TradeExplorer.tsx` — Full Trade Explorer component with trade table (sorting/filtering/pagination), expandable detail panel (PnL waterfall chart, same-symbol history), CSV export
+  - `tests/dashboard/test_trade_detail_api.py` — 17 tests: TestTradeDetail (no_manager, all_trades, filter_by_engine, filter_by_symbol, filter_win/loss, pagination, date_range, trade_fields), TestTradeExport (no_manager, csv_format, csv_filter, csv_content_type), TestFormatHoldTime (zero, minutes, hours_and_minutes, negative)
+- **Files modified**:
+  - `src/bot/dashboard/app.py` — Added trades_detail_router with GET /api/trades/detail (filtering + pagination) and GET /api/trades/export (CSV). Added _collect_tracker_trades() helper and _format_hold_time() helper
+  - `frontend/src/api/types.ts` — Added TradeDetail and TradeDetailResponse interfaces
+  - `frontend/src/App.tsx` — Added TradeExplorer import, /trade-explorer nav item, and Route
+  - `scripts/ralph/prd.json` — Marked V6-009 passes: true
+- **Tests**: 17 new, 2500 total passing (+ 3 pre-existing failures)
+- **Learnings for future iterations:**
+  - `_collect_tracker_trades()` builds trade dicts from TradeRecord dataclass — not Pydantic, so manual dict construction
+  - CSV export uses inline `from fastapi.responses import Response` to avoid import pollution
+  - Client-side sorting on already-paginated data (20 items per page) is efficient enough
+  - PnL waterfall uses negative cost value (`-Math.abs(cost)`) for visual clarity
+  - `set_engine_manager()` is essential for test injection — called from tests directly
+---

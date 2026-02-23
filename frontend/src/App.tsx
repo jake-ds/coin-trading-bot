@@ -12,6 +12,7 @@ import EngineDetail from './pages/EngineDetail'
 import Performance from './pages/Performance'
 import Research from './pages/Research'
 import Scanner from './pages/Scanner'
+import TradeExplorer from './pages/TradeExplorer'
 import Login from './pages/Login'
 import ConnectionIndicator from './components/common/ConnectionIndicator'
 import ProtectedRoute from './components/common/ProtectedRoute'
@@ -28,6 +29,7 @@ const navItems = [
   { path: '/scanner', label: 'Scanner' },
   { path: '/positions', label: 'Positions' },
   { path: '/trades', label: 'Trades' },
+  { path: '/trade-explorer', label: 'Explorer' },
   { path: '/strategies', label: 'Strategies' },
   { path: '/analytics', label: 'Analytics' },
   { path: '/cycle-log', label: 'Cycle Log' },
@@ -124,6 +126,7 @@ function App() {
             <Route path="/scanner" element={<Scanner />} />
             <Route path="/positions" element={<Positions />} />
             <Route path="/trades" element={<Trades />} />
+            <Route path="/trade-explorer" element={<TradeExplorer />} />
             <Route path="/strategies" element={<Strategies />} />
             <Route path="/analytics" element={<Analytics />} />
             <Route path="/cycle-log" element={<CycleLog />} />
