@@ -54,6 +54,9 @@ class EngineManager:
         self._snapshot_task: asyncio.Task | None = None
         self._regime_detector = None
         self._regime_task: asyncio.Task | None = None
+        self._circuit_breaker_active: bool = False
+        self._circuit_breaker_paused_engines: set[str] = set()
+        self._circuit_breaker_task: asyncio.Task | None = None
 
     def set_collector(self, collector) -> None:
         """Set the DataCollector for backfill background loop."""
@@ -275,6 +278,14 @@ class EngineManager:
             self._regime_task = asyncio.create_task(
                 self._regime_detector._detection_loop(interval_s),
                 name="regime-detection-loop",
+            )
+        if (
+            self._regime_detector is not None
+            and getattr(s, "regime_adaptation_enabled", True)
+        ):
+            self._circuit_breaker_task = asyncio.create_task(
+                self._circuit_breaker_loop(),
+                name="circuit-breaker-loop",
             )
 
     async def _tuner_loop(self) -> None:
@@ -503,6 +514,72 @@ class EngineManager:
                 })
             engine_positions[name] = positions
         self._correlation_controller.update_positions(engine_positions)
+
+    # ------------------------------------------------------------------
+    # Circuit breaker
+    # ------------------------------------------------------------------
+
+    async def _circuit_breaker_check(self) -> None:
+        """Check if CRISIS regime warrants pausing all engines.
+
+        Triggers when CRISIS has been active for >= crisis_circuit_breaker_minutes.
+        Releases when regime is no longer CRISIS.
+        """
+        if self._regime_detector is None:
+            return
+        s = self._settings
+        if s and not getattr(s, "regime_adaptation_enabled", True):
+            return
+
+        threshold_min = (
+            getattr(s, "crisis_circuit_breaker_minutes", 30.0)
+            if s
+            else 30.0
+        )
+
+        if self._regime_detector.is_crisis():
+            duration = self._regime_detector.get_regime_duration()
+            if duration >= threshold_min and not self._circuit_breaker_active:
+                # Trigger circuit breaker — pause all running engines
+                self._circuit_breaker_active = True
+                self._circuit_breaker_paused_engines.clear()
+                for name, engine in self._engines.items():
+                    if engine.status.value == "running":
+                        await engine.pause()
+                        self._circuit_breaker_paused_engines.add(name)
+                logger.warning(
+                    "circuit_breaker_triggered",
+                    regime="CRISIS",
+                    duration_minutes=round(duration, 1),
+                    paused_engines=sorted(
+                        self._circuit_breaker_paused_engines,
+                    ),
+                )
+        else:
+            if self._circuit_breaker_active:
+                # CRISIS resolved — resume previously paused engines
+                resumed = []
+                for name in list(self._circuit_breaker_paused_engines):
+                    engine = self._engines.get(name)
+                    if engine and engine.status.value == "paused":
+                        await engine.resume()
+                        resumed.append(name)
+                logger.info(
+                    "circuit_breaker_released",
+                    resumed_engines=sorted(resumed),
+                )
+                self._circuit_breaker_active = False
+                self._circuit_breaker_paused_engines.clear()
+
+    async def _circuit_breaker_loop(self) -> None:
+        """Periodically check circuit breaker condition (every 60 seconds)."""
+        await asyncio.sleep(60)  # Initial delay
+        while True:
+            try:
+                await self._circuit_breaker_check()
+            except Exception as e:
+                logger.error("circuit_breaker_loop_error", error=str(e))
+            await asyncio.sleep(60)
 
     def _get_engine_params(self, engine_name: str) -> dict:
         """Read current engine-specific params from settings."""

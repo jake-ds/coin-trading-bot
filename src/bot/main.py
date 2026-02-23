@@ -654,6 +654,13 @@ class TradingBot:
                 crisis_threshold=crisis_thresh,
             )
             self._engine_manager.set_regime_detector(detector)
+            # Wire regime detector to each engine for threshold/size adaptation
+            for engine in self._engine_manager.engines.values():
+                if (
+                    hasattr(engine, "set_regime_detector")
+                    and engine.name != "token_scanner"
+                ):
+                    engine.set_regime_detector(detector)
 
         logger.info(
             "engine_mode_initialized",

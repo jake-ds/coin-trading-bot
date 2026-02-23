@@ -475,3 +475,33 @@ Started: 2026년 2월 23일 월요일 17시 18분 03초 KST
   - Stat arb pair exit test needs correlated non-constant prices (constant ratio → std=0 → NaN z-score → skip)
   - `Any` type hint for `_regime_detector` avoids import from risk package (circular import prevention)
   - Long Korean strings must be split into concatenated lines for ruff E501 (100 char limit)
+
+### Circuit Breaker Patterns
+- `EngineManager._circuit_breaker_check()` — checks `regime_detector.is_crisis()` + `get_regime_duration()` vs threshold
+- `_circuit_breaker_active: bool` tracks if breaker is currently engaged
+- `_circuit_breaker_paused_engines: set[str]` tracks which engines were paused by the breaker (to resume only those)
+- Only pauses engines with status "running" (skips already paused/stopped/error)
+- Only resumes engines with status "paused" (don't resume stopped engines)
+- `_circuit_breaker_loop()` runs every 60 seconds with 60s initial delay
+- Config: `regime_adaptation_enabled: bool = True`, `crisis_circuit_breaker_minutes: float = 30.0`
+- When `regime_adaptation_enabled=False` → circuit breaker is no-op
+- When `_regime_detector=None` → circuit breaker is no-op
+- `start_background_loops()` starts circuit breaker loop when `regime_adaptation_enabled=True` and detector is set
+- main.py wires `set_regime_detector(detector)` to each engine (except token_scanner) for V6-015 regime adaptation
+---
+
+## 2026-02-24 - V6-016
+- **Implemented**: Circuit breaker + main.py regime detector wiring to engines
+- **Files created**:
+  - `tests/engines/test_circuit_breaker.py` — 19 tests: CircuitBreakerCheck (11: no_det/disabled/below_thresh/at_thresh/above_thresh/no_double/crisis_resolved/resume_paused_only/not_crisis_noop/full_cycle/no_settings), CircuitBreakerLoop (2: calls_check/handles_exception), StartBackgroundLoops (3: starts_when_enabled/disabled/no_detector), Config (2: defaults/metadata), MainWiring (1: regime_det_wired)
+- **Files modified**:
+  - `src/bot/engines/manager.py` — Added `_circuit_breaker_active`, `_circuit_breaker_paused_engines`, `_circuit_breaker_task`, `_circuit_breaker_check()`, `_circuit_breaker_loop()`. Updated `start_background_loops()` to start circuit breaker loop
+  - `src/bot/config.py` — Added `regime_adaptation_enabled: bool = True`, `crisis_circuit_breaker_minutes: float = 30.0` + SETTINGS_METADATA entries
+  - `src/bot/main.py` — Added `set_regime_detector(detector)` wiring to each engine (except token_scanner) in `_init_engine_mode()`
+  - `scripts/ralph/prd.json` — Marked V6-016 passes: true
+- **Tests**: 19 new, 2615 total passing (+ 3 pre-existing failures)
+- **Learnings for future iterations:**
+  - Circuit breaker tracks which engines it paused to avoid resuming engines paused by other mechanisms
+  - `engine.status.value` comparison works for mock and real EngineStatus enum
+  - WebSocket tests (`test_v4_014_integration`, `test_websocket`) hang on event loop — pre-existing, exclude with `--ignore` for faster runs
+  - `asyncio.CancelledError` pattern used in loop tests (same as other _loop tests)

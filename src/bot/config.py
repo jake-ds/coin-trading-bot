@@ -186,6 +186,8 @@ class Settings(BaseSettings):
     regime_detection_enabled: bool = True
     regime_crisis_threshold: float = Field(default=2.5, gt=0)
     regime_detection_interval_seconds: float = Field(default=300.0, gt=0)
+    regime_adaptation_enabled: bool = True
+    crisis_circuit_breaker_minutes: float = Field(default=30.0, gt=0)
 
     # ── Data backfill ──
     data_backfill_enabled: bool = True
@@ -950,6 +952,18 @@ SETTINGS_METADATA: dict[str, dict[str, Any]] = {
         "description": "Seconds between regime detection checks",
         "type": "float",
         "requires_restart": True,
+    },
+    "regime_adaptation_enabled": {
+        "section": "Market Regime",
+        "description": "Enable engine regime adaptation and circuit breaker",
+        "type": "bool",
+        "requires_restart": False,
+    },
+    "crisis_circuit_breaker_minutes": {
+        "section": "Market Regime",
+        "description": "Minutes of CRISIS regime before circuit breaker pauses all engines",
+        "type": "float",
+        "requires_restart": False,
     },
     # Data Collection (backfill)
     "data_backfill_enabled": {

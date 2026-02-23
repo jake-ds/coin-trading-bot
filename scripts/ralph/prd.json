@@ -369,7 +369,7 @@
         "All existing tests pass, ruff check passes"
       ],
       "priority": 16,
-      "passes": false,
+      "passes": true,
       "notes": "서킷 브레이커는 EngineManager의 background task. pause()는 BaseEngine에 이미 있음."
     },
     {
