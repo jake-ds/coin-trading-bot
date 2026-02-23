@@ -84,6 +84,31 @@ class FundingRateArbEngine(BaseEngine):
         decisions: list[DecisionStep] = []
         pnl_update = 0.0
 
+        # Regime adaptation
+        regime_adj = self._get_regime_adjustments()
+        regime_label = "NORMAL"
+        if self._regime_detector:
+            regime_label = self._regime_detector.get_current_regime().value
+        t_mult = regime_adj["threshold_mult"]
+        s_mult = regime_adj["size_mult"]
+        regime_result = "정상 운영"
+        if regime_label == "HIGH":
+            regime_result = "보수적 모드 적용"
+        elif regime_label == "CRISIS":
+            regime_result = "위기 모드 — 신규 진입 중단"
+        decisions.append(DecisionStep(
+            label="시장 레짐",
+            observation=f"현재: {regime_label}, "
+                        f"threshold×{t_mult:.1f}, size×{s_mult:.1f}",
+            threshold="LOW: t×0.8/s×1.2, NORMAL: t×1.0/s×1.0, "
+                      "HIGH: t×1.3/s×0.7, CRISIS: 진입 중단",
+            result=regime_result,
+            category="evaluate",
+        ))
+
+        effective_min_rate = self._min_funding_rate * regime_adj["threshold_mult"]
+        is_crisis = regime_label == "CRISIS"
+
         # Build symbol list: static config + dynamic from registry
         symbols = list(self._symbols)
         if self._registry:
@@ -170,7 +195,12 @@ class FundingRateArbEngine(BaseEngine):
                 continue
 
             # Check if we should open a new position
-            if self._should_open(funding_rate, spread_pct):
+            if is_crisis:
+                rate_step.result = "SKIP - CRISIS 레짐, 신규 진입 중단"
+                rate_step.category = "skip"
+                continue
+
+            if self._should_open_with_threshold(funding_rate, spread_pct, effective_min_rate):
                 if not self._has_capacity(symbol):
                     rate_step.result = "SKIP - 기준 충족이나 포지션 한도 초과"
                     rate_step.category = "skip"
@@ -235,6 +265,16 @@ class FundingRateArbEngine(BaseEngine):
     def _should_open(self, funding_rate: float, spread_pct: float) -> bool:
         """Decide whether to open a new delta-neutral position."""
         if funding_rate < self._min_funding_rate:
+            return False
+        if abs(spread_pct) > self._max_spread_pct:
+            return False
+        return True
+
+    def _should_open_with_threshold(
+        self, funding_rate: float, spread_pct: float, min_rate: float
+    ) -> bool:
+        """Decide whether to open, using a regime-adjusted min rate."""
+        if funding_rate < min_rate:
             return False
         if abs(spread_pct) > self._max_spread_pct:
             return False

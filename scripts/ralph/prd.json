@@ -351,7 +351,7 @@
         "All existing tests pass, ruff check passes"
       ],
       "priority": 15,
-      "passes": false,
+      "passes": true,
       "notes": "detector=None이면 기존과 100% 동일 동작. threshold_mult=999는 사실상 진입 불가. 기존 엔진 테스트 깨지지 않게 주의."
     },
     {

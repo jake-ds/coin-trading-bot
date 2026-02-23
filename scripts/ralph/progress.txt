@@ -443,3 +443,35 @@ Started: 2026년 2월 23일 월요일 17시 18분 03초 KST
   - LineChart `connectNulls` prop handles sparse time-series (not all engines have same timestamps)
   - `Promise.allSettled()` required for parallel fetch with graceful degradation
   - Compare endpoint: `valid_metrics` dict maps user-friendly names to DB column names
+
+### Engine Regime Adaptation Patterns
+- `BaseEngine._regime_detector: Any | None = None` + `set_regime_detector(detector)` — same pattern as dynamic_sizer
+- `_get_regime_adjustments()` returns `{threshold_mult, size_mult}` dict based on current regime
+- Adjustments: LOW={0.8, 1.2}, NORMAL={1.0, 1.0}, HIGH={1.3, 0.7}, CRISIS={999.0, 0.0}
+- Each engine starts `_run_cycle()` with regime DecisionStep (Korean label "시장 레짐")
+- CRISIS skip: check `is_crisis` flag before new entry logic; existing positions still managed
+- Threshold application: funding_arb→min_rate, grid→spacing_pct, cross_arb→min_spread, stat_arb→entry_zscore
+- `_should_open_with_threshold(rate, spread, min_rate)` — separate method to avoid modifying original `_should_open`
+- `_check_entry(entry_zscore_override=None)` — optional param for regime-adjusted z-score threshold
+- `_init_grid(spacing_override=None)` — optional param for regime-adjusted grid spacing
+- Line length: break long Korean observation/threshold strings into concatenated f-strings
+---
+
+## 2026-02-24 - V6-015
+- **Implemented**: BaseEngine regime adaptation interface + 4 engine regime-based threshold/size adjustment
+- **Files created**:
+  - `tests/engines/test_regime_adaptation.py` — 42 tests: _get_regime_adjustments (6: no_det/LOW/NORMAL/HIGH/CRISIS/set_det), FundingArb (8: normal_open/high_raise/high_open_exceed/crisis_skip/crisis_close/low_lower/no_det/decision_step), GridTrading (6: normal_grid/high_wider/crisis_skip/crisis_existing/low_tighter/decision_step), CrossExchangeArb (5: normal/high/crisis/no_det/decision_step), StatArb (7: normal_entry/high_raise/crisis_skip/crisis_exit/no_det/decision_step/low_lower), GridSpacingOverride (2), ShouldOpenWithThreshold (4), CheckEntryOverride (4)
+- **Files modified**:
+  - `src/bot/engines/base.py` — Added `_regime_detector: Any | None = None`, `set_regime_detector()`, `_get_regime_adjustments()` with 4-regime lookup
+  - `src/bot/engines/funding_arb.py` — Added regime DecisionStep, `effective_min_rate`, CRISIS skip before open, `_should_open_with_threshold()` method
+  - `src/bot/engines/grid_trading.py` — Added regime DecisionStep, `effective_spacing`, CRISIS skip for new grids, `_init_grid(spacing_override=)` param
+  - `src/bot/engines/cross_exchange_arb.py` — Added regime DecisionStep, `effective_min_spread` (replaces `self._min_spread_pct` in `max()`), CRISIS skip
+  - `src/bot/engines/stat_arb.py` — Added regime DecisionStep, `effective_entry_zscore`, CRISIS skip, `_check_entry(entry_zscore_override=)` param
+  - `scripts/ralph/prd.json` — Marked V6-015 passes: true
+- **Tests**: 42 new, 2067+ non-dashboard passing (+ 3 pre-existing failures)
+- **Learnings for future iterations:**
+  - `_update_price_cache()` in stat_arb adds prices from mock exchange, corrupting seeded test data — mock it out with AsyncMock()
+  - For z-score tests: 9 identical + 1 outlier always gives z=3.0 — use varied data for intermediate z-scores
+  - Stat arb pair exit test needs correlated non-constant prices (constant ratio → std=0 → NaN z-score → skip)
+  - `Any` type hint for `_regime_detector` avoids import from risk package (circular import prevention)
+  - Long Korean strings must be split into concatenated lines for ruff E501 (100 char limit)

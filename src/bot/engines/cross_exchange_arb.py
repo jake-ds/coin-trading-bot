@@ -80,6 +80,31 @@ class CrossExchangeArbEngine(BaseEngine):
         decisions: list[DecisionStep] = []
         pnl_update = 0.0
 
+        # Regime adaptation
+        regime_adj = self._get_regime_adjustments()
+        regime_label = "NORMAL"
+        if self._regime_detector:
+            regime_label = self._regime_detector.get_current_regime().value
+        t_mult = regime_adj["threshold_mult"]
+        s_mult = regime_adj["size_mult"]
+        regime_result = "정상 운영"
+        if regime_label == "HIGH":
+            regime_result = "보수적 모드 적용"
+        elif regime_label == "CRISIS":
+            regime_result = "위기 모드 — 신규 진입 중단"
+        decisions.append(DecisionStep(
+            label="시장 레짐",
+            observation=f"현재: {regime_label}, "
+                        f"threshold×{t_mult:.1f}, size×{s_mult:.1f}",
+            threshold="LOW: t×0.8/s×1.2, NORMAL: t×1.0/s×1.0, "
+                      "HIGH: t×1.3/s×0.7, CRISIS: 진입 중단",
+            result=regime_result,
+            category="evaluate",
+        ))
+
+        effective_min_spread = self._min_spread_pct * regime_adj["threshold_mult"]
+        is_crisis = regime_label == "CRISIS"
+
         if len(self._exchanges) < 2:
             decisions.append(DecisionStep(
                 label="거래소 확인",
@@ -124,7 +149,7 @@ class CrossExchangeArbEngine(BaseEngine):
 
             # Use cost-based minimum spread (at least break-even after fees)
             cost_min_spread = self._cost_model.min_spread_for_profit(legs=4)
-            effective_min = max(self._min_spread_pct, cost_min_spread)
+            effective_min = max(effective_min_spread, cost_min_spread)
 
             decisions.append(DecisionStep(
                 label=f"{symbol} 거래소간 스프레드",
@@ -140,6 +165,11 @@ class CrossExchangeArbEngine(BaseEngine):
                 result="",  # filled below
                 category="evaluate",
             ))
+
+            if is_crisis:
+                decisions[-1].result = "SKIP - CRISIS 레짐, 신규 진입 중단"
+                decisions[-1].category = "skip"
+                continue
 
             if spread_abs >= effective_min:
                 # Log dynamic sizing if available

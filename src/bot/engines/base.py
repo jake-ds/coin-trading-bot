@@ -111,6 +111,7 @@ class BaseEngine(ABC):
         self._on_cycle_complete: Callable[[EngineCycleResult], Any] | None = None
         self._dynamic_sizer: Any | None = None  # DynamicPositionSizer (V6-007)
         self._correlation_controller: Any | None = None  # CorrelationRiskController (V6-008)
+        self._regime_detector: Any | None = None  # MarketRegimeDetector (V6-015)
 
     # ------------------------------------------------------------------
     # Abstract interface — subclasses must implement
@@ -187,6 +188,27 @@ class BaseEngine(ABC):
     def set_correlation_controller(self, controller: Any) -> None:
         """Attach a CorrelationRiskController for cross-engine checks."""
         self._correlation_controller = controller
+
+    def set_regime_detector(self, detector: Any) -> None:
+        """Attach a MarketRegimeDetector for regime-based adaptation."""
+        self._regime_detector = detector
+
+    def _get_regime_adjustments(self) -> dict[str, float]:
+        """Return threshold/size multipliers based on current market regime.
+
+        Returns dict with 'threshold_mult' and 'size_mult'.
+        When no detector is set, returns NORMAL (1.0, 1.0).
+        """
+        if self._regime_detector is None:
+            return {"threshold_mult": 1.0, "size_mult": 1.0}
+        regime = self._regime_detector.get_current_regime()
+        adjustments = {
+            "LOW": {"threshold_mult": 0.8, "size_mult": 1.2},
+            "NORMAL": {"threshold_mult": 1.0, "size_mult": 1.0},
+            "HIGH": {"threshold_mult": 1.3, "size_mult": 0.7},
+            "CRISIS": {"threshold_mult": 999.0, "size_mult": 0.0},
+        }
+        return adjustments.get(regime.value, {"threshold_mult": 1.0, "size_mult": 1.0})
 
     # ------------------------------------------------------------------
     # Lifecycle

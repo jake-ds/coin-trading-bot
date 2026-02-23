@@ -79,6 +79,31 @@ class StatisticalArbEngine(BaseEngine):
         decisions: list[DecisionStep] = []
         pnl_update = 0.0
 
+        # Regime adaptation
+        regime_adj = self._get_regime_adjustments()
+        regime_label = "NORMAL"
+        if self._regime_detector:
+            regime_label = self._regime_detector.get_current_regime().value
+        t_mult = regime_adj["threshold_mult"]
+        s_mult = regime_adj["size_mult"]
+        regime_result = "정상 운영"
+        if regime_label == "HIGH":
+            regime_result = "보수적 모드 적용"
+        elif regime_label == "CRISIS":
+            regime_result = "위기 모드 — 신규 진입 중단"
+        decisions.append(DecisionStep(
+            label="시장 레짐",
+            observation=f"현재: {regime_label}, "
+                        f"threshold×{t_mult:.1f}, size×{s_mult:.1f}",
+            threshold="LOW: t×0.8/s×1.2, NORMAL: t×1.0/s×1.0, "
+                      "HIGH: t×1.3/s×0.7, CRISIS: 진입 중단",
+            result=regime_result,
+            category="evaluate",
+        ))
+
+        effective_entry_zscore = self._entry_zscore * regime_adj["threshold_mult"]
+        is_crisis = regime_label == "CRISIS"
+
         # Update price caches
         await self._update_price_cache()
 
@@ -204,9 +229,15 @@ class StatisticalArbEngine(BaseEngine):
                 continue
 
             # Check for new entry
+            if is_crisis:
+                decisions[-1].result = "SKIP - CRISIS 레짐, 신규 진입 중단"
+                decisions[-1].category = "skip"
+                continue
+
             if self._has_capacity(pair_key):
                 entry = self._check_entry(
-                    pair_key, sym_a, sym_b, zscore, a[-1], b[-1]
+                    pair_key, sym_a, sym_b, zscore, a[-1], b[-1],
+                    entry_zscore_override=effective_entry_zscore,
                 )
                 if entry:
                     actions.append(entry)
@@ -275,14 +306,20 @@ class StatisticalArbEngine(BaseEngine):
         zscore: float,
         price_a: float,
         price_b: float,
+        entry_zscore_override: float | None = None,
     ) -> dict[str, Any] | None:
         """Check if z-score warrants a new pairs trade entry."""
-        if abs(zscore) < self._entry_zscore:
+        effective_entry = (
+            entry_zscore_override
+            if entry_zscore_override is not None
+            else self._entry_zscore
+        )
+        if abs(zscore) < effective_entry:
             return None
 
         # z > +entry → A is relatively overpriced: short A, long B
         # z < -entry → A is relatively underpriced: long A, short B
-        if zscore > self._entry_zscore:
+        if zscore > effective_entry:
             side_a, side_b = "short", "long"
         else:
             side_a, side_b = "long", "short"
