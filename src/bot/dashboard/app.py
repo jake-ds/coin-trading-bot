@@ -354,12 +354,10 @@ async def get_trades(
     }
 
 
-@api_router.get("/positions")
-async def get_positions():
-    """Get current open positions with SL/TP info."""
+def _get_all_positions() -> list[dict]:
+    """Return legacy positions merged with engine positions."""
     positions = list(_bot_state["open_positions"])
 
-    # Merge engine positions when running in engine mode
     if _engine_manager is not None:
         for engine_name, engine in _engine_manager.engines.items():
             for pos in engine.positions.values():
@@ -375,7 +373,13 @@ async def get_positions():
                     "strategy": f"engine:{engine_name}",
                 })
 
-    return {"positions": positions}
+    return positions
+
+
+@api_router.get("/positions")
+async def get_positions():
+    """Get current open positions with SL/TP info."""
+    return {"positions": _get_all_positions()}
 
 
 @api_router.get("/metrics")
@@ -1850,7 +1854,7 @@ def _build_full_state_payload() -> dict:
         "market_regime": _get_market_regime_info(),
         "trades": _bot_state["trades"][-50:],
         "strategy_stats": _bot_state["strategy_stats"],
-        "open_positions": _bot_state["open_positions"],
+        "open_positions": _get_all_positions(),
         "cycle_log_latest": cycle_log[-1] if cycle_log else None,
         "emergency": _bot_state.get("emergency", {"active": False}),
         "engine_performance": _build_engine_performance_summary(),
