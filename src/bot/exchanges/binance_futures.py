@@ -204,7 +204,7 @@ class BinanceFuturesAdapter(ExchangeAdapter):
                     "entry_price": float(pos.get("entryPrice", 0)),
                     "mark_price": float(pos.get("markPrice", 0)),
                     "unrealized_pnl": float(pos.get("unrealizedPnl", 0)),
-                    "leverage": int(pos.get("leverage", 1)),
+                    "leverage": int(pos.get("leverage") or 1),
                     "margin_mode": pos.get("marginMode", "cross"),
                 })
             return result
