@@ -28,6 +28,7 @@ dependencies = [
     "statsmodels>=0.14.0",
     "scipy>=1.11.0",
     "arch>=6.0.0",
+    "numpy>=1.24.0",
 ]
 
 [project.optional-dependencies]

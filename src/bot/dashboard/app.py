@@ -30,6 +30,9 @@ logger = structlog.get_logger()
 
 app = FastAPI(title="Coin Trading Bot Dashboard")
 
+# Track application start time for uptime calculation
+_app_start_time: float = time.time()
+
 # CORS configuration — allowed_origins can be overridden via configure_cors()
 _default_origins = ["http://localhost", "http://localhost:8000", "http://localhost:5173"]
 
@@ -83,6 +86,9 @@ _trading_bot = None
 # Reference to AuditLogger — set by main.py via set_audit_logger()
 _audit_logger = None
 
+# Reference to DataStore for health check DB connectivity
+_store_ref = None
+
 
 def set_strategy_registry(registry) -> None:
     """Set the strategy registry reference for toggle endpoint."""
@@ -121,6 +127,12 @@ def set_audit_logger(audit_logger) -> None:
 def get_audit_logger():
     """Get the current AuditLogger reference."""
     return _audit_logger
+
+
+def set_store_ref(store) -> None:
+    """Set the DataStore reference for health check DB connectivity."""
+    global _store_ref
+    _store_ref = store
 
 
 # ---------------------------------------------------------------------------
@@ -731,9 +743,11 @@ async def update_settings_endpoint(body: dict):
 
 
 @api_router.get("/health")
-async def api_health_check():
+async def api_health_check(
+    detailed: bool = False,
+):
     """Health check endpoint under /api prefix."""
-    return await health_check()
+    return await health_check(detailed=detailed)
 
 
 # Include the API router
@@ -1032,7 +1046,611 @@ async def list_reports():
     return {"reports": reports}
 
 
+@research_router.get("/deployments")
+async def list_deployments():
+    """List research deployment history with rollback status."""
+    if _engine_manager is None:
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "Engine mode not enabled"},
+        )
+    deployer = getattr(_engine_manager, "_deployer", None)
+    if deployer is None:
+        return {"deployments": []}
+    history = deployer.get_deploy_history()
+    return {"deployments": list(reversed(history))}
+
+
 app.include_router(research_router)
+
+
+# ---------------------------------------------------------------------------
+# Risk endpoints
+# ---------------------------------------------------------------------------
+
+risk_router = APIRouter(
+    prefix="/api/risk",
+    dependencies=[Depends(require_auth_strict)],
+)
+
+
+def _get_portfolio_risk_manager():
+    """Get PortfolioRiskManager from EngineManager if available."""
+    if _engine_manager is None:
+        return None
+    return getattr(_engine_manager, "_portfolio_risk", None)
+
+
+@risk_router.get("/portfolio")
+async def get_risk_portfolio():
+    """Get all portfolio risk metrics (exposure, heat, VaR 3 types, CVaR, positions)."""
+    prm = _get_portfolio_risk_manager()
+    if prm is None:
+        return {"error": "not_available"}
+    metrics = prm.get_risk_metrics()
+    # Add position details
+    positions = []
+    for symbol, pos in prm.positions.items():
+        positions.append({
+            "symbol": symbol,
+            "value": pos.get("value", 0),
+            "atr": pos.get("atr"),
+        })
+    metrics["positions"] = positions
+    return metrics
+
+
+@risk_router.get("/correlation")
+async def get_risk_correlation():
+    """Get cross-engine correlation and symbol concentration report."""
+    if _engine_manager is None:
+        return {"error": "not_available"}
+    controller = getattr(_engine_manager, "_correlation_controller", None)
+    if controller is None:
+        return {"error": "not_available"}
+    return controller.get_concentration_report()
+
+
+@risk_router.get("/drawdown")
+async def get_risk_drawdown():
+    """Get drawdown history time-series from PortfolioManager."""
+    if _engine_manager is None:
+        return {"history": []}
+    pm = getattr(_engine_manager, "_portfolio_manager", None)
+    if pm is None:
+        return {"history": []}
+    return {"history": getattr(pm, "_drawdown_history", [])}
+
+
+app.include_router(risk_router)
+
+
+# ---------------------------------------------------------------------------
+# Market regime endpoints (V6-014)
+# ---------------------------------------------------------------------------
+
+market_router = APIRouter(
+    prefix="/api/market",
+    dependencies=[Depends(require_auth_strict)],
+)
+
+
+@market_router.get("/regime")
+async def get_market_regime():
+    """Return current market regime, duration, and transition history."""
+    if _engine_manager is None:
+        return {
+            "current": "NORMAL",
+            "since": None,
+            "duration_minutes": 0,
+            "history": [],
+        }
+    detector = getattr(_engine_manager, "_regime_detector", None)
+    if detector is None:
+        return {
+            "current": "NORMAL",
+            "since": None,
+            "duration_minutes": 0,
+            "history": [],
+        }
+    return {
+        "current": detector.get_current_regime().value,
+        "since": detector._regime_since.isoformat(),
+        "duration_minutes": round(detector.get_regime_duration(), 1),
+        "history": detector.get_regime_history()[-20:],
+    }
+
+
+app.include_router(market_router)
+
+
+# ---------------------------------------------------------------------------
+# Trade detail / explorer endpoints
+# ---------------------------------------------------------------------------
+
+trades_detail_router = APIRouter(
+    prefix="/api/trades",
+    dependencies=[Depends(require_auth_strict)],
+)
+
+
+@trades_detail_router.get("/detail")
+async def get_trade_detail(
+    engine: str | None = None,
+    symbol: str | None = None,
+    start: str | None = None,
+    end: str | None = None,
+    win_only: bool | None = None,
+    limit: int = 20,
+    offset: int = 0,
+):
+    """Get detailed trade records from EngineTracker with filtering."""
+    if _engine_manager is None:
+        return {"trades": [], "total": 0, "limit": limit, "offset": offset}
+
+    all_trades = _collect_tracker_trades(engine, symbol, start, end, win_only)
+    total = len(all_trades)
+    page_trades = all_trades[offset: offset + limit]
+
+    return {
+        "trades": page_trades,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+@trades_detail_router.get("/export")
+async def export_trades(
+    format: str = "csv",
+    engine: str | None = None,
+    symbol: str | None = None,
+    start: str | None = None,
+    end: str | None = None,
+):
+    """Export trade records as CSV."""
+    from fastapi.responses import Response
+
+    if _engine_manager is None:
+        return Response(content="", media_type="text/csv")
+
+    all_trades = _collect_tracker_trades(engine, symbol, start, end, None)
+
+    header = (
+        "timestamp,engine,symbol,side,entry_price,exit_price,"
+        "quantity,gross_pnl,cost,net_pnl,hold_time"
+    )
+    rows = [header]
+    for t in all_trades:
+        hold_secs = t.get("hold_time_seconds", 0)
+        hold_str = _format_hold_time(hold_secs)
+        rows.append(
+            f"{t.get('exit_time', '')},{t.get('engine_name', '')},"
+            f"{t.get('symbol', '')},{t.get('side', '')},"
+            f"{t.get('entry_price', 0)},{t.get('exit_price', 0)},"
+            f"{t.get('quantity', 0)},{t.get('pnl', 0)},"
+            f"{t.get('cost', 0)},{t.get('net_pnl', 0)},{hold_str}"
+        )
+    csv_content = "\n".join(rows)
+    return Response(
+        content=csv_content,
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=trades.csv"},
+    )
+
+
+def _collect_tracker_trades(
+    engine: str | None,
+    symbol: str | None,
+    start: str | None,
+    end: str | None,
+    win_only: bool | None,
+) -> list[dict]:
+    """Gather and filter trade records from EngineTracker."""
+    if _engine_manager is None:
+        return []
+
+    tracker = _engine_manager.tracker
+    result: list[dict] = []
+
+    engines = [engine] if engine else list(tracker._trades.keys())
+
+    for eng_name in engines:
+        trades = tracker._trades.get(eng_name, [])
+        for t in trades:
+            trade_dict = {
+                "engine_name": t.engine_name,
+                "symbol": t.symbol,
+                "side": t.side,
+                "entry_price": t.entry_price,
+                "exit_price": t.exit_price,
+                "quantity": t.quantity,
+                "pnl": round(t.pnl, 4),
+                "cost": round(t.cost, 4),
+                "net_pnl": round(t.net_pnl, 4),
+                "entry_time": t.entry_time,
+                "exit_time": t.exit_time,
+                "hold_time_seconds": t.hold_time_seconds,
+            }
+
+            # Apply filters
+            if symbol and t.symbol != symbol:
+                continue
+            if start and t.exit_time < start:
+                continue
+            if end and t.exit_time > end:
+                continue
+            if win_only is True and t.net_pnl <= 0:
+                continue
+            if win_only is False and t.net_pnl >= 0:
+                continue
+
+            result.append(trade_dict)
+
+    # Sort by exit_time descending (newest first)
+    result.sort(key=lambda x: x.get("exit_time", ""), reverse=True)
+    return result
+
+
+def _format_hold_time(seconds: float) -> str:
+    """Format hold time in seconds to human-readable 'Xh Ym' format."""
+    if seconds <= 0:
+        return "0m"
+    hours = int(seconds // 3600)
+    minutes = int((seconds % 3600) // 60)
+    if hours > 0:
+        return f"{hours}h {minutes}m"
+    return f"{minutes}m"
+
+
+app.include_router(trades_detail_router)
+
+
+# ---------------------------------------------------------------------------
+# Heatmap / analytics endpoints
+# ---------------------------------------------------------------------------
+
+heatmap_router = APIRouter(
+    prefix="/api/analytics",
+    dependencies=[Depends(require_auth_strict)],
+)
+
+
+@heatmap_router.get("/heatmap")
+async def get_heatmap(
+    type: str = "hourly_dow",
+    engine: str | None = None,
+    days: int | None = None,
+):
+    """Get heatmap data for various analytics views.
+
+    type=hourly_dow: PnL by hour (0-23) and day-of-week (0=Mon .. 6=Sun)
+    type=engine_symbol: PnL by engine × symbol
+    type=monthly: PnL by year/month
+    """
+    if _engine_manager is None:
+        return {"data": []}
+
+    trades = _collect_tracker_trades(engine, None, None, None, None)
+
+    # Optional period filter
+    if days is not None:
+        from datetime import datetime, timedelta, timezone
+
+        cutoff = (
+            datetime.now(timezone.utc) - timedelta(days=days)
+        ).isoformat()
+        trades = [t for t in trades if t.get("exit_time", "") >= cutoff]
+
+    if type == "hourly_dow":
+        return {"data": _heatmap_hourly_dow(trades)}
+    elif type == "engine_symbol":
+        return {"data": _heatmap_engine_symbol(trades)}
+    elif type == "monthly":
+        return {"data": _heatmap_monthly(trades)}
+    else:
+        return {"data": [], "error": f"Unknown heatmap type: {type}"}
+
+
+def _heatmap_hourly_dow(trades: list[dict]) -> list[dict]:
+    """Compute PnL by hour × day-of-week grid."""
+    from datetime import datetime
+
+    grid: dict[tuple[int, int], dict] = {}
+    for dow in range(7):
+        for hour in range(24):
+            grid[(dow, hour)] = {"hour": hour, "dow": dow, "pnl": 0.0, "trade_count": 0, "wins": 0}
+
+    for t in trades:
+        exit_time = t.get("exit_time", "")
+        if not exit_time:
+            continue
+        try:
+            dt = datetime.fromisoformat(exit_time.replace("Z", "+00:00"))
+            dow = dt.weekday()  # 0=Mon .. 6=Sun
+            hour = dt.hour
+            cell = grid[(dow, hour)]
+            cell["pnl"] = round(cell["pnl"] + t.get("net_pnl", 0), 4)
+            cell["trade_count"] += 1
+            if t.get("net_pnl", 0) > 0:
+                cell["wins"] += 1
+        except (ValueError, KeyError):
+            continue
+
+    result = []
+    for cell in grid.values():
+        win_rate = (
+            round(cell["wins"] / cell["trade_count"], 4)
+            if cell["trade_count"] > 0
+            else 0.0
+        )
+        result.append({
+            "hour": cell["hour"],
+            "dow": cell["dow"],
+            "pnl": cell["pnl"],
+            "trade_count": cell["trade_count"],
+            "win_rate": win_rate,
+        })
+
+    return result
+
+
+def _heatmap_engine_symbol(trades: list[dict]) -> list[dict]:
+    """Compute PnL by engine × symbol matrix."""
+    grid: dict[tuple[str, str], dict] = {}
+
+    for t in trades:
+        eng = t.get("engine_name", "")
+        sym = t.get("symbol", "")
+        key = (eng, sym)
+        if key not in grid:
+            grid[key] = {"engine": eng, "symbol": sym, "pnl": 0.0, "trade_count": 0, "wins": 0}
+        cell = grid[key]
+        cell["pnl"] = round(cell["pnl"] + t.get("net_pnl", 0), 4)
+        cell["trade_count"] += 1
+        if t.get("net_pnl", 0) > 0:
+            cell["wins"] += 1
+
+    result = []
+    for cell in grid.values():
+        win_rate = (
+            round(cell["wins"] / cell["trade_count"], 4)
+            if cell["trade_count"] > 0
+            else 0.0
+        )
+        result.append({
+            "engine": cell["engine"],
+            "symbol": cell["symbol"],
+            "pnl": cell["pnl"],
+            "trade_count": cell["trade_count"],
+            "win_rate": win_rate,
+        })
+
+    return result
+
+
+def _heatmap_monthly(trades: list[dict]) -> list[dict]:
+    """Compute PnL by year/month."""
+    from datetime import datetime
+
+    grid: dict[tuple[int, int], dict] = {}
+
+    for t in trades:
+        exit_time = t.get("exit_time", "")
+        if not exit_time:
+            continue
+        try:
+            dt = datetime.fromisoformat(exit_time.replace("Z", "+00:00"))
+            key = (dt.year, dt.month)
+            if key not in grid:
+                grid[key] = {
+                    "year": dt.year, "month": dt.month,
+                    "pnl": 0.0, "trade_count": 0, "wins": 0,
+                }
+            cell = grid[key]
+            cell["pnl"] = round(cell["pnl"] + t.get("net_pnl", 0), 4)
+            cell["trade_count"] += 1
+            if t.get("net_pnl", 0) > 0:
+                cell["wins"] += 1
+        except (ValueError, KeyError):
+            continue
+
+    result = []
+    for cell in grid.values():
+        win_rate = (
+            round(cell["wins"] / cell["trade_count"], 4)
+            if cell["trade_count"] > 0
+            else 0.0
+        )
+        result.append({
+            "year": cell["year"],
+            "month": cell["month"],
+            "pnl": cell["pnl"],
+            "trade_count": cell["trade_count"],
+            "win_rate": win_rate,
+        })
+
+    # Sort chronologically
+    result.sort(key=lambda x: (x["year"], x["month"]))
+    return result
+
+
+app.include_router(heatmap_router)
+
+
+# ---------------------------------------------------------------------------
+# Metrics history endpoints (V6-013)
+# ---------------------------------------------------------------------------
+
+metrics_history_router = APIRouter(
+    prefix="/api/metrics",
+    dependencies=[Depends(require_auth_strict)],
+)
+
+
+@metrics_history_router.get("/history")
+async def get_metrics_history(
+    engine: str = Query(..., description="Engine name"),
+    days: int = Query(30, ge=1, le=365, description="Lookback days"),
+):
+    """Return time-series of engine metric snapshots."""
+    if _engine_manager is None:
+        return {"timestamps": [], "sharpe": [], "win_rate": [],
+                "total_pnl": [], "max_drawdown": []}
+
+    persistence = getattr(_engine_manager, "_metrics_persistence", None)
+    if persistence is None:
+        return {"timestamps": [], "sharpe": [], "win_rate": [],
+                "total_pnl": [], "max_drawdown": []}
+
+    store = persistence._data_store
+    start = datetime.now(timezone.utc) - timedelta(days=days)
+    snapshots = await store.get_engine_metric_snapshots(
+        engine_name=engine, start=start, limit=2000,
+    )
+
+    timestamps = []
+    sharpe = []
+    win_rate = []
+    total_pnl = []
+    max_drawdown = []
+    for s in snapshots:
+        timestamps.append(s["timestamp"])
+        sharpe.append(s["sharpe_ratio"])
+        win_rate.append(s["win_rate"])
+        total_pnl.append(s["total_pnl"])
+        max_drawdown.append(s["max_drawdown"])
+
+    return {
+        "timestamps": timestamps,
+        "sharpe": sharpe,
+        "win_rate": win_rate,
+        "total_pnl": total_pnl,
+        "max_drawdown": max_drawdown,
+    }
+
+
+@metrics_history_router.get("/compare")
+async def get_metrics_compare(
+    engines: str = Query(
+        ..., description="Comma-separated engine names"
+    ),
+    metric: str = Query("sharpe", description="Metric to compare"),
+    days: int = Query(30, ge=1, le=365, description="Lookback days"),
+):
+    """Compare a single metric across multiple engines over time."""
+    if _engine_manager is None:
+        return {"engines": {}}
+
+    persistence = getattr(_engine_manager, "_metrics_persistence", None)
+    if persistence is None:
+        return {"engines": {}}
+
+    store = persistence._data_store
+    start = datetime.now(timezone.utc) - timedelta(days=days)
+    engine_list = [e.strip() for e in engines.split(",") if e.strip()]
+
+    valid_metrics = {
+        "sharpe": "sharpe_ratio",
+        "win_rate": "win_rate",
+        "total_pnl": "total_pnl",
+        "max_drawdown": "max_drawdown",
+        "profit_factor": "profit_factor",
+        "cost_ratio": "cost_ratio",
+    }
+    field = valid_metrics.get(metric, "sharpe_ratio")
+
+    result: dict[str, dict] = {}
+    for eng in engine_list:
+        snapshots = await store.get_engine_metric_snapshots(
+            engine_name=eng, start=start, limit=2000,
+        )
+        timestamps = [s["timestamp"] for s in snapshots]
+        values = [s.get(field, 0.0) for s in snapshots]
+        result[eng] = {"timestamps": timestamps, "values": values}
+
+    return {"engines": result}
+
+
+@metrics_history_router.get("/daily-summary")
+async def get_daily_summary(
+    days: int = Query(30, ge=1, le=365, description="Lookback days"),
+):
+    """Return daily aggregated PnL/trades summary from engine trades."""
+    if _engine_manager is None:
+        return {"daily": []}
+
+    persistence = getattr(_engine_manager, "_metrics_persistence", None)
+    if persistence is None:
+        # Fallback: compute from in-memory tracker
+        return _daily_summary_from_tracker(days)
+
+    store = persistence._data_store
+    start = datetime.now(timezone.utc) - timedelta(days=days)
+    trades = await store.get_engine_trades(start=start, limit=10000)
+
+    if not trades:
+        return _daily_summary_from_tracker(days)
+
+    return {"daily": _aggregate_daily(trades)}
+
+
+def _daily_summary_from_tracker(days: int) -> dict:
+    """Build daily summary from in-memory EngineTracker trades."""
+    if _engine_manager is None:
+        return {"daily": []}
+
+    trades = _collect_tracker_trades(None, None, None, None, None)
+
+    if not trades:
+        return {"daily": []}
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    cutoff_str = cutoff.isoformat()
+    filtered = [t for t in trades if t.get("exit_time", "") >= cutoff_str]
+
+    return {"daily": _aggregate_daily(filtered)}
+
+
+def _aggregate_daily(trades: list[dict]) -> list[dict]:
+    """Aggregate a list of trade dicts into daily summaries."""
+    daily: dict[str, dict] = {}
+    for t in trades:
+        exit_time = t.get("exit_time", "")
+        if not exit_time:
+            continue
+        date_str = exit_time[:10]  # YYYY-MM-DD
+        if date_str not in daily:
+            daily[date_str] = {
+                "date": date_str,
+                "total_pnl": 0.0,
+                "total_trades": 0,
+                "winning_trades": 0,
+                "total_cost": 0.0,
+            }
+        entry = daily[date_str]
+        net = t.get("net_pnl", 0.0)
+        entry["total_pnl"] += net
+        entry["total_trades"] += 1
+        if net > 0:
+            entry["winning_trades"] += 1
+        entry["total_cost"] += t.get("cost", 0.0)
+
+    result = []
+    for date_str in sorted(daily.keys()):
+        entry = daily[date_str]
+        total = entry["total_trades"]
+        wins = entry["winning_trades"]
+        entry["total_pnl"] = round(entry["total_pnl"], 2)
+        entry["total_cost"] = round(entry["total_cost"], 2)
+        entry["avg_win_rate"] = (
+            round(wins / total, 4) if total > 0 else 0.0
+        )
+        result.append(entry)
+    return result
+
+
+app.include_router(metrics_history_router)
 
 
 # ---------------------------------------------------------------------------
@@ -1152,12 +1770,26 @@ def _build_full_state_payload() -> dict:
         "portfolio": _bot_state["portfolio"],
         "metrics": _bot_state["metrics"],
         "regime": _bot_state["regime"],
+        "market_regime": _get_market_regime_info(),
         "trades": _bot_state["trades"][-50:],
         "strategy_stats": _bot_state["strategy_stats"],
         "open_positions": _bot_state["open_positions"],
         "cycle_log_latest": cycle_log[-1] if cycle_log else None,
         "emergency": _bot_state.get("emergency", {"active": False}),
         "engine_performance": _build_engine_performance_summary(),
+    }
+
+
+def _get_market_regime_info() -> dict | None:
+    """Build market regime info for WebSocket payload."""
+    if _engine_manager is None:
+        return None
+    detector = getattr(_engine_manager, "_regime_detector", None)
+    if detector is None:
+        return None
+    return {
+        "current": detector.get_current_regime().value,
+        "duration_minutes": round(detector.get_regime_duration(), 1),
     }
 
 
@@ -1199,28 +1831,93 @@ async def broadcast_alert(message: str, severity: str = "info") -> None:
 
 
 @app.get("/health")
-async def health_check():
-    """Health check endpoint for Docker.
+async def health_check(
+    detailed: bool = False,
+):
+    """Health check endpoint for Docker (no auth required).
 
-    Returns unhealthy if the bot is running but the last cycle was more than
-    5 minutes ago, indicating the trading loop may be stuck.
+    Status logic:
+    - healthy: all engines RUNNING or no engine mode
+    - degraded: some engines in ERROR state
+    - unhealthy: all engines STOPPED or last cycle stale
     """
     now = datetime.now(timezone.utc).isoformat()
+    uptime = round(time.time() - _app_start_time, 1)
     last_cycle = _bot_state["cycle_metrics"].get("last_cycle_time")
     bot_status = _bot_state["status"]
 
-    # If the bot is running and we have a last_cycle_time, check staleness
+    # Determine health status based on engines
+    status = "healthy"
+    engines_info: dict = {}
+
+    if _engine_manager is not None:
+        engine_status_map = _engine_manager.get_status()
+        running_count = 0
+        error_count = 0
+        stopped_count = 0
+        total_engines = 0
+
+        for name, info in engine_status_map.items():
+            eng_status = info.get("status", "unknown")
+            engines_info[name] = eng_status
+            total_engines += 1
+            if eng_status == "running":
+                running_count += 1
+            elif eng_status == "error":
+                error_count += 1
+            elif eng_status == "stopped":
+                stopped_count += 1
+
+        if total_engines > 0:
+            if error_count > 0:
+                status = "degraded"
+            if stopped_count == total_engines:
+                status = "unhealthy"
+
+    # Stale cycle check (non-engine mode)
     if bot_status == "running" and last_cycle is not None:
         elapsed = time.time() - last_cycle
         if elapsed > 300:  # 5 minutes
-            return {
-                "status": "unhealthy",
-                "reason": "last_cycle_stale",
-                "last_cycle_seconds_ago": round(elapsed, 1),
-                "timestamp": now,
-            }
+            status = "unhealthy"
 
-    return {"status": "healthy", "timestamp": now}
+    # Check database connectivity
+    db_connected = _store_ref is not None
+
+    result: dict = {
+        "status": status,
+        "uptime_seconds": uptime,
+        "engines": engines_info,
+        "database_connected": db_connected,
+        "timestamp": now,
+    }
+
+    if detailed:
+        import os
+        import shutil
+
+        # Disk space
+        try:
+            disk = shutil.disk_usage(os.getcwd())
+            result["disk_space_mb"] = round(disk.free / (1024 * 1024), 1)
+        except Exception:
+            result["disk_space_mb"] = None
+
+        # Memory usage
+        try:
+            import resource
+
+            usage = resource.getrusage(resource.RUSAGE_SELF)
+            # maxrss is in bytes on macOS, KB on Linux
+            import platform
+            rss = usage.ru_maxrss
+            if platform.system() == "Darwin":
+                result["memory_usage_mb"] = round(rss / (1024 * 1024), 1)
+            else:
+                result["memory_usage_mb"] = round(rss / 1024, 1)
+        except Exception:
+            result["memory_usage_mb"] = None
+
+    return result
 
 
 @app.get("/legacy", response_class=HTMLResponse)

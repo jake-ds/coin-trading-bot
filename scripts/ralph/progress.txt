@@ -1,184 +1,580 @@
 # Ralph Progress Log
-Started: 2026년 2월 23일 월요일 01시 08분 44초 KST
+Started: 2026년 2월 23일 월요일 17시 18분 03초 KST
 ---
 
 ## Codebase Patterns
-- **CostModel fees as percentages**: 0.02 means 0.02%, NOT 0.0002. Formula: `notional * (fee_pct + slippage_pct) * legs / 100`
-- **DecisionStep labels**: Use Korean (e.g., '비용 분석') with category = "evaluate"/"decide"/"execute"/"skip"
-- **Engine defaults**: Binance VIP0 spot: maker=0.02%, taker=0.04%, slippage=0.01%
-- **Pre-existing test failures (3)**: `test_defaults`, `test_main_without_validate_runs_trading_loop`, `test_main_without_args_runs_trading_loop` — these fail on main, not caused by V5 changes
-- **Test count baseline**: 2028 passing (2013 on main + 29 CostModel + 15 cost integration - 29 overlap from earlier count)
-- **Engines __init__.py**: exports must be alphabetically sorted in __all__
-- **dataclass pattern**: Use `@dataclass` from stdlib for simple data holders (CostModel, DecisionStep, EngineCycleResult)
+
+### Circular Import: research ↔ engines
+- `bot.research.base` → `bot.engines.tuner` (ParamChange) → `bot.engines.__init__` → `bot.engines.manager` → `bot.research.base` (circular!)
+- Fix: `bot.research/__init__.py` uses lazy `__getattr__` imports instead of module-level imports
+- Existing tests work only because they import engines before research (by coincidence)
+- Any new module in research/ can be imported directly (`from bot.research.data_provider import X`) without triggering the circular chain
+
+### DataStore Patterns
+- `get_candles()` returns `list[OHLCV]` (Pydantic models), sorted oldest→newest
+- `get_funding_rates()` returns `list[dict]` with keys: symbol, timestamp, funding_rate, funding_timestamp, mark_price, spot_price, spread_pct
+- New query methods: just add async methods using `self._session_factory()` context manager
+- `func.count()` from sqlalchemy for aggregate queries
+
+### Testing Patterns
+- Use `MagicMock()` for DataStore, set async methods via `AsyncMock(return_value=...)`
+- Existing 3 pre-existing test failures (not our fault): test_defaults, test_main_without_validate_runs_trading_loop, test_main_without_args_runs_trading_loop
+- Baseline: 2274 passed + 3 pre-existing failures
 
 ---
 
-## 2026-02-23 - V5-001
-- **Implemented**: CostModel — reusable trading cost calculator module
+## 2026-02-23 - V6-001
+- **Implemented**: HistoricalDataProvider — thin wrapper over DataStore for research experiments
 - **Files created**:
-  - `src/bot/engines/cost_model.py` — CostModel dataclass with round_trip_cost(), net_profit(), min_spread_for_profit(), is_profitable()
-  - `tests/engines/test_cost_model.py` — 29 comprehensive tests
+  - `src/bot/research/data_provider.py` — HistoricalDataProvider class with get_prices, get_ohlcv, get_returns, get_funding_rates, get_multi_prices, get_available_symbols
+  - `tests/research/test_data_provider.py` — 20 tests covering all methods, empty data, lookback filtering
 - **Files modified**:
-  - `src/bot/engines/__init__.py` — added CostModel to exports
-- **Tests added**: 29
+  - `src/bot/data/store.py` — Added `get_available_symbols(timeframe, min_count)` async method (DISTINCT symbol with GROUP BY HAVING)
+  - `src/bot/research/__init__.py` — Converted to lazy `__getattr__` imports to fix circular dependency; exports HistoricalDataProvider
+- **Tests**: 20 new, 2219 total passing (+ 3 pre-existing failures)
 - **Learnings for future iterations:**
-  - All fees are percentages (0.04 = 0.04%), division by 100 in cost calculation
-  - is_maker keyword-only arg for maker/taker distinction
-  - Break-even (net=0) counts as NOT profitable (strict >0 check)
+  - research/__init__.py MUST use lazy imports — never add eager imports there
+  - _CANDLES_PER_DAY mapping handles timeframe→limit conversion (1h=24, 4h=6, 1d=1, etc.)
+  - get_multi_prices uses asyncio.gather for parallel fetching
+  - Funding rates come 3/day (8h interval), so limit = days × 3
+
+### DataCollector Patterns
+- `_dynamic_symbols: set[str]` holds scanner-discovered symbols
+- `collect_once()` iterates over `dict.fromkeys(self._symbols + sorted(self._dynamic_symbols))` for dedup
+- `bulk_backfill()` uses existing `backfill()` per symbol with 0.5s rate limit between calls
+- `TIMEFRAME_SECONDS` dict maps timeframe→seconds; use `86400 // tf_seconds` for candles/day
+- `auto_discover_symbols()` takes an OpportunityRegistry and iterates all OpportunityType enum values
+- `_backfill_loop()` takes registry + settings as args (not stored), runs every `data_backfill_interval_hours`
+
+### EngineManager Wiring
+- `set_collector(collector)` stores DataCollector reference for backfill loop
+- `start_background_loops()` starts backfill task if `data_backfill_enabled` and collector is set
+- `opportunity_registry` property fetches registry from token_scanner engine
+- `start_background_loops()` was NOT called in main.py `_run_engine_mode()` — added it after `start_all()`
+
 ---
 
-## 2026-02-23 - V5-002
-- **Implemented**: Fee-aware engine integration — all 4 engines use CostModel
-- **Files modified**:
-  - `src/bot/engines/funding_arb.py` — CostModel integration: cost DecisionStep, net PnL on close (4 legs)
-  - `src/bot/engines/grid_trading.py` — maker fee deduction per sell fill, skip unprofitable fills
-  - `src/bot/engines/cross_exchange_arb.py` — cost-based min spread (max of config vs fee-based), cost deduction in arb execution
-  - `src/bot/engines/stat_arb.py` — replaced magic 0.005 with cost-model-derived scale, cost deduction on exit
-  - `tests/engines/test_funding_arb.py` — updated test_close_position_returns_pnl for net PnL
+## 2026-02-23 - V6-002
+- **Implemented**: DataCollector batch backfill + scanner auto-discovery
 - **Files created**:
-  - `tests/engines/test_engine_cost_integration.py` — 15 tests covering all 4 engines
-- **Tests added**: 15
-- **Learnings for future iterations:**
-  - `decisions[-1]` pattern breaks when inserting extra DecisionSteps — save reference to the step instead
-  - Grid uses is_maker=True (limit orders), other engines use taker fees
-  - Cross-exchange arb uses `max(config_min, cost_min)` to ensure cost-based floor
-  - stat_arb PnL scale factor 0.005 = (taker_fee + slippage) / 10 = (0.04 + 0.01) / 10
-  - Cost deduction for stat_arb happens in _check_exit, not _estimate_pairs_pnl, to preserve backward compat
----
-
-## 2026-02-23 - V5-003
-- **Implemented**: Multi-pair config expansion + engine description metadata
+  - `tests/data/test_backfill.py` — 22 tests: bulk_backfill, auto_discover, dynamic_symbols merge, backfill_loop, config, EngineManager wiring
 - **Files modified**:
-  - `src/bot/config.py` — expanded default symbols (funding: 5, grid: 3, cross: 3, stat: 2 pairs), added ENGINE_DESCRIPTIONS dict, added SETTINGS_METADATA entries for all engine config fields
-  - `src/bot/dashboard/app.py` — enriched GET /api/engines with descriptions/symbols, added GET /api/engines/{name}/params endpoint
-  - `frontend/src/api/types.ts` — added role_ko, role_en, description_ko, key_params, symbols to EngineInfo
-- **Files created**:
-  - `tests/dashboard/test_engine_api.py` — 10 tests for engine API + description metadata
-- **Tests added**: 10
+  - `src/bot/data/collector.py` — Added `_dynamic_symbols`, `bulk_backfill()`, `auto_discover_symbols()`, `_backfill_loop()`. Modified `collect_once()` to include dynamic symbols
+  - `src/bot/config.py` — Added `data_backfill_enabled`, `data_backfill_interval_hours`, `data_backfill_days` settings + SETTINGS_METADATA
+  - `src/bot/engines/manager.py` — Added `_collector`, `_backfill_task`, `set_collector()`. Updated `start_background_loops()` to start backfill loop
+  - `src/bot/main.py` — Added `set_collector()` call in `_init_engine_mode()`, added `start_background_loops()` call in `_run_engine_mode()`
+- **Tests**: 22 new, 2241 total passing (+ 3 pre-existing failures)
 - **Learnings for future iterations:**
-  - ENGINE_DESCRIPTIONS is a static dict in config.py (not base.py) — co-located with SETTINGS_METADATA
-  - /api/engines/{name}/params dynamically reads Settings fields using SETTINGS_METADATA prefix matching
-  - Frontend types use optional fields (?) for new metadata to maintain backward compat
+  - `start_background_loops()` was defined but never called — fixed
+  - Rate limit delay between symbols is 0.5s (using `asyncio.sleep`)
+  - `dict.fromkeys()` preserves order while deduplicating
+  - Backfill loop uses registry from `opportunity_registry` property (finds scanner engine)
+
+### Research Experiment Data Flow
+- `ResearchTask` base class stores `data_provider: HistoricalDataProvider | None` (default None for backward compat)
+- `_run_async(coro)` helper in ResearchTask: runs async code from sync `run_experiment()` — uses ThreadPoolExecutor when inside running event loop, `asyncio.run()` otherwise
+- Data priority in experiments: `kwargs` > `data_provider` > synthetic fallback
+- Each experiment adds `data_source: 'real' | 'synthetic' | 'kwargs'` to results dict
+- CointegrationExperiment accepts `stat_arb_pairs` list, OptimalGridExperiment accepts `grid_symbols` list
+- FundingPrediction: `_real_funding_data` stores raw records for time pattern analysis (hourly/daily)
+- Experiments registered in `main.py._register_research_experiments()` with data_provider from DataStore
+
 ---
 
-## 2026-02-23 - V5-004
-- **Implemented**: Engine role cards with descriptions in frontend
+## 2026-02-23 - V6-003
+- **Implemented**: Research experiments real data upgrade — all 4 experiments use HistoricalDataProvider
+- **Files created**:
+  - `tests/research/test_experiments_real_data.py` — 33 tests: real data mode, fallback to synthetic, data_source field, time pattern analysis, backward compatibility
 - **Files modified**:
-  - `frontend/src/pages/Engines.tsx` — added collapsible description section with role name (KR/EN), how-it-works, tracked symbols as chips, key parameters with current values, cost info. Lazy-fetches `/api/engines/{name}/params` on first expand.
-- **Tests**: Frontend builds successfully, all 1959 Python tests pass (same 3 pre-existing failures)
+  - `src/bot/research/base.py` — Added `__init__(data_provider=None)` to ResearchTask ABC, `_run_async()` helper for sync→async bridging
+  - `src/bot/research/experiments/volatility_regime.py` — Added `data_provider` param, `_fetch_real_prices()`, `data_source` in results
+  - `src/bot/research/experiments/cointegration.py` — Added `data_provider` + `stat_arb_pairs` params, `_fetch_real_pairs()`, `data_source` in results
+  - `src/bot/research/experiments/optimal_grid.py` — Added `data_provider` + `grid_symbols` params, `_fetch_real_prices()`, `data_source` in results
+  - `src/bot/research/experiments/funding_prediction.py` — Added `data_provider` param, `_fetch_real_funding_rates()`, time pattern analysis (`_analyze_time_patterns()`), `data_source`/`best_entry_hour`/`avg_positive_rate`/`hourly_pattern`/`daily_pattern` in results
+  - `src/bot/main.py` — Added `_register_research_experiments()` method that creates all 4 experiments with HistoricalDataProvider and registers them on EngineManager
+  - `scripts/ralph/prd.json` — Marked V6-003 passes: true
+- **Tests**: 33 new, 2274 total passing (+ 3 pre-existing failures)
 - **Learnings for future iterations:**
-  - stat_arb symbols come as nested arrays (pairs) — handle both `string[]` and `string[][]` in display
-  - Use lazy param fetching to avoid unnecessary API calls until user expands the section
+  - `_run_async()` pattern: `ThreadPoolExecutor` + `asyncio.run` for running async from sync inside event loop
+  - Each experiment's `__init__` must call `super().__init__(data_provider=data_provider)` to store on base
+  - Funding rate timestamps can be `datetime` objects or epoch milliseconds (int) — handle both
+  - experiments/__init__.py uses eager imports (not lazy) — safe since it doesn't import from engines
+  - `data_source` field is always present in results for V6-003+, enabling downstream analysis of data quality
+
+### ResearchDeployer Patterns
+- `ResearchDeployer(tuner, settings, tracker)` — takes ParameterTuner, Settings, EngineTracker
+- `evaluate_report()` → `DeployDecision(action, reason, changes)` — filters valid changes within TUNER_CONFIG bounds
+- `deploy()` → saves pre-deploy param snapshot + Sharpe, applies via `tuner.apply_changes()`, records history
+- `check_regression(engine_name)` → True if post-deploy Sharpe dropped >30% from pre-deploy
+- `rollback(snapshot_id)` → restores params via `settings.reload(snapshot)`, marks history as rolled_back
+- Safety bounds: max 3 changes per deploy, all clamped to TUNER_CONFIG min/max
+- `_param_snapshots: dict[str, dict]` keyed by uuid-based snapshot_id
+- `_pre_deploy_sharpe: dict[str, float]` keyed by engine_name, cleared on rollback
+- EngineManager wiring: `set_deployer()` + `_regression_check_loop()` background task
+- `_research_loop()` uses deployer when available, falls back to direct `tuner.apply_changes()`
+- Config: `research_auto_deploy: bool = True`, `research_regression_check_hours: float = 6.0`
+- Dashboard: `GET /api/research/deployments` returns deployment history
+
 ---
 
-## 2026-02-23 - V5-005
-- **Implemented**: EngineTracker — performance tracking and metrics
+## 2026-02-23 - V6-004
+- **Implemented**: ResearchDeployer — auto-deploy pipeline with A/B verification + safe rollback
 - **Files created**:
-  - `src/bot/engines/tracker.py` — TradeRecord, EngineMetrics dataclasses + EngineTracker class with record_trade(), record_cycle(), get_metrics(), get_all_metrics(), get_pnl_history()
-  - `tests/engines/test_tracker.py` — 36 comprehensive tests covering metrics, Sharpe, drawdown, PnL history, window filtering
+  - `src/bot/research/deployer.py` — ResearchDeployer class with DeployDecision, DeployResult, DeployRecord dataclasses. evaluate_report(), deploy(), check_regression(), rollback(), get_deploy_history(), _filter_valid_changes()
+  - `tests/research/test_deployer.py` — 40 tests: evaluate (significant/not/no-changes/bounds), deploy (success/snapshot/history/sharpe/tuner), regression (none/stable/detected/negative), rollback (success/not-found/clear-sharpe/failure), history (empty/multiple/limit-50), safety bounds (constant/within/clamped/unknown), EngineManager integration, dashboard endpoint, config settings
 - **Files modified**:
-  - `src/bot/engines/__init__.py` — added EngineTracker to exports
-- **Tests added**: 36
+  - `src/bot/engines/manager.py` — Added `_deployer`, `_regression_task`, `set_deployer()`, `_regression_check_loop()`. Updated `_research_loop()` to use deployer when available. Updated `start_background_loops()` to start regression check loop
+  - `src/bot/config.py` — Added `research_auto_deploy: bool = True`, `research_regression_check_hours: float = 6.0` + SETTINGS_METADATA entries
+  - `src/bot/dashboard/app.py` — Added `GET /api/research/deployments` endpoint on research_router
+  - `src/bot/main.py` — Added ResearchDeployer creation and `set_deployer()` call in `_init_engine_mode()`
+  - `src/bot/research/__init__.py` — Added `ResearchDeployer` to lazy exports
+  - `scripts/ralph/prd.json` — Marked V6-004 passes: true
+- **Tests**: 40 new, 2314 total passing (+ 3 pre-existing failures)
 - **Learnings for future iterations:**
-  - Sharpe annualization: mean/std * sqrt(365*24) assuming hourly returns
-  - Max drawdown only tracks from positive peaks (all-loss sequences have 0 drawdown)
-  - profit_factor = 0 when no losses (guard against div-by-zero, not infinity)
-  - Window filtering uses exit_time for trade age calculation
+  - deployer.py imports TUNER_CONFIG for bound validation — safe since tuner.py doesn't import deployer
+  - `settings.reload(snapshot)` for rollback — same method used by dashboard settings endpoint
+  - `_regression_check_loop` only checks the most recent non-rolled-back deployment to avoid cascading rollbacks
+  - Pre-deploy Sharpe is cleared per-engine on rollback to prevent stale regression checks
+  - `uuid.uuid4()[:8]` for snapshot IDs — short enough for logging, unique enough for tracking
 ---
 
-## 2026-02-23 - V5-006
-- **Implemented**: Tracker integration + performance API endpoints
+### VolatilityService Patterns
+- `VolatilityService(data_provider=None)` → graceful degradation: all forecasts None, all regimes NORMAL
+- `fit_symbol()` wraps GARCHModel.fit() in try/except — always returns bool success
+- `_models: dict[str, GARCHModel]` stores fitted models; `_forecasts: dict[str, float]` caches horizon=1 forecast
+- `_regimes: dict[str, VolatilityRegime]` caches classify_volatility_regime() result
+- `_last_fit: dict[str, datetime]` tracks fit timestamps for `needs_refit()` staleness check
+- `get_market_regime()` uses BTC/USDT as proxy — NORMAL if BTC not fitted
+- `_fit_loop()` has 60s initial delay, then runs fit_all() every interval_hours
+- Import asyncio at module level (not inside method) — needed for `patch()` in tests
+
+---
+
+## 2026-02-23 - V6-005
+- **Implemented**: VolatilityService — GARCH-based real-time volatility forecasting service
+- **Files created**:
+  - `src/bot/risk/volatility_service.py` — VolatilityService class with fit_symbol, fit_all, get_forecast, get_regime, get_all_regimes, get_market_regime, needs_refit, get_model, _fit_loop
+  - `tests/risk/test_volatility_service.py` — 43 tests: init, fit_symbol (success/no-provider/insufficient/empty/garch-failure/exception/timestamps), fit_all (success/partial-failure/empty), get_forecast (after-fit/not-fitted/unknown/horizon>1/no-model), get_regime (after-fit/not-fitted/unknown/all/empty), market_regime (btc/no-btc/only-eth), needs_refit (never/just-fitted/expired/not-expired/custom-age), get_model (after-fit/not-fitted), graceful degradation (6 tests), fit_loop (execution/exception-handling), import verification
 - **Files modified**:
-  - `src/bot/engines/manager.py` — added EngineTracker instance, wired cycle callback via register(), _record_cycle_to_tracker() extracts TradeRecords from cycle results
-  - `src/bot/dashboard/app.py` — added GET /api/engines/{name}/metrics, GET /api/performance/summary, performance data in WebSocket broadcasts
-  - `frontend/src/api/types.ts` — added EngineMetrics and PerformanceSummary interfaces
-- **Files created**:
-  - `tests/engines/test_tracker_integration.py` — 11 tests for manager integration + API endpoints
-- **Tests added**: 11
+  - `src/bot/risk/__init__.py` — Added VolatilityService to exports
+  - `scripts/ralph/prd.json` — Marked V6-005 passes: true
+- **Tests**: 43 new, 2357 total passing (+ 3 pre-existing failures)
 - **Learnings for future iterations:**
-  - EngineManager.register() wraps existing callback to preserve it while adding tracker recording
-  - Trade extraction from actions_taken uses common keys (pnl/profit, cost, symbol/pair)
-  - Performance summary aggregates Sharpe as simple average across engines
+  - asyncio must be imported at module level to be patchable in tests (not inside method)
+  - GARCHModel.fit() requires ≥30 data points; returns `{'success': False}` on failure
+  - classify_volatility_regime() needs ≥2×window data points, returns NORMAL otherwise
+  - get_all_regimes() returns a copy (dict()) to prevent external mutation
+  - _fit_loop test pattern: use CancelledError from mock sleep to break after one iteration
+
+### PortfolioRiskManager VaR/CVaR Patterns
+- `PortfolioRiskManager(volatility_service=None)` — new optional param, backward compatible
+- `_get_portfolio_returns()` — shared helper extracts weighted portfolio returns from `_price_history` and `_positions`
+- `calculate_parametric_var()`, `calculate_cornish_fisher_var()`, `calculate_cvar()` — delegate to `quant.risk_metrics` functions, return percentage or None
+- `calculate_stress_var(n_simulations=1000)` — Monte Carlo with Cholesky decomposition for correlated returns, uses `np.random.default_rng(42)` for determinism
+- Stress VaR handles: single-asset (no correlation), NaN in corr_matrix (`nan_to_num`), non-PSD matrix (eigenvalue clipping), Cholesky failure (fallback to identity)
+- `pre_trade_var_check(symbol, position_value)` — simulates adding new position to portfolio, checks VaR against limit
+- `validate_new_position()` now has 6 checks: exposure → correlation → sector → heat → VaR limit → pre-trade VaR
+- `get_risk_metrics()` includes: parametric_var, cornish_fisher_var, cvar, stress_var (all new fields)
+- Config: `var_method: str = 'historical'`, `stress_var_simulations: int = 1000`
+- Dashboard: `GET /api/risk/portfolio` returns full risk metrics + position details
+- `_get_portfolio_risk_manager()` helper in dashboard finds PRM from `_engine_manager._portfolio_risk`
+
 ---
 
-## 2026-02-23 - V5-007
-- **Implemented**: Performance dashboard page
+## 2026-02-23 - V6-006
+- **Implemented**: VaR/CVaR portfolio risk limits — real-time risk gate with parametric, Cornish-Fisher, stress VaR
 - **Files created**:
-  - `frontend/src/pages/Performance.tsx` — metrics cards, cost analysis bar chart (recharts), capital allocation pie chart, loading/error/empty states, 10s auto-refresh
+  - `tests/risk/test_var_integration.py` — 47 tests: _get_portfolio_returns (5), parametric_var (4), cornish_fisher_var (4), cvar (3), stress_var (9), pre_trade_var_check (5), get_risk_metrics format (5), validate_with_pre_trade_var (2), backward_compat (4), config (4), dashboard endpoint (2)
 - **Files modified**:
-  - `frontend/src/App.tsx` — added /performance route and nav link
-- **Tests**: Frontend builds successfully, all Python tests pass
+  - `src/bot/risk/portfolio_risk.py` — Added volatility_service param, _get_portfolio_returns(), calculate_parametric_var(), calculate_cornish_fisher_var(), calculate_cvar(), calculate_stress_var(), pre_trade_var_check(). Enhanced get_risk_metrics() with 4 new VaR fields. Added pre_trade_var_check to validate_new_position() chain.
+  - `src/bot/config.py` — Added `var_method: str = 'historical'`, `stress_var_simulations: int = 1000` + SETTINGS_METADATA entries
+  - `src/bot/dashboard/app.py` — Added risk_router with `GET /api/risk/portfolio` endpoint
+  - `scripts/ralph/prd.json` — Marked V6-006 passes: true
+- **Tests**: 47 new, 2404 total passing (+ 3 pre-existing failures)
 - **Learnings for future iterations:**
-  - recharts Tooltip formatter needs `value: number | undefined` type for TypeScript compatibility
-  - Removed LineChart/Line imports and pnlHistories state since PnL curve endpoint not ready yet
+  - `_get_portfolio_returns()` factored out to avoid code duplication across VaR methods
+  - Stress VaR uses `np.random.default_rng(42)` for deterministic results (testable)
+  - Cholesky decomposition needs PSD matrix — use eigenvalue clipping as fallback
+  - `from scipy import stats as scipy_stats` was unused — ruff caught it immediately
+  - Import ordering: ruff wants `from unittest.mock` (stdlib) before `import numpy` (third-party) — use `ruff --fix` to auto-sort
+  - pre_trade_var_check creates hypothetical portfolio with new position weight included in total value
+  - Dashboard helper `_get_portfolio_risk_manager()` uses `getattr()` for safe access to `_engine_manager._portfolio_risk`
+
+### DynamicPositionSizer Patterns
+- `DynamicPositionSizer(volatility_service=None, portfolio_risk=None, base_risk_pct=1.0, vol_scale_factor=1.0)`
+- `calculate_size(symbol, price, portfolio_value, atr=None) -> PositionSize`
+- Sizing priority: GARCH (median_cond_vol / forecast) → ATR (target_atr / actual_atr_pct) → fixed (1.0)
+- vol_multiplier always clamped to [0.25, 2.0]
+- `validate_size(position_size, portfolio_value, max_pct) -> PositionSize` — clips notional to max_pct of portfolio
+- BaseEngine has `_dynamic_sizer: Any | None = None` + `set_sizer(sizer)` method
+- When `_dynamic_sizer is None` → all engines use existing fixed sizing (100% backward compat)
+- Each engine imports `PositionSize` inside the method body (lazy) to avoid circular imports
+- DecisionStep for sizing: label="포지션 사이징", category="evaluate"
+- Config: `dynamic_sizing_enabled`, `vol_scale_factor`, `max_position_scale` (section: Risk Management)
+- main.py wires sizer after deployer, iterates engines with `set_sizer()` (excludes token_scanner)
+
 ---
 
-## 2026-02-23 - V5-008
-- **Implemented**: ParameterTuner — automatic strategy parameter adjustment
+## 2026-02-23 - V6-007
+- **Implemented**: DynamicPositionSizer — GARCH + ATR integrated volatility-based dynamic position sizing
 - **Files created**:
-  - `src/bot/engines/tuner.py` — ParamChange, TunerBounds, TUNER_CONFIG, ParameterTuner class with evaluate_and_adjust(), get_history(), apply_changes(), get_decisions()
-  - `tests/engines/test_tuner.py` — 23 tests for all adjustment scenarios, bounds, history, apply
+  - `src/bot/risk/dynamic_sizer.py` — DynamicPositionSizer class with PositionSize dataclass, calculate_size (GARCH/ATR/fixed fallback), validate_size (clipping)
+  - `tests/risk/test_dynamic_sizer.py` — 39 tests: PositionSize dataclass, init, fixed sizing (5), GARCH sizing (10: high/low vol, clamped bounds, zero/None forecast, no model/cond_vol, zero median), ATR sizing (6: high/low/moderate vol, zero/negative, GARCH precedence), validate_size (6: within/exceeds/zero/boundary), vol_multiplier bounds (2), DecisionStep (1), BaseEngine integration (2), config (3), imports (2)
 - **Files modified**:
-  - `src/bot/engines/__init__.py` — added ParameterTuner to exports
-- **Tests added**: 23
+  - `src/bot/engines/base.py` — Added `_dynamic_sizer: Any | None = None` field, `set_sizer()` method
+  - `src/bot/engines/funding_arb.py` — `_open_position()` uses dynamic sizer when available, DecisionStep for sizing in `_run_cycle()`
+  - `src/bot/engines/grid_trading.py` — `_check_fills()` uses dynamic sizer for notional_qty, DecisionStep for sizing on grid init
+  - `src/bot/engines/cross_exchange_arb.py` — `_execute_arb()` uses dynamic sizer for quantity, DecisionStep for sizing, fixed notional calc to use actual quantity
+  - `src/bot/engines/stat_arb.py` — `_check_entry()` uses dynamic sizer to split notional across pair legs, DecisionStep for sizing
+  - `src/bot/config.py` — Added `dynamic_sizing_enabled: bool = True`, `vol_scale_factor: float = 1.0`, `max_position_scale: float = 2.0` + SETTINGS_METADATA entries
+  - `src/bot/main.py` — Added DynamicPositionSizer creation and `set_sizer()` wiring in `_init_engine_mode()`
+  - `src/bot/risk/__init__.py` — Added DynamicPositionSizer, PositionSize to exports
+  - `scripts/ralph/prd.json` — Marked V6-007 passes: true
+- **Tests**: 39 new, 2443 total passing (+ 3 pre-existing failures)
 - **Learnings for future iterations:**
-  - Adjustment ranges: conservative = +15%, slight conservative = +5%, aggressive = -10%
-  - "threshold" params (min_rate, entry_zscore) go UP for conservative, DOWN for aggressive
-  - "size" params (levels, lookback) go DOWN for conservative, UP for aggressive
-  - Integer params (grid_levels) rounded after adjustment
-  - 0.5 <= Sharpe < 1.0 = "steady" — no changes made
+  - `Any` type hint for `_dynamic_sizer` in BaseEngine avoids importing from risk package (no circular dep)
+  - Lazy `from bot.risk.dynamic_sizer import PositionSize` inside engine methods — safe since dynamic_sizer doesn't import engines
+  - GARCH median_vol from `model.conditional_volatility` (np.ndarray) via `np.median()`
+  - ATR is passed as absolute value, converted to fraction of price internally: `atr_pct = atr / price`
+  - cross_exchange_arb's notional now uses `quantity * buy_price` (actual) instead of `_max_position_per_symbol` when dynamic sizer is active
+  - stat_arb splits total `notional_value / 2` across pair legs
+
+### CorrelationRiskController Patterns
+- `CorrelationRiskController(portfolio_risk=None, max_cross_engine_correlation=0.85, max_symbol_concentration=0.4)`
+- `update_positions(engine_positions: dict[str, list[dict]])` — full engine→positions map refresh each cycle
+- `calculate_cross_engine_correlation()` — symbol-based overlap (not price correlation); returns overlap_pct, concentration_score per engine pair
+- `check_symbol_concentration(symbol)` — total notional across all engines vs portfolio value; returns (bool, reason)
+- `get_concentration_report()` — per_symbol breakdown, cross_engine_correlations, alerts
+- BaseEngine `_has_capacity(symbol=None)` — optional symbol param triggers correlation check if controller is set; no symbol → no check (backward compat)
+- EngineManager `_sync_correlation_positions()` — gathers positions from all engines, estimates notional from qty*price if not provided
+- Called in `_record_cycle_to_tracker()` after each cycle, and in `_rebalance_loop()` before rebalancing
+- Dashboard: `GET /api/risk/correlation` returns concentration report via `getattr(_engine_manager, "_correlation_controller")`
+- Config: `cross_engine_correlation_enabled: bool = True`, `max_symbol_concentration_pct: float = 40.0`
+
 ---
 
-## 2026-02-23 - V5-009
-- **Implemented**: Capital rebalance + tuner/rebalance integration in manager
+## 2026-02-23 - V6-008
+- **Implemented**: CorrelationRiskController — cross-engine symbol concentration monitoring and limiting
+- **Files created**:
+  - `src/bot/risk/correlation_controller.py` — CorrelationRiskController class with EnginePosition dataclass, update_positions, calculate_cross_engine_correlation, check_symbol_concentration, get_concentration_report
+  - `tests/risk/test_correlation_controller.py` — 40 tests: init (2), update_positions (3), cross_engine_correlation (7: no/single/no_overlap/full/partial/three_engines/empty), check_symbol_concentration (7: within/exceeds/exact/not_present/no_prm/zero_value/engines_in_reason), get_concentration_report (5: empty/structure/concentration_alert/cross_engine_alert/no_portfolio), BaseEngine integration (5: without_ctrl/allowed/blocked/no_symbol_skips/max_positions_precedence), EngineManager integration (4: set_ctrl/sync_positions/estimates_notional/no_ctrl), dashboard endpoint (3: no_manager/no_controller/with_controller), config (2), imports (2)
 - **Files modified**:
-  - `src/bot/engines/portfolio_manager.py` — added rebalance_allocations() with Lagrange projection onto bounded simplex [0.10, 0.40]
-  - `src/bot/engines/manager.py` — added ParameterTuner instance, settings param, start_background_loops(), _tuner_loop(), _rebalance_loop(), _get_engine_params(), _rebalance_history
-  - `src/bot/config.py` — added tuner_enabled, tuner_interval_hours, engine_rebalance_enabled, engine_rebalance_interval_hours fields + SETTINGS_METADATA entries
-- **Files created**:
-  - `tests/engines/test_rebalance.py` — 15 tests for rebalance allocation, manager integration, config fields
-- **Tests added**: 15
+  - `src/bot/engines/base.py` — Added `_correlation_controller: Any | None = None`, `set_correlation_controller()`, modified `_has_capacity(symbol=None)` with optional cross-engine check
+  - `src/bot/engines/manager.py` — Added `_correlation_controller`, `set_correlation_controller()`, `_sync_correlation_positions()`. Updated `_record_cycle_to_tracker()` to sync positions. Updated `_rebalance_loop()` to log concentration alerts
+  - `src/bot/engines/funding_arb.py` — Pass symbol to `_has_capacity(symbol)` in `_run_cycle()`
+  - `src/bot/engines/stat_arb.py` — Pass pair_key to `_has_capacity(pair_key)` in `_run_cycle()`
+  - `src/bot/dashboard/app.py` — Added `GET /api/risk/correlation` endpoint on risk_router
+  - `src/bot/config.py` — Added `cross_engine_correlation_enabled: bool = True`, `max_symbol_concentration_pct: float = 40.0` + SETTINGS_METADATA entries
+  - `src/bot/main.py` — Added CorrelationRiskController creation and wiring to EngineManager + engines in `_init_engine_mode()`
+  - `src/bot/risk/__init__.py` — Added CorrelationRiskController to exports
+  - `scripts/ralph/prd.json` — Marked V6-008 passes: true
+- **Tests**: 40 new, 2483 total passing (+ 3 pre-existing failures)
 - **Learnings for future iterations:**
-  - [0.10, 0.40] bounds infeasible with N<3 engines (N*MAX < 1.0). Solution: dynamic effective_max = max(MAX, 1 - (N-1)*MIN)
-  - Lagrange projection (binary search for lambda in clip(y_i - lambda, min, max) summing to 1.0) is the correct algorithm for bounded simplex
-  - Single clip + normalize NEVER enforces hard max cap (needs N>=7 engines for that)
-  - EngineManager.settings is optional; _get_engine_params() reads settings fields by prefix matching engine name
+  - `_has_capacity(symbol=None)` default None ensures 100% backward compat — existing callers without args still work
+  - Position overlap is symbol-based (Jaccard index), not price-correlation — much cheaper to compute
+  - `_sync_correlation_positions()` estimates notional from qty * entry_price when "notional" key is absent
+  - `getattr(_engine_manager, "_correlation_controller", None)` pattern for dashboard access — avoids tight coupling
+  - Engine tests with MagicMock portfolio manager need `request_capital.return_value` and `get_max_allocation.return_value`
+  - pytest-asyncio is needed for async test methods in full suite (event loop issue with `asyncio.get_event_loop()`)
 ---
 
-## 2026-02-23 - V5-010
-- **Implemented**: Research framework — base module, experiments, and backtest runner
-- **Files created**:
-  - `src/bot/research/__init__.py` — exports ResearchTask, ResearchReport
-  - `src/bot/research/base.py` — ResearchTask ABC with run_experiment(), apply_findings(), target_engine
-  - `src/bot/research/report.py` — ResearchReport dataclass with to_dict()
-  - `src/bot/research/backtest_runner.py` — SimpleBacktestRunner with BacktestResult
-  - `src/bot/research/experiments/__init__.py` — exports all 4 experiments
-  - `src/bot/research/experiments/volatility_regime.py` — ATR-based volatility regime detection
-  - `src/bot/research/experiments/cointegration.py` — Engle-Granger cointegration test
-  - `src/bot/research/experiments/optimal_grid.py` — grid spacing optimization via simulation
-  - `src/bot/research/experiments/funding_prediction.py` — funding rate pattern analysis
-  - `tests/research/test_research.py` — 31 tests
-- **Tests added**: 31
-- **Learnings for future iterations:**
-  - numpy bool (np.True_) is not Python True for identity checks — use bool() conversion
-  - statsmodels coint() returns numpy scalars, must convert for dict storage
-  - Each experiment generates synthetic data via np.random.default_rng(seed) for reproducibility
+### Trade Explorer / Dashboard API Patterns
+- `trades_detail_router` uses `require_auth_strict` dependency for auth
+- `_collect_tracker_trades()` shared helper gathers from `tracker._trades` (dict of engine→list[TradeRecord])
+- Filters: engine (exact match), symbol (exact match), start/end (ISO string comparison on exit_time), win_only (True=wins, False=losses, None=all)
+- Results sorted by exit_time descending (newest first), paginated by limit/offset
+- CSV export via `fastapi.responses.Response(content=csv, media_type="text/csv")` with Content-Disposition header
+- `_format_hold_time(seconds)` → "Xh Ym" or "Ym" format
+- Frontend: `apiClient.get('/trades/export', { params, responseType: 'blob' })` + Blob + URL.createObjectURL for download
+- TradeExplorer uses client-side sorting (sortField/sortDir) on server-paginated data
+- PnL waterfall chart uses recharts BarChart with Cell components for per-bar colors
+- `set_engine_manager(mgr)` function allows tests to inject mock EngineManager
+
 ---
 
-## 2026-02-23 - V5-011
-- **Implemented**: Research loop integration + research dashboard + final verification
+## 2026-02-23 - V6-009
+- **Implemented**: Trade Explorer page — individual trade detail analysis with filtering, PnL breakdown, CSV export
+- **Files created**:
+  - `frontend/src/pages/TradeExplorer.tsx` — Full Trade Explorer component with trade table (sorting/filtering/pagination), expandable detail panel (PnL waterfall chart, same-symbol history), CSV export
+  - `tests/dashboard/test_trade_detail_api.py` — 17 tests: TestTradeDetail (no_manager, all_trades, filter_by_engine, filter_by_symbol, filter_win/loss, pagination, date_range, trade_fields), TestTradeExport (no_manager, csv_format, csv_filter, csv_content_type), TestFormatHoldTime (zero, minutes, hours_and_minutes, negative)
 - **Files modified**:
-  - `src/bot/engines/manager.py` — added register_experiment(), _research_loop(), _research_experiments list, _research_reports list, research_task in start_background_loops()
-  - `src/bot/dashboard/app.py` — added GET /api/research/experiments and GET /api/research/reports endpoints
-  - `src/bot/config.py` — added research_enabled, research_interval_hours fields + SETTINGS_METADATA entries
-  - `frontend/src/App.tsx` — added /research route, nav link, Research import
-- **Files created**:
-  - `frontend/src/pages/Research.tsx` — experiment cards, collapsible report cards with color-coded results, before->after param changes, 30s auto-refresh
-  - `tests/research/test_integration.py` — 10 tests for manager integration, config, and experiment serialization
-- **Tests added**: 10
-- **Final verification**: 2085 tests pass, ruff clean, frontend builds
+  - `src/bot/dashboard/app.py` — Added trades_detail_router with GET /api/trades/detail (filtering + pagination) and GET /api/trades/export (CSV). Added _collect_tracker_trades() helper and _format_hold_time() helper
+  - `frontend/src/api/types.ts` — Added TradeDetail and TradeDetailResponse interfaces
+  - `frontend/src/App.tsx` — Added TradeExplorer import, /trade-explorer nav item, and Route
+  - `scripts/ralph/prd.json` — Marked V6-009 passes: true
+- **Tests**: 17 new, 2500 total passing (+ 3 pre-existing failures)
+- **Learnings for future iterations:**
+  - `_collect_tracker_trades()` builds trade dicts from TradeRecord dataclass — not Pydantic, so manual dict construction
+  - CSV export uses inline `from fastapi.responses import Response` to avoid import pollution
+  - Client-side sorting on already-paginated data (20 items per page) is efficient enough
+  - PnL waterfall uses negative cost value (`-Math.abs(cost)`) for visual clarity
+  - `set_engine_manager()` is essential for test injection — called from tests directly
 
-## V5 COMPLETE
-All 11 user stories (V5-001 through V5-011) implemented and passing.
-Total new tests added: ~220 (from baseline ~1865 to 2085+)
+### Heatmap API Patterns
+- `heatmap_router` on `/api/analytics` prefix with `require_auth_strict`
+- Single endpoint `GET /api/analytics/heatmap?type=X` dispatches to helper functions
+- `_heatmap_hourly_dow()` returns 168 cells (7×24) with pre-populated grid (always returns all cells)
+- `_heatmap_engine_symbol()` returns only cells with data (dynamic)
+- `_heatmap_monthly()` returns only months with data, sorted chronologically
+- All heatmap cells include: pnl, trade_count, win_rate
+- Reuses `_collect_tracker_trades()` from trade detail endpoints for data gathering
+- Optional `engine` and `days` params for filtering before aggregation
+- Frontend uses custom div grid (not recharts) for heatmaps with rgba color scaling
+- `pnlColor()` calculates rgba intensity from value/maxAbs ratio
+- Tooltip follows mouse via `onMouseEnter`/`onMouseMove`/`onMouseLeave` with fixed positioning
 ---
+
+## 2026-02-23 - V6-010
+- **Implemented**: Performance Heatmap — hourly/DOW PnL, engine×symbol matrix, monthly calendar
+- **Files created**:
+  - `frontend/src/pages/Heatmaps.tsx` — Three heatmap views: hourly×DOW grid (7×24 cells), engine×symbol matrix, monthly PnL calendar with year navigation. Custom tooltip, color scaling, engine/period filters
+  - `tests/dashboard/test_heatmap_api.py` — 18 tests: TestHeatmapHourlyDow (no_manager, grid_size=168, fields, pnl_values, loss_cell, empty_cell), TestHeatmapEngineSymbol (data_count, fields, aggregation, engine_filter), TestHeatmapMonthly (data, fields, chronological_sort, pnl_aggregation), TestHeatmapUnknownType (error), TestHeatmapEmptyTracker (3 types)
+- **Files modified**:
+  - `src/bot/dashboard/app.py` — Added heatmap_router with GET /api/analytics/heatmap, _heatmap_hourly_dow(), _heatmap_engine_symbol(), _heatmap_monthly() helpers
+  - `frontend/src/api/types.ts` — Added HeatmapHourlyDow, HeatmapEngineSymbol, HeatmapMonthly interfaces
+  - `frontend/src/App.tsx` — Added Heatmaps import, /heatmaps nav item, and Route
+  - `scripts/ralph/prd.json` — Marked V6-010 passes: true
+- **Tests**: 18 new, 2518 total passing (+ 3 pre-existing failures)
+- **Learnings for future iterations:**
+  - Hourly×DOW grid must pre-populate all 168 cells (empty cells have pnl=0, count=0)
+  - `datetime.fromisoformat()` needs "Z" → "+00:00" replacement for Python 3.10
+  - `datetime.weekday()` returns 0=Mon..6=Sun (matches DOW_LABELS order)
+  - `_collect_tracker_trades()` reuse avoids code duplication between trade detail and heatmap endpoints
+  - Frontend rgba color scaling: `rgba(r, g, b, intensity)` where intensity = abs(value)/maxAbs
+  - Monthly calendar sorted by (year, month) for chronological display
+
+### Risk Dashboard Patterns
+- `PortfolioManager._drawdown_history: list[dict]` appended in `report_pnl()` with {timestamp, drawdown_pct, equity}
+- Capped at 1000 entries with slicing
+- `GET /api/risk/drawdown` returns `{"history": pm._drawdown_history}` via `getattr(_engine_manager, "_portfolio_manager")`
+- Frontend uses `Promise.allSettled()` for parallel fetch of /risk/portfolio, /risk/drawdown, /risk/correlation (graceful degradation)
+- VaR gauge uses recharts RadialBarChart with startAngle=180 endAngle=0 for semicircle
+- Drawdown curve: AreaChart with reversed Y-axis (drawdown % grows downward)
+- Correlation heatmap: 4×4 engine grid with overlap_pct from corrMap
+- TypeScript: `(data as any).error` pattern to check API error responses on typed interfaces
+- `Tooltip formatter` needs `value: number | undefined` to satisfy recharts strict typing
+- `labelFormatter` needs `label: unknown` (not `string`) for recharts compatibility
+---
+
+## 2026-02-23 - V6-011
+- **Implemented**: Risk Dashboard page — VaR/drawdown/correlation visualization
+- **Files created**:
+  - `frontend/src/pages/RiskDashboard.tsx` — VaR gauge cards (4 types), portfolio heat bar, drawdown curve chart, engine correlation heatmap, position exposure pie/bar, concentration monitor
+  - `tests/dashboard/test_drawdown_api.py` — 10 tests: TestDrawdownEndpoint (no_manager, no_pm, with_history, history_values), TestPortfolioManagerDrawdownHistory (initial_empty, report_adds_entry, multiple_reports, capped_at_1000, zero_on_new_high, nonzero_after_loss)
+- **Files modified**:
+  - `src/bot/engines/portfolio_manager.py` — Added `_drawdown_history: list[dict]`, updated `report_pnl()` to append drawdown/equity entry, capped at 1000
+  - `src/bot/dashboard/app.py` — Added `GET /api/risk/drawdown` endpoint on risk_router
+  - `frontend/src/api/types.ts` — Added RiskPortfolioMetrics, DrawdownPoint, CorrelationReport interfaces
+  - `frontend/src/App.tsx` — Added RiskDashboard import, /risk nav item, and Route
+  - `scripts/ralph/prd.json` — Marked V6-011 passes: true
+- **Tests**: 10 new, 2528 total passing (+ 3 pre-existing failures)
+- **Learnings for future iterations:**
+  - `Promise.allSettled()` is essential for dashboard pages that aggregate multiple API calls with graceful degradation
+  - Recharts TypeScript strictness: formatter callbacks take `value | undefined`, labelFormatter takes `unknown`
+  - RadialBarChart semicircle: `startAngle=180 endAngle=0` with `cx="50%" cy="80%"` for bottom alignment
+  - AreaChart reversed Y-axis: `reversed` prop on YAxis for drawdown (higher=worse)
+  - `datetime.now(timezone.utc)` for timestamp generation in drawdown history
+
+### MetricsPersistence Patterns
+- `MetricsPersistence(data_store, tracker)` — takes DataStore and EngineTracker instances
+- `save_trade(engine_name, trade)` — converts TradeRecord to EngineTradeRecord ORM model, saves to DB
+- `save_metrics_snapshot()` — iterates `tracker.get_metrics(engine_name)` for all known engines, saves EngineMetricSnapshot
+- `load_trades(since_hours=24)` — queries EngineTradeRecord, converts back to TradeRecord dict grouped by engine
+- `restore_tracker()` — loads trades and calls `tracker.bulk_load_trades()` for each engine
+- `_snapshot_loop(interval_minutes=5)` — background loop with asyncio.sleep, saves periodic snapshots
+- `cleanup(max_days=90)` — deletes old EngineTradeRecord + EngineMetricSnapshot records
+- `EngineTracker.bulk_load_trades(engine_name, trades)` — appends trades + rebuilds _pnl_history with cumulative PnL
+- DataStore attribute on TradingBot is `self._store` (NOT `self._data_store`) — important for wiring
+- `data_store._session_factory()` returns async context manager for DB sessions
+- Config: `metrics_persistence_enabled`, `metrics_snapshot_interval_minutes`, `metrics_retention_days` (section: Metrics)
+---
+
+## 2026-02-23 - V6-012
+- **Implemented**: Metrics Persistence Layer — EngineTracker trades/snapshots to SQLite
+- **Files created**:
+  - `src/bot/engines/metrics_persistence.py` — MetricsPersistence class with save_trade, save_metrics_snapshot, load_trades, restore_tracker, _snapshot_loop, cleanup
+  - `tests/engines/test_metrics_persistence.py` — 23 tests: TestSaveTrade (success, error), TestSaveMetricsSnapshot (all_engines, empty, error), TestLoadTrades (success, empty, error), TestRestoreTracker (populates, empty_db), TestCleanup (executes, error), TestBulkLoadTrades (populates, pnl_history, appends, empty), TestSnapshotLoop (calls_save), TestConfig (defaults, metadata), TestEngineManagerIntegration (set/default), TestDBModels (trade_record, metric_snapshot)
+- **Files modified**:
+  - `src/bot/data/models.py` — Added EngineTradeRecord (engine_trades table) and EngineMetricSnapshot (engine_metric_snapshots table) SQLAlchemy models with indexes
+  - `src/bot/engines/tracker.py` — Added `bulk_load_trades(engine_name, trades)` method to EngineTracker
+  - `src/bot/engines/manager.py` — Added `_metrics_persistence`, `_snapshot_task`, `set_metrics_persistence()`. Updated `_record_cycle_to_tracker()` to call save_trade. Updated `start_background_loops()` to start snapshot loop
+  - `src/bot/config.py` — Added `metrics_persistence_enabled: bool = True`, `metrics_snapshot_interval_minutes: float = 5.0`, `metrics_retention_days: int = 90` + SETTINGS_METADATA entries
+  - `src/bot/main.py` — Added MetricsPersistence wiring in `_init_engine_mode()` using `self._store`
+  - `scripts/ralph/prd.json` — Marked V6-012 passes: true
+- **Tests**: 23 new, 2551 total passing (+ 3 pre-existing failures)
+- **Learnings for future iterations:**
+  - TradingBot's DataStore is `self._store` (NOT `self._data_store`) — caused 80+ test failures before fix
+  - `data_store._session_factory()` returns context manager that supports `__aenter__`/`__aexit__`
+  - `tracker._trades` is dict[str, list[TradeRecord]], `tracker._pnl_history` is dict[str, list[dict]]
+  - `bulk_load_trades` calculates cumulative PnL from existing history tail + new trades
+  - `asyncio.ensure_future()` for fire-and-forget save_trade calls in EngineManager
+  - `_snapshot_loop` test uses CancelledError pattern (same as VolatilityService _fit_loop)
+
+### Historical Analysis API Patterns
+- `metrics_history_router` on `/api/metrics` prefix with `require_auth_strict`
+- `GET /api/metrics/history?engine=X&days=N` — returns {timestamps, sharpe, win_rate, total_pnl, max_drawdown} arrays from EngineMetricSnapshot
+- `GET /api/metrics/compare?engines=a,b&metric=sharpe&days=N` — per-engine time-series of a single metric
+- `GET /api/metrics/daily-summary?days=N` — daily aggregated PnL/trades from EngineTradeRecord (fallback to in-memory tracker)
+- `_aggregate_daily(trades)` — shared helper for both DB and in-memory paths
+- `_daily_summary_from_tracker(days)` — fallback when MetricsPersistence unavailable
+- `valid_metrics` dict maps API param names to DB field names (sharpe→sharpe_ratio, etc.)
+- DataStore new methods: `get_engine_metric_snapshots()`, `get_engine_trades()` with engine/date/limit filters
+- Performance.tsx: two tabs (Current/Historical), date range buttons (7D/30D/90D), engine selector for trend
+- LineChart for Sharpe/Win Rate trend, BarChart with Cell per-bar coloring for daily PnL
+- Engine comparison LineChart with `connectNulls` for sparse time-series alignment
+- `Promise.allSettled()` for parallel fetch of daily-summary, history, compare APIs
+---
+
+## 2026-02-23 - V6-013
+- **Implemented**: Historical Analysis API + Frontend — long-term performance analysis
+- **Files created**:
+  - `tests/dashboard/test_metrics_history_api.py` — 21 tests: TestMetricsHistory (no_manager, no_persistence, with_snapshots, response_values, empty), TestMetricsCompare (no_manager, no_persistence, multiple_engines, metric_field_mapping, invalid_metric_defaults), TestDailySummary (no_manager, with_db_trades, daily_aggregation, sorted_chronologically, empty_trades), TestDailySummaryFallback (no_persistence), TestAggregateDaily (empty, multiple_days, no_exit_time), TestDataStoreQueries (snapshots_import, trades_import)
+- **Files modified**:
+  - `src/bot/data/store.py` — Added `get_engine_metric_snapshots()` and `get_engine_trades()` query methods with engine/date/limit filters. Imported EngineMetricSnapshot, EngineTradeRecord models
+  - `src/bot/dashboard/app.py` — Added metrics_history_router with GET /api/metrics/history, GET /api/metrics/compare, GET /api/metrics/daily-summary. Added _aggregate_daily() and _daily_summary_from_tracker() helpers
+  - `frontend/src/pages/Performance.tsx` — Added Historical tab with date range selector (7D/30D/90D), daily PnL bar chart (green/red per bar), metrics trend LineChart (Sharpe + Win Rate), engine comparison LineChart with metric selector
+  - `frontend/src/api/types.ts` — Added DailySummaryEntry, MetricsHistoryResponse, MetricsCompareResponse interfaces
+  - `scripts/ralph/prd.json` — Marked V6-013 passes: true
+- **Tests**: 21 new, 2572 total passing (+ 3 pre-existing failures)
+- **Learnings for future iterations:**
+  - `getattr(_engine_manager, "_metrics_persistence", None)` for safe access to persistence layer
+  - Daily aggregation: slice exit_time[:10] for YYYY-MM-DD grouping key
+  - Fallback pattern: check DB first, fall back to in-memory tracker if no persistence or empty
+  - LineChart `connectNulls` prop handles sparse time-series (not all engines have same timestamps)
+  - `Promise.allSettled()` required for parallel fetch with graceful degradation
+  - Compare endpoint: `valid_metrics` dict maps user-friendly names to DB column names
+
+### Engine Regime Adaptation Patterns
+- `BaseEngine._regime_detector: Any | None = None` + `set_regime_detector(detector)` — same pattern as dynamic_sizer
+- `_get_regime_adjustments()` returns `{threshold_mult, size_mult}` dict based on current regime
+- Adjustments: LOW={0.8, 1.2}, NORMAL={1.0, 1.0}, HIGH={1.3, 0.7}, CRISIS={999.0, 0.0}
+- Each engine starts `_run_cycle()` with regime DecisionStep (Korean label "시장 레짐")
+- CRISIS skip: check `is_crisis` flag before new entry logic; existing positions still managed
+- Threshold application: funding_arb→min_rate, grid→spacing_pct, cross_arb→min_spread, stat_arb→entry_zscore
+- `_should_open_with_threshold(rate, spread, min_rate)` — separate method to avoid modifying original `_should_open`
+- `_check_entry(entry_zscore_override=None)` — optional param for regime-adjusted z-score threshold
+- `_init_grid(spacing_override=None)` — optional param for regime-adjusted grid spacing
+- Line length: break long Korean observation/threshold strings into concatenated f-strings
+---
+
+## 2026-02-24 - V6-015
+- **Implemented**: BaseEngine regime adaptation interface + 4 engine regime-based threshold/size adjustment
+- **Files created**:
+  - `tests/engines/test_regime_adaptation.py` — 42 tests: _get_regime_adjustments (6: no_det/LOW/NORMAL/HIGH/CRISIS/set_det), FundingArb (8: normal_open/high_raise/high_open_exceed/crisis_skip/crisis_close/low_lower/no_det/decision_step), GridTrading (6: normal_grid/high_wider/crisis_skip/crisis_existing/low_tighter/decision_step), CrossExchangeArb (5: normal/high/crisis/no_det/decision_step), StatArb (7: normal_entry/high_raise/crisis_skip/crisis_exit/no_det/decision_step/low_lower), GridSpacingOverride (2), ShouldOpenWithThreshold (4), CheckEntryOverride (4)
+- **Files modified**:
+  - `src/bot/engines/base.py` — Added `_regime_detector: Any | None = None`, `set_regime_detector()`, `_get_regime_adjustments()` with 4-regime lookup
+  - `src/bot/engines/funding_arb.py` — Added regime DecisionStep, `effective_min_rate`, CRISIS skip before open, `_should_open_with_threshold()` method
+  - `src/bot/engines/grid_trading.py` — Added regime DecisionStep, `effective_spacing`, CRISIS skip for new grids, `_init_grid(spacing_override=)` param
+  - `src/bot/engines/cross_exchange_arb.py` — Added regime DecisionStep, `effective_min_spread` (replaces `self._min_spread_pct` in `max()`), CRISIS skip
+  - `src/bot/engines/stat_arb.py` — Added regime DecisionStep, `effective_entry_zscore`, CRISIS skip, `_check_entry(entry_zscore_override=)` param
+  - `scripts/ralph/prd.json` — Marked V6-015 passes: true
+- **Tests**: 42 new, 2067+ non-dashboard passing (+ 3 pre-existing failures)
+- **Learnings for future iterations:**
+  - `_update_price_cache()` in stat_arb adds prices from mock exchange, corrupting seeded test data — mock it out with AsyncMock()
+  - For z-score tests: 9 identical + 1 outlier always gives z=3.0 — use varied data for intermediate z-scores
+  - Stat arb pair exit test needs correlated non-constant prices (constant ratio → std=0 → NaN z-score → skip)
+  - `Any` type hint for `_regime_detector` avoids import from risk package (circular import prevention)
+  - Long Korean strings must be split into concatenated lines for ruff E501 (100 char limit)
+
+### Circuit Breaker Patterns
+- `EngineManager._circuit_breaker_check()` — checks `regime_detector.is_crisis()` + `get_regime_duration()` vs threshold
+- `_circuit_breaker_active: bool` tracks if breaker is currently engaged
+- `_circuit_breaker_paused_engines: set[str]` tracks which engines were paused by the breaker (to resume only those)
+- Only pauses engines with status "running" (skips already paused/stopped/error)
+- Only resumes engines with status "paused" (don't resume stopped engines)
+- `_circuit_breaker_loop()` runs every 60 seconds with 60s initial delay
+- Config: `regime_adaptation_enabled: bool = True`, `crisis_circuit_breaker_minutes: float = 30.0`
+- When `regime_adaptation_enabled=False` → circuit breaker is no-op
+- When `_regime_detector=None` → circuit breaker is no-op
+- `start_background_loops()` starts circuit breaker loop when `regime_adaptation_enabled=True` and detector is set
+- main.py wires `set_regime_detector(detector)` to each engine (except token_scanner) for V6-015 regime adaptation
+---
+
+## 2026-02-24 - V6-016
+- **Implemented**: Circuit breaker + main.py regime detector wiring to engines
+- **Files created**:
+  - `tests/engines/test_circuit_breaker.py` — 19 tests: CircuitBreakerCheck (11: no_det/disabled/below_thresh/at_thresh/above_thresh/no_double/crisis_resolved/resume_paused_only/not_crisis_noop/full_cycle/no_settings), CircuitBreakerLoop (2: calls_check/handles_exception), StartBackgroundLoops (3: starts_when_enabled/disabled/no_detector), Config (2: defaults/metadata), MainWiring (1: regime_det_wired)
+- **Files modified**:
+  - `src/bot/engines/manager.py` — Added `_circuit_breaker_active`, `_circuit_breaker_paused_engines`, `_circuit_breaker_task`, `_circuit_breaker_check()`, `_circuit_breaker_loop()`. Updated `start_background_loops()` to start circuit breaker loop
+  - `src/bot/config.py` — Added `regime_adaptation_enabled: bool = True`, `crisis_circuit_breaker_minutes: float = 30.0` + SETTINGS_METADATA entries
+  - `src/bot/main.py` — Added `set_regime_detector(detector)` wiring to each engine (except token_scanner) in `_init_engine_mode()`
+  - `scripts/ralph/prd.json` — Marked V6-016 passes: true
+- **Tests**: 19 new, 2615 total passing (+ 3 pre-existing failures)
+- **Learnings for future iterations:**
+  - Circuit breaker tracks which engines it paused to avoid resuming engines paused by other mechanisms
+  - `engine.status.value` comparison works for mock and real EngineStatus enum
+  - WebSocket tests (`test_v4_014_integration`, `test_websocket`) hang on event loop — pre-existing, exclude with `--ignore` for faster runs
+  - `asyncio.CancelledError` pattern used in loop tests (same as other _loop tests)
+
+### Docker / Config Patterns
+- Dockerfile uses multi-stage build: node:20-alpine (frontend) → python:3.11-slim (runtime)
+- Non-root user `botuser` created with `groupadd`/`useradd`; `chown -R` for /app
+- `curl` installed in runtime stage for Docker healthcheck
+- docker-compose: `stop_grace_period: 35s` for graceful shutdown, bind mount `./data:/app/data`
+- `TRADING_ENV` env var: production→WARNING, staging→INFO, development→DEBUG (log_level default)
+- TRADING_ENV log_level override only applies when `TRADING_ENV` is set but `LOG_LEVEL` is not
+- `os.environ.get("TRADING_ENV")` check in model_validator avoids breaking tests that don't set env vars
+- requirements.txt must match pyproject.toml deps (missing statsmodels, scipy, arch was a gap)
+---
+
+## 2026-02-24 - V6-017
+- **Implemented**: Dockerfile + docker-compose + .dockerignore + TRADING_ENV logging
+- **Files modified**:
+  - `Dockerfile` — Multi-stage build: node:20-alpine frontend builder + python:3.11-slim runtime. Non-root user (botuser), curl for healthcheck, TRADING_ENV env var, healthcheck on /api/health
+  - `docker-compose.yml` — Bind mount ./data:/app/data (was named volume), stop_grace_period: 35s, curl healthcheck on /api/health, TRADING_ENV environment variable
+  - `.dockerignore` — Changed `data/` glob to `data/*.db` + `data/*.sqlite` for bind mount compatibility
+  - `requirements.txt` — Added missing statsmodels>=0.14.0, scipy>=1.11.0, arch>=6.0.0, numpy>=1.24.0 (synced with pyproject.toml)
+  - `pyproject.toml` — Added numpy>=1.24.0 to explicit dependencies
+  - `src/bot/config.py` — Added `trading_env: str = "development"` field, `validate_trading_env()` field_validator, TRADING_ENV-based log_level override in `apply_yaml_overrides()` model_validator, `trading_env` in SETTINGS_METADATA
+  - `scripts/ralph/prd.json` — Marked V6-017 passes: true
+- **Tests**: 0 new, 2580 total passing (+ 3 pre-existing failures)
+- **Learnings for future iterations:**
+  - Model validator that reads os.environ must guard with explicit env check to avoid breaking tests
+  - `trading_env` default "development" + unconditional log_level override = all tests see DEBUG log level → breaks test_defaults
+  - Fix: only override log_level when `os.environ.get("TRADING_ENV")` is truthy
+  - .dockerignore `data/` blocks bind mounts; use `data/*.db` pattern instead
+  - requirements.txt was out of sync with pyproject.toml (quant deps missing)
+
+### Health Endpoint & Shutdown Patterns
+- `/health` and `/api/health` endpoints use NO auth (no `Depends(require_auth_strict)`)
+- `_app_start_time` module-level `time.time()` for uptime calculation
+- `_store_ref` module-level reference for DB connectivity check (separate from `_bot_state`)
+- Health status logic: all engines RUNNING → healthy, any ERROR → degraded, all STOPPED → unhealthy
+- `detailed=True` adds `disk_space_mb` (shutil.disk_usage) and `memory_usage_mb` (resource.getrusage)
+- macOS: `ru_maxrss` in bytes; Linux: in KB — use `platform.system()` to pick divisor
+- Health function uses plain `bool = False` default (NOT `Query(False, ...)`) for direct-call compatibility
+- `shutdown()` wraps `_shutdown_sequence()` in `asyncio.wait_for(timeout=...)` for timeout control
+- Shutdown sequence: stop_engines → save_metrics_snapshot → audit_log → telegram → ws_feed → exchanges → cleanup_db → close_store
+- Each step in shutdown wrapped in try/except to prevent one failure from blocking rest
+- `set_store_ref(store)` called in `main.py.initialize()` after store creation
+---
+
+## 2026-02-24 - V6-018
+- **Implemented**: Enhanced health endpoint + graceful shutdown with timeout
+- **Files created**:
+  - `tests/dashboard/test_health_endpoint.py` — 22 tests: TestHealthEndpointStatus (7: no_manager/all_running/some_error/all_stopped/error_and_stopped/paused/stale_cycle), TestHealthResponseFields (5: basic_fields/uptime/db_false/db_true/timestamp_iso), TestHealthDetailed (3: no_detailed_default/disk_space/memory_usage), TestGracefulShutdown (5: stops_engines/saves_metrics/timeout/no_engine_manager/closes_store), TestHealthConfig (2: default/metadata)
+- **Files modified**:
+  - `src/bot/dashboard/app.py` — Enhanced `health_check()` with status logic (healthy/degraded/unhealthy), uptime_seconds, engines status, database_connected, detailed mode (disk_space_mb, memory_usage_mb). Added `_app_start_time`, `_store_ref`, `set_store_ref()`. Updated `api_health_check()` to pass `detailed` param.
+  - `src/bot/main.py` — Refactored `shutdown()` into `shutdown()` + `_shutdown_sequence()` with timeout. Sequence: stop engines → save metrics snapshot → audit log → telegram → ws_feed → exchanges → cleanup DB → close store. Added `set_store_ref()` wiring.
+  - `src/bot/config.py` — Added `shutdown_timeout_seconds: float = 30.0` + SETTINGS_METADATA entry (section: Shutdown)
+  - `scripts/ralph/prd.json` — Marked V6-018 passes: true
+- **Tests**: 22 new, 2637 total passing (+ 3 pre-existing failures)
+- **Learnings for future iterations:**
+  - `Query(False, ...)` returns a truthy FastAPI Query object when called directly — use plain `bool = False` for functions called both by FastAPI routes and direct invocations
+  - `resource.getrusage(RUSAGE_SELF).ru_maxrss` units differ by platform (bytes on macOS, KB on Linux)
+  - `shutil.disk_usage(os.getcwd())` returns named tuple with total/used/free
+  - Each shutdown step must be try/excepted independently to avoid one error blocking the rest
+  - `asyncio.wait_for(coro, timeout=X)` raises TimeoutError after X seconds — perfect for bounded shutdown
+---
+
+## 2026-02-24 - V6-019
+- **Implemented**: Final V6 integration verification — all modules, config defaults, class instantiation
+- **Files created**:
+  - `tests/test_v6_integration.py` — 35 tests: TestV6ModuleImports (16: all V6 modules, base engine fields, engine manager methods, risk exports, datastore methods, dashboard endpoints, tracker bulk_load), TestV6ConfigDefaults (10: all V6 config field default values + SETTINGS_METADATA coverage), TestV6ClassInstantiation (9: HistoricalDataProvider, VolatilityService, DynamicPositionSizer, CorrelationRiskController, MarketRegimeDetector, ResearchDeployer, MetricsPersistence, MarketRegime enum, EngineManager)
+- **Files modified**:
+  - `scripts/ralph/prd.json` — Marked V6-019 passes: true
+- **Verification results**:
+  - `pytest tests/ -v` — 2672 passed (+ 3 pre-existing failures)
+  - `ruff check src/ tests/` — 0 lint errors
+  - `cd frontend && npm run build` — build succeeded
+- **V6 COMPLETE**: All 19 user stories pass

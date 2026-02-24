@@ -9,6 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from bot.data.models import (
     AuditLogRecord,
     Base,
+    EngineMetricSnapshot,
+    EngineTradeRecord,
     FundingRateRecord,
     OHLCVRecord,
     PortfolioSnapshot,
@@ -100,6 +102,23 @@ class DataStore:
                 )
                 for r in reversed(records)
             ]
+
+    async def get_available_symbols(
+        self,
+        timeframe: str = "1h",
+        min_count: int = 100,
+    ) -> list[str]:
+        """Get symbols that have at least min_count candles for the given timeframe."""
+        async with self._session_factory() as session:
+            stmt = (
+                select(OHLCVRecord.symbol)
+                .where(OHLCVRecord.timeframe == timeframe)
+                .group_by(OHLCVRecord.symbol)
+                .having(func.count() >= min_count)
+                .order_by(OHLCVRecord.symbol)
+            )
+            result = await session.execute(stmt)
+            return [row[0] for row in result.all()]
 
     # --- Trade Operations ---
 
@@ -386,3 +405,92 @@ class DataStore:
             result = await session.execute(stmt)
             await session.commit()
             return result.rowcount
+
+    # --- Engine Metric Snapshot Operations ---
+
+    async def get_engine_metric_snapshots(
+        self,
+        engine_name: str | None = None,
+        start: datetime | None = None,
+        end: datetime | None = None,
+        limit: int = 500,
+    ) -> list[dict]:
+        """Query engine metric snapshots with optional engine/date filters."""
+        async with self._session_factory() as session:
+            stmt = select(EngineMetricSnapshot)
+            if engine_name:
+                stmt = stmt.where(
+                    EngineMetricSnapshot.engine_name == engine_name
+                )
+            if start:
+                stmt = stmt.where(EngineMetricSnapshot.timestamp >= start)
+            if end:
+                stmt = stmt.where(EngineMetricSnapshot.timestamp <= end)
+            stmt = (
+                stmt.order_by(EngineMetricSnapshot.timestamp.desc())
+                .limit(limit)
+            )
+
+            result = await session.execute(stmt)
+            records = result.scalars().all()
+            return [
+                {
+                    "engine_name": r.engine_name,
+                    "timestamp": (
+                        r.timestamp.isoformat() if r.timestamp else ""
+                    ),
+                    "total_trades": r.total_trades,
+                    "winning_trades": r.winning_trades,
+                    "losing_trades": r.losing_trades,
+                    "win_rate": r.win_rate,
+                    "total_pnl": r.total_pnl,
+                    "sharpe_ratio": r.sharpe_ratio,
+                    "max_drawdown": r.max_drawdown,
+                    "profit_factor": r.profit_factor,
+                    "cost_ratio": r.cost_ratio,
+                }
+                for r in reversed(records)
+            ]
+
+    async def get_engine_trades(
+        self,
+        engine_name: str | None = None,
+        start: datetime | None = None,
+        end: datetime | None = None,
+        limit: int = 500,
+    ) -> list[dict]:
+        """Query engine trade records with optional engine/date filters."""
+        async with self._session_factory() as session:
+            stmt = select(EngineTradeRecord)
+            if engine_name:
+                stmt = stmt.where(
+                    EngineTradeRecord.engine_name == engine_name
+                )
+            if start:
+                stmt = stmt.where(EngineTradeRecord.exit_time >= start.isoformat())
+            if end:
+                stmt = stmt.where(EngineTradeRecord.exit_time <= end.isoformat())
+            stmt = (
+                stmt.order_by(EngineTradeRecord.exit_time.desc())
+                .limit(limit)
+            )
+
+            result = await session.execute(stmt)
+            records = result.scalars().all()
+            return [
+                {
+                    "engine_name": r.engine_name,
+                    "symbol": r.symbol,
+                    "side": r.side,
+                    "entry_price": r.entry_price,
+                    "exit_price": r.exit_price,
+                    "quantity": r.quantity,
+                    "pnl": r.pnl,
+                    "cost": r.cost,
+                    "net_pnl": r.net_pnl,
+                    "entry_time": r.entry_time,
+                    "exit_time": r.exit_time,
+                    "hold_time_seconds": r.hold_time_seconds,
+                }
+                for r in reversed(records)
+            ]

@@ -1,5 +1,6 @@
 """Configuration system using pydantic-settings with .env and optional YAML override."""
 
+import os
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -110,16 +111,19 @@ class Settings(BaseSettings):
     binance_futures_testnet: bool = True
 
     # Funding rate arbitrage engine
-    funding_arb_min_rate: float = Field(default=0.0003, ge=0)
-    funding_arb_exit_rate: float = Field(default=0.0001, ge=0)
-    funding_arb_max_spread_pct: float = Field(default=0.5, ge=0)
-    funding_arb_max_positions: int = Field(default=3, ge=1)
+    funding_arb_min_rate: float = Field(default=0.0001, ge=0)
+    funding_arb_exit_rate: float = Field(default=0.00005, ge=0)
+    funding_arb_max_spread_pct: float = Field(default=1.0, ge=0)
+    funding_arb_max_positions: int = Field(default=5, ge=1)
     funding_arb_leverage: int = Field(default=1, ge=1)
     funding_arb_symbols: list[str] = Field(
         default_factory=lambda: [
             "BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT", "DOGE/USDT",
         ]
     )
+    funding_arb_order_timeout_seconds: float = Field(default=10.0, gt=0)
+    funding_arb_futures_only_mode: bool = False
+    funding_arb_reconcile_interval_cycles: int = Field(default=12, ge=1)
 
     # Grid trading engine
     grid_levels: int = Field(default=10, ge=2)
@@ -168,6 +172,35 @@ class Settings(BaseSettings):
     scanner_ttl_spread_minutes: float = Field(default=5.0, gt=0)
     scanner_ttl_correlation_hours: float = Field(default=24.0, gt=0)
 
+    # ── Dynamic position sizing ──
+    dynamic_sizing_enabled: bool = True
+    vol_scale_factor: float = Field(default=1.0, gt=0)
+    max_position_scale: float = Field(default=2.0, gt=0)
+
+    # ── Cross-engine correlation risk ──
+    cross_engine_correlation_enabled: bool = True
+    max_symbol_concentration_pct: float = Field(default=40.0, ge=0, le=100)
+
+    # ── Metrics persistence ──
+    metrics_persistence_enabled: bool = True
+    metrics_snapshot_interval_minutes: float = Field(default=5.0, gt=0)
+    metrics_retention_days: int = Field(default=90, ge=1)
+
+    # ── Market regime ──
+    regime_detection_enabled: bool = True
+    regime_crisis_threshold: float = Field(default=2.5, gt=0)
+    regime_detection_interval_seconds: float = Field(default=300.0, gt=0)
+    regime_adaptation_enabled: bool = True
+    crisis_circuit_breaker_minutes: float = Field(default=30.0, gt=0)
+
+    # ── Shutdown ──
+    shutdown_timeout_seconds: float = Field(default=30.0, gt=0)
+
+    # ── Data backfill ──
+    data_backfill_enabled: bool = True
+    data_backfill_interval_hours: float = Field(default=6.0, gt=0)
+    data_backfill_days: int = Field(default=30, ge=1)
+
     # ── Auto-tuner & rebalance ──
     tuner_enabled: bool = True
     tuner_interval_hours: int = Field(default=24, ge=1)
@@ -175,6 +208,8 @@ class Settings(BaseSettings):
     engine_rebalance_interval_hours: int = Field(default=24, ge=1)
     research_enabled: bool = True
     research_interval_hours: int = Field(default=24, ge=1)
+    research_auto_deploy: bool = True
+    research_regression_check_hours: float = Field(default=6.0, gt=0)
 
     # Funding rate strategy
     funding_extreme_positive_rate: float = Field(default=0.0005, ge=0)
@@ -187,6 +222,8 @@ class Settings(BaseSettings):
     var_enabled: bool = False
     var_confidence: float = Field(default=0.95, ge=0.5, le=0.999)
     max_portfolio_var_pct: float = Field(default=5.0, ge=0, le=100)
+    var_method: str = "historical"  # historical | parametric | cornish_fisher
+    stress_var_simulations: int = Field(default=1000, ge=100, le=100000)
     quant_pairs: list[list[str]] = Field(
         default_factory=list
     )  # e.g., [["BTC/USDT", "ETH/USDT"]]
@@ -221,6 +258,7 @@ class Settings(BaseSettings):
 
     # Logging
     log_level: str = "INFO"
+    trading_env: str = "development"  # production | staging | development
 
     # Dashboard
     dashboard_port: int = Field(default=8000, ge=1, le=65535)
@@ -246,6 +284,14 @@ class Settings(BaseSettings):
             return v.lower()
         return v
 
+    @field_validator("trading_env", mode="before")
+    @classmethod
+    def validate_trading_env(cls, v: Any) -> str:
+        valid = {"production", "staging", "development"}
+        if isinstance(v, str) and v.lower() in valid:
+            return v.lower()
+        return "development"
+
     @field_validator("log_level")
     @classmethod
     def validate_log_level(cls, v: str) -> str:
@@ -265,6 +311,18 @@ class Settings(BaseSettings):
                 for key, value in yaml_config.items():
                     if hasattr(self, key):
                         object.__setattr__(self, key, value)
+
+        # Apply TRADING_ENV-based log_level when TRADING_ENV is set but LOG_LEVEL is not
+        if os.environ.get("TRADING_ENV") and not os.environ.get("LOG_LEVEL"):
+            env_log_levels = {
+                "production": "WARNING",
+                "staging": "INFO",
+                "development": "DEBUG",
+            }
+            env_level = env_log_levels.get(self.trading_env)
+            if env_level:
+                object.__setattr__(self, "log_level", env_level)
+
         return self
 
 
@@ -568,6 +626,19 @@ SETTINGS_METADATA: dict[str, dict[str, Any]] = {
         "type": "float",
         "requires_restart": False,
     },
+    "var_method": {
+        "section": "Risk Management",
+        "description": "VaR calculation method: historical, parametric, or cornish_fisher",
+        "type": "select",
+        "options": ["historical", "parametric", "cornish_fisher"],
+        "requires_restart": False,
+    },
+    "stress_var_simulations": {
+        "section": "Risk Management",
+        "description": "Number of Monte Carlo simulations for stress VaR",
+        "type": "int",
+        "requires_restart": False,
+    },
     # Dashboard (unsafe)
     "dashboard_port": {
         "section": "Dashboard",
@@ -604,6 +675,14 @@ SETTINGS_METADATA: dict[str, dict[str, Any]] = {
         "section": "Notifications",
         "description": "Telegram chat ID",
         "type": "secret",
+        "requires_restart": True,
+    },
+    # Environment
+    "trading_env": {
+        "section": "Dashboard",
+        "description": "Deployment environment (production, staging, development)",
+        "type": "select",
+        "options": ["production", "staging", "development"],
         "requires_restart": True,
     },
     # Logging (safe)
@@ -650,6 +729,24 @@ SETTINGS_METADATA: dict[str, dict[str, Any]] = {
         "description": "Symbols to monitor for funding rate arbitrage",
         "type": "list",
         "requires_restart": True,
+    },
+    "funding_arb_order_timeout_seconds": {
+        "section": "Engines",
+        "description": "Timeout in seconds waiting for order fill in live mode",
+        "type": "float",
+        "requires_restart": False,
+    },
+    "funding_arb_futures_only_mode": {
+        "section": "Engines",
+        "description": "Force futures-only mode (no spot hedge) for testnet",
+        "type": "bool",
+        "requires_restart": False,
+    },
+    "funding_arb_reconcile_interval_cycles": {
+        "section": "Engines",
+        "description": "Run position reconciliation every N cycles in live mode",
+        "type": "int",
+        "requires_restart": False,
     },
     # Grid trading engine
     "grid_levels": {
@@ -774,6 +871,18 @@ SETTINGS_METADATA: dict[str, dict[str, Any]] = {
         "type": "int",
         "requires_restart": False,
     },
+    "research_auto_deploy": {
+        "section": "Research",
+        "description": "Auto-deploy significant research findings to live parameters",
+        "type": "bool",
+        "requires_restart": False,
+    },
+    "research_regression_check_hours": {
+        "section": "Research",
+        "description": "Hours between regression checks after research deployments",
+        "type": "float",
+        "requires_restart": False,
+    },
     # Token scanner
     "scanner_enabled": {
         "section": "Scanner",
@@ -827,6 +936,113 @@ SETTINGS_METADATA: dict[str, dict[str, Any]] = {
         "section": "Scanner",
         "description": "TTL for correlation opportunities (hours)",
         "type": "float",
+        "requires_restart": False,
+    },
+    # Dynamic Position Sizing
+    "dynamic_sizing_enabled": {
+        "section": "Risk Management",
+        "description": "Enable GARCH/ATR-based dynamic position sizing across engines",
+        "type": "bool",
+        "requires_restart": False,
+    },
+    "vol_scale_factor": {
+        "section": "Risk Management",
+        "description": "Volatility scale factor for dynamic position sizing",
+        "type": "float",
+        "requires_restart": False,
+    },
+    "max_position_scale": {
+        "section": "Risk Management",
+        "description": "Maximum position scale multiplier (vol_multiplier upper bound)",
+        "type": "float",
+        "requires_restart": False,
+    },
+    "cross_engine_correlation_enabled": {
+        "section": "Risk Management",
+        "description": "Enable cross-engine symbol concentration monitoring",
+        "type": "bool",
+        "requires_restart": False,
+    },
+    "max_symbol_concentration_pct": {
+        "section": "Risk Management",
+        "description": "Maximum symbol concentration as % of total capital across all engines",
+        "type": "float",
+        "requires_restart": False,
+    },
+    # Metrics persistence
+    "metrics_persistence_enabled": {
+        "section": "Metrics",
+        "description": "Enable persisting engine trades and metrics to DB",
+        "type": "bool",
+        "requires_restart": False,
+    },
+    "metrics_snapshot_interval_minutes": {
+        "section": "Metrics",
+        "description": "Minutes between metric snapshots",
+        "type": "float",
+        "requires_restart": False,
+    },
+    "metrics_retention_days": {
+        "section": "Metrics",
+        "description": "Days to retain persisted metrics before cleanup",
+        "type": "int",
+        "requires_restart": False,
+    },
+    # Market Regime
+    "regime_detection_enabled": {
+        "section": "Market Regime",
+        "description": "Enable real-time market regime detection",
+        "type": "bool",
+        "requires_restart": True,
+    },
+    "regime_crisis_threshold": {
+        "section": "Market Regime",
+        "description": "Volatility ratio threshold for CRISIS regime",
+        "type": "float",
+        "requires_restart": False,
+    },
+    "regime_detection_interval_seconds": {
+        "section": "Market Regime",
+        "description": "Seconds between regime detection checks",
+        "type": "float",
+        "requires_restart": True,
+    },
+    "regime_adaptation_enabled": {
+        "section": "Market Regime",
+        "description": "Enable engine regime adaptation and circuit breaker",
+        "type": "bool",
+        "requires_restart": False,
+    },
+    "crisis_circuit_breaker_minutes": {
+        "section": "Market Regime",
+        "description": "Minutes of CRISIS regime before circuit breaker pauses all engines",
+        "type": "float",
+        "requires_restart": False,
+    },
+    # Shutdown
+    "shutdown_timeout_seconds": {
+        "section": "Shutdown",
+        "description": "Timeout in seconds for graceful shutdown",
+        "type": "float",
+        "requires_restart": True,
+    },
+    # Data Collection (backfill)
+    "data_backfill_enabled": {
+        "section": "Data Collection",
+        "description": "Enable automatic data backfill for scanner-discovered symbols",
+        "type": "bool",
+        "requires_restart": False,
+    },
+    "data_backfill_interval_hours": {
+        "section": "Data Collection",
+        "description": "Hours between backfill cycles",
+        "type": "float",
+        "requires_restart": False,
+    },
+    "data_backfill_days": {
+        "section": "Data Collection",
+        "description": "Number of days of history to backfill per symbol",
+        "type": "int",
         "requires_restart": False,
     },
 }

@@ -98,6 +98,31 @@ class GridTradingEngine(BaseEngine):
         decisions: list[DecisionStep] = []
         pnl_update = 0.0
 
+        # Regime adaptation
+        regime_adj = self._get_regime_adjustments()
+        regime_label = "NORMAL"
+        if self._regime_detector:
+            regime_label = self._regime_detector.get_current_regime().value
+        t_mult = regime_adj["threshold_mult"]
+        s_mult = regime_adj["size_mult"]
+        regime_result = "정상 운영"
+        if regime_label == "HIGH":
+            regime_result = "보수적 모드 적용"
+        elif regime_label == "CRISIS":
+            regime_result = "위기 모드 — 신규 진입 중단"
+        decisions.append(DecisionStep(
+            label="시장 레짐",
+            observation=f"현재: {regime_label}, "
+                        f"threshold×{t_mult:.1f}, size×{s_mult:.1f}",
+            threshold="LOW: t×0.8/s×1.2, NORMAL: t×1.0/s×1.0, "
+                      "HIGH: t×1.3/s×0.7, CRISIS: 진입 중단",
+            result=regime_result,
+            category="evaluate",
+        ))
+
+        effective_spacing = self._grid_spacing_pct * regime_adj["threshold_mult"]
+        is_crisis = regime_label == "CRISIS"
+
         # Build symbol list: static config + dynamic from registry
         symbols = list(self._symbols)
         if self._registry:
@@ -125,7 +150,16 @@ class GridTradingEngine(BaseEngine):
 
             # Initialize grid if not yet created
             if symbol not in self._grids:
-                self._init_grid(symbol, price)
+                if is_crisis:
+                    decisions.append(DecisionStep(
+                        label=f"{symbol} 그리드 초기화",
+                        observation=f"현재가 ${price:,.2f}, CRISIS 레짐",
+                        threshold="CRISIS 시 새 그리드 생성 중단",
+                        result="SKIP - CRISIS 레짐, 신규 그리드 중단",
+                        category="skip",
+                    ))
+                    continue
+                self._init_grid(symbol, price, spacing_override=effective_spacing)
                 actions.append({
                     "action": "grid_created",
                     "symbol": symbol,
@@ -135,10 +169,34 @@ class GridTradingEngine(BaseEngine):
                 decisions.append(DecisionStep(
                     label=f"{symbol} 그리드 초기화",
                     observation=f"현재가 ${price:,.2f}, 그리드 없음",
-                    threshold=f"간격 {self._grid_spacing_pct}%, 레벨 {self._grid_levels_count}개",
+                    threshold=(
+                        f"간격 {effective_spacing:.2f}% "
+                        f"(기본 {self._grid_spacing_pct}%×{t_mult:.1f}), "
+                        f"레벨 {self._grid_levels_count}개"
+                    ),
                     result=f"INIT - {len(self._grids[symbol])}개 레벨 생성",
                     category="execute",
                 ))
+                # Log dynamic sizing if available
+                if self._dynamic_sizer and self._allocated_capital > 0:
+                    ps = self._dynamic_sizer.calculate_size(
+                        symbol=symbol,
+                        price=price,
+                        portfolio_value=self._allocated_capital,
+                    )
+                    decisions.append(DecisionStep(
+                        label="포지션 사이징",
+                        observation=(
+                            f"방법: {ps.method}, 변동성 배수: {ps.vol_multiplier:.2f}, "
+                            f"수량: {ps.quantity:.6f}"
+                        ),
+                        threshold="변동성 배수 범위: [0.25, 2.0]",
+                        result=(
+                            f"그리드당 사이즈: "
+                            f"${ps.notional_value / max(self._grid_levels_count, 1):.2f}"
+                        ),
+                        category="evaluate",
+                    ))
 
             # Check for fills and react
             grid_actions, grid_pnl = self._check_fills(symbol, price)
@@ -220,10 +278,20 @@ class GridTradingEngine(BaseEngine):
     # Grid management
     # ------------------------------------------------------------------
 
-    def _init_grid(self, symbol: str, center_price: float) -> None:
+    def _init_grid(
+        self,
+        symbol: str,
+        center_price: float,
+        spacing_override: float | None = None,
+    ) -> None:
         """Create a new grid around center_price."""
         levels: list[GridLevel] = []
-        spacing = self._grid_spacing_pct / 100.0
+        base_spacing = (
+            spacing_override
+            if spacing_override is not None
+            else self._grid_spacing_pct
+        )
+        spacing = base_spacing / 100.0
 
         for i in range(1, self._grid_levels_count + 1):
             buy_price = center_price * (1 - spacing * i)
@@ -288,9 +356,17 @@ class GridTradingEngine(BaseEngine):
                 gross_profit = level.price - buy_price
                 # Scale by a notional quantity (capital / max_orders / price)
                 if self._allocated_capital > 0 and level.price > 0:
-                    notional_qty = (
-                        self._allocated_capital / self._max_open_orders / level.price
-                    )
+                    if self._dynamic_sizer:
+                        ps = self._dynamic_sizer.calculate_size(
+                            symbol=symbol,
+                            price=level.price,
+                            portfolio_value=self._allocated_capital,
+                        )
+                        notional_qty = ps.quantity / max(self._grid_levels_count, 1)
+                    else:
+                        notional_qty = (
+                            self._allocated_capital / self._max_open_orders / level.price
+                        )
                     gross_profit *= notional_qty
                     # Deduct maker fees (grid uses limit orders)
                     fill_notional = notional_qty * level.price
