@@ -111,16 +111,19 @@ class Settings(BaseSettings):
     binance_futures_testnet: bool = True
 
     # Funding rate arbitrage engine
-    funding_arb_min_rate: float = Field(default=0.0003, ge=0)
-    funding_arb_exit_rate: float = Field(default=0.0001, ge=0)
-    funding_arb_max_spread_pct: float = Field(default=0.5, ge=0)
-    funding_arb_max_positions: int = Field(default=3, ge=1)
+    funding_arb_min_rate: float = Field(default=0.0001, ge=0)
+    funding_arb_exit_rate: float = Field(default=0.00005, ge=0)
+    funding_arb_max_spread_pct: float = Field(default=1.0, ge=0)
+    funding_arb_max_positions: int = Field(default=5, ge=1)
     funding_arb_leverage: int = Field(default=1, ge=1)
     funding_arb_symbols: list[str] = Field(
         default_factory=lambda: [
             "BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT", "DOGE/USDT",
         ]
     )
+    funding_arb_order_timeout_seconds: float = Field(default=10.0, gt=0)
+    funding_arb_futures_only_mode: bool = False
+    funding_arb_reconcile_interval_cycles: int = Field(default=12, ge=1)
 
     # Grid trading engine
     grid_levels: int = Field(default=10, ge=2)
@@ -726,6 +729,24 @@ SETTINGS_METADATA: dict[str, dict[str, Any]] = {
         "description": "Symbols to monitor for funding rate arbitrage",
         "type": "list",
         "requires_restart": True,
+    },
+    "funding_arb_order_timeout_seconds": {
+        "section": "Engines",
+        "description": "Timeout in seconds waiting for order fill in live mode",
+        "type": "float",
+        "requires_restart": False,
+    },
+    "funding_arb_futures_only_mode": {
+        "section": "Engines",
+        "description": "Force futures-only mode (no spot hedge) for testnet",
+        "type": "bool",
+        "requires_restart": False,
+    },
+    "funding_arb_reconcile_interval_cycles": {
+        "section": "Engines",
+        "description": "Run position reconciliation every N cycles in live mode",
+        "type": "int",
+        "requires_restart": False,
     },
     # Grid trading engine
     "grid_levels": {

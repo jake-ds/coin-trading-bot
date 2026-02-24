@@ -466,22 +466,29 @@ class TradingBot:
             engine_allocations=self._settings.engine_allocations,
             max_drawdown_pct=self._settings.engine_max_drawdown_pct,
         )
-        self._engine_manager = EngineManager(self._portfolio_mgr)
+        self._engine_manager = EngineManager(self._portfolio_mgr, settings=self._settings)
 
         is_paper = self._settings.trading_mode == TradingMode.PAPER
 
         # Create Binance Futures adapter for funding rate engine
+        # Prefer dedicated futures keys, fall back to spot keys
+        futures_api_key = (
+            self._settings.binance_futures_api_key or self._settings.binance_api_key
+        )
+        futures_secret = (
+            self._settings.binance_futures_secret_key or self._settings.binance_secret_key
+        )
         futures_exchanges = list(self._exchanges)
-        if self._settings.binance_api_key:
+        if futures_api_key:
             try:
                 from bot.exchanges.binance_futures import (
                     BinanceFuturesAdapter,
                 )
 
                 futures_adapter = BinanceFuturesAdapter(
-                    api_key=self._settings.binance_api_key,
-                    secret_key=self._settings.binance_secret_key,
-                    testnet=self._settings.binance_testnet,
+                    api_key=futures_api_key,
+                    secret_key=futures_secret,
+                    testnet=self._settings.binance_futures_testnet,
                 )
                 futures_exchanges = [futures_adapter] + list(
                     self._exchanges
