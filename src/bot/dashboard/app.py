@@ -360,6 +360,7 @@ def _get_all_positions() -> list[dict]:
 
     if _engine_manager is not None:
         for engine_name, engine in _engine_manager.engines.items():
+            # Standard engines using BaseEngine._positions
             for pos in engine.positions.values():
                 positions.append({
                     "symbol": pos.get("symbol", ""),
@@ -372,6 +373,26 @@ def _get_all_positions() -> list[dict]:
                     "opened_at": pos.get("opened_at", ""),
                     "strategy": f"engine:{engine_name}",
                 })
+
+            # Grid engine: filled buy levels = open positions
+            grids = getattr(engine, "grids", None)
+            if grids:
+                last_prices = getattr(engine, "_last_prices", {})
+                for symbol, levels in grids.items():
+                    for lvl in levels:
+                        if lvl.filled and lvl.side == "buy":
+                            current = last_prices.get(symbol, lvl.price)
+                            positions.append({
+                                "symbol": symbol,
+                                "quantity": 0,
+                                "entry_price": lvl.price,
+                                "current_price": current,
+                                "unrealized_pnl": current - lvl.price,
+                                "stop_loss": 0,
+                                "take_profit": 0,
+                                "opened_at": "",
+                                "strategy": f"engine:{engine_name}",
+                            })
 
     return positions
 

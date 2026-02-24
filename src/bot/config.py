@@ -114,7 +114,7 @@ class Settings(BaseSettings):
     funding_arb_min_rate: float = Field(default=0.0001, ge=0)
     funding_arb_exit_rate: float = Field(default=0.00005, ge=0)
     funding_arb_max_spread_pct: float = Field(default=1.0, ge=0)
-    funding_arb_max_positions: int = Field(default=5, ge=1)
+    funding_arb_max_positions: int = Field(default=10, ge=1)
     funding_arb_leverage: int = Field(default=1, ge=1)
     funding_arb_symbols: list[str] = Field(
         default_factory=lambda: [
