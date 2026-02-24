@@ -357,7 +357,25 @@ async def get_trades(
 @api_router.get("/positions")
 async def get_positions():
     """Get current open positions with SL/TP info."""
-    return {"positions": _bot_state["open_positions"]}
+    positions = list(_bot_state["open_positions"])
+
+    # Merge engine positions when running in engine mode
+    if _engine_manager is not None:
+        for engine_name, engine in _engine_manager.engines.items():
+            for pos in engine.positions.values():
+                positions.append({
+                    "symbol": pos.get("symbol", ""),
+                    "quantity": pos.get("quantity", 0),
+                    "entry_price": pos.get("entry_price", 0),
+                    "current_price": pos.get("mark_price", pos.get("entry_price", 0)),
+                    "unrealized_pnl": pos.get("unrealized_pnl", 0.0),
+                    "stop_loss": 0,
+                    "take_profit": 0,
+                    "opened_at": pos.get("opened_at", ""),
+                    "strategy": f"engine:{engine_name}",
+                })
+
+    return {"positions": positions}
 
 
 @api_router.get("/metrics")
@@ -1059,6 +1077,65 @@ async def list_deployments():
         return {"deployments": []}
     history = deployer.get_deploy_history()
     return {"deployments": list(reversed(history))}
+
+
+@research_router.post("/run")
+async def run_research_now():
+    """Manually trigger all research experiments immediately."""
+    if _engine_manager is None:
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "Engine mode not enabled"},
+        )
+    experiments = _engine_manager._research_experiments
+    if not experiments:
+        return {"status": "no_experiments", "reports": []}
+
+    deployer = getattr(_engine_manager, "_deployer", None)
+    s = _settings or getattr(_engine_manager, "_settings", None)
+    auto_deploy = bool(s and getattr(s, "research_auto_deploy", True))
+
+    results = []
+    for experiment in experiments:
+        try:
+            report = experiment.run_experiment()
+            report_dict = report.to_dict()
+            _engine_manager._research_reports.append(report_dict)
+            _engine_manager._research_reports = (
+                _engine_manager._research_reports[-50:]
+            )
+
+            # Deploy through deployer (same logic as _research_loop)
+            deploy_info = None
+            if deployer and auto_deploy:
+                result = deployer.deploy(report)
+                if result.success:
+                    deploy_info = {
+                        "deployed": True,
+                        "snapshot_id": result.snapshot_id,
+                        "changes": [c.to_dict() for c in result.deployed_changes],
+                    }
+                else:
+                    deploy_info = {"deployed": False, "reason": "skipped by deployer"}
+            elif report.improvement_significant:
+                changes = experiment.apply_findings()
+                if changes and s:
+                    _engine_manager.tuner.apply_changes(changes, s)
+                    deploy_info = {
+                        "deployed": True,
+                        "snapshot_id": None,
+                        "changes": [c.to_dict() for c in changes],
+                    }
+
+            report_dict["deployment"] = deploy_info
+            results.append(report_dict)
+        except Exception as e:
+            results.append({
+                "experiment": experiment.__class__.__name__,
+                "error": str(e),
+            })
+
+    return {"status": "completed", "reports": results}
 
 
 app.include_router(research_router)

@@ -103,6 +103,7 @@ function Positions() {
             <thead>
               <tr className="border-b border-gray-700 text-gray-400">
                 <th className="text-left px-4 py-3 font-medium">Symbol</th>
+                <th className="text-left px-4 py-3 font-medium">Engine</th>
                 <th className="text-right px-4 py-3 font-medium">Qty</th>
                 <th className="text-right px-4 py-3 font-medium">Entry Price</th>
                 <th className="text-right px-4 py-3 font-medium">Current Price</th>
@@ -121,6 +122,7 @@ function Positions() {
                 return (
                   <tr key={`${pos.symbol}-${idx}`} className="border-b border-gray-700/50 hover:bg-gray-750">
                     <td className="px-4 py-3 font-medium text-white">{pos.symbol}</td>
+                    <td className="px-4 py-3 text-gray-300 text-sm">{pos.strategy?.startsWith('engine:') ? pos.strategy.slice(7) : pos.strategy || '--'}</td>
                     <td className="px-4 py-3 text-right text-gray-300">{pos.quantity}</td>
                     <td className="px-4 py-3 text-right text-gray-300">${pos.entry_price.toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
                     <td className="px-4 py-3 text-right text-gray-300">${pos.current_price.toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>

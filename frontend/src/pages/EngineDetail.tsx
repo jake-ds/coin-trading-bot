@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import apiClient from '../api/client'
 import { useWebSocket } from '../hooks/useWebSocket'
-import type { EngineCycleLogEntry, EngineDecisionStep, EngineInfo } from '../api/types'
+import type { EngineCycleLogEntry, EngineDecisionStep, EngineInfo, EnginePositionsResponse } from '../api/types'
 
 const WS_URL = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/api/ws`
 
@@ -118,6 +118,7 @@ function EngineDetail() {
   const { name } = useParams<{ name: string }>()
   const [engine, setEngine] = useState<EngineInfo | null>(null)
   const [cycles, setCycles] = useState<EngineCycleLogEntry[]>([])
+  const [positions, setPositions] = useState<Record<string, unknown>[]>([])
   const [selectedIndex, setSelectedIndex] = useState<number>(0)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -128,15 +129,17 @@ function EngineDetail() {
   const fetchData = useCallback(async () => {
     if (!name) return
     try {
-      const [enginesRes, cycleRes] = await Promise.all([
+      const [enginesRes, cycleRes, posRes] = await Promise.all([
         apiClient.get(`/engines`),
         apiClient.get(`/engines/${name}/cycle-log`),
+        apiClient.get<EnginePositionsResponse>(`/engines/${name}/positions`),
       ])
       const info = enginesRes.data[name]
       if (info) setEngine(info)
       const log = cycleRes.data.cycle_log || []
       setCycles(log)
       if (log.length > 0) setSelectedIndex(log.length - 1)
+      setPositions(posRes.data.positions || [])
       setError(null)
     } catch {
       setError('Failed to fetch engine data')
@@ -206,6 +209,40 @@ function EngineDetail() {
       </div>
 
       <p className="text-sm text-gray-400">{engine.description}</p>
+
+      {positions.length > 0 && (
+        <div className="bg-gray-800 rounded-lg border border-gray-700 overflow-x-auto">
+          <div className="px-4 py-3 border-b border-gray-700">
+            <h3 className="text-sm font-semibold text-gray-300">
+              Open Positions ({positions.length})
+            </h3>
+          </div>
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-gray-700 text-gray-400">
+                <th className="text-left px-4 py-2 font-medium">Symbol</th>
+                <th className="text-left px-4 py-2 font-medium">Side</th>
+                <th className="text-right px-4 py-2 font-medium">Qty</th>
+                <th className="text-right px-4 py-2 font-medium">Entry Price</th>
+                <th className="text-left px-4 py-2 font-medium">Futures Order</th>
+                <th className="text-left px-4 py-2 font-medium">Opened At</th>
+              </tr>
+            </thead>
+            <tbody>
+              {positions.map((pos, idx) => (
+                <tr key={`${pos.symbol}-${idx}`} className="border-b border-gray-700/50 hover:bg-gray-750">
+                  <td className="px-4 py-2 font-medium text-white">{String(pos.symbol || '')}</td>
+                  <td className="px-4 py-2 text-gray-300">{String(pos.side || '--')}</td>
+                  <td className="px-4 py-2 text-right text-gray-300">{Number(pos.quantity || 0).toFixed(4)}</td>
+                  <td className="px-4 py-2 text-right text-gray-300">${Number(pos.entry_price || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
+                  <td className="px-4 py-2 text-gray-400 font-mono text-xs">{pos.futures_order_id ? String(pos.futures_order_id) : '--'}</td>
+                  <td className="px-4 py-2 text-gray-400 text-xs">{pos.opened_at ? new Date(String(pos.opened_at)).toLocaleString() : '--'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       <div className="flex gap-4" style={{ height: 'calc(100vh - 220px)' }}>
         {/* Left: Cycle list */}
