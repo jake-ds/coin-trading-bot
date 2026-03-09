@@ -26,11 +26,12 @@ class BinanceFuturesAdapter(ExchangeAdapter):
             {
                 "apiKey": api_key,
                 "secret": secret_key,
-                "sandbox": testnet,
                 "enableRateLimit": True,
                 "options": {"defaultType": "future"},
             }
         )
+        if testnet:
+            self._exchange.enable_demo_trading(True)
 
     @property
     def name(self) -> str:
@@ -203,7 +204,7 @@ class BinanceFuturesAdapter(ExchangeAdapter):
                     "entry_price": float(pos.get("entryPrice", 0)),
                     "mark_price": float(pos.get("markPrice", 0)),
                     "unrealized_pnl": float(pos.get("unrealizedPnl", 0)),
-                    "leverage": int(pos.get("leverage", 1)),
+                    "leverage": int(pos.get("leverage") or 1),
                     "margin_mode": pos.get("marginMode", "cross"),
                 })
             return result
@@ -236,7 +237,9 @@ class BinanceFuturesAdapter(ExchangeAdapter):
         status = status_map.get(raw_status, OrderStatus.PENDING)
 
         order_type = OrderType.LIMIT if data.get("type") == "limit" else OrderType.MARKET
-        price = float(data.get("price") or 0)
+        # Market orders must have price=0 per Order model validator;
+        # ccxt may return the fill price in the 'price' field for market orders.
+        price = float(data.get("price") or 0) if order_type == OrderType.LIMIT else 0
 
         filled_at = None
         if status == OrderStatus.FILLED and data.get("lastTradeTimestamp"):

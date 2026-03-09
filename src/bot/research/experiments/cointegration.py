@@ -5,6 +5,8 @@ Runs Engle-Granger cointegration test to identify truly cointegrated pairs.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import numpy as np
 import structlog
 from statsmodels.tsa.stattools import coint
@@ -12,6 +14,9 @@ from statsmodels.tsa.stattools import coint
 from bot.engines.tuner import ParamChange
 from bot.research.base import ResearchTask
 from bot.research.report import ResearchReport
+
+if TYPE_CHECKING:
+    from bot.research.data_provider import HistoricalDataProvider
 
 logger = structlog.get_logger(__name__)
 
@@ -23,13 +28,57 @@ class CointegrationExperiment(ResearchTask):
     def target_engine(self) -> str:
         return "stat_arb"
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        data_provider: HistoricalDataProvider | None = None,
+        stat_arb_pairs: list[list[str]] | None = None,
+    ) -> None:
+        super().__init__(data_provider=data_provider)
         self._last_report: ResearchReport | None = None
+        self._stat_arb_pairs = stat_arb_pairs or [
+            ["BTC/USDT", "ETH/USDT"],
+            ["SOL/USDT", "ETH/USDT"],
+        ]
+
+    def _fetch_real_pairs(self) -> dict[str, tuple[list[float], list[float]]] | None:
+        """Fetch real price data for configured stat_arb pairs."""
+        if not self.data_provider:
+            return None
+        try:
+            # Collect all unique symbols
+            all_symbols = list({s for pair in self._stat_arb_pairs for s in pair})
+            prices_map = self._run_async(
+                self.data_provider.get_multi_prices(all_symbols, "1h", lookback_days=60)
+            )
+            # Build pairs dict
+            pairs: dict[str, tuple[list[float], list[float]]] = {}
+            for pair_cfg in self._stat_arb_pairs:
+                if len(pair_cfg) != 2:
+                    continue
+                sym_a, sym_b = pair_cfg
+                prices_a = prices_map.get(sym_a, [])
+                prices_b = prices_map.get(sym_b, [])
+                if len(prices_a) >= 30 and len(prices_b) >= 30:
+                    pair_name = f"{sym_a}-{sym_b}"
+                    pairs[pair_name] = (prices_a, prices_b)
+            if pairs:
+                return pairs
+        except Exception:
+            logger.warning("cointegration_real_data_fetch_failed", exc_info=True)
+        return None
 
     def run_experiment(self, **kwargs: object) -> ResearchReport:
+        # Priority: kwargs > data_provider > synthetic
         pairs = kwargs.get("pairs")
+        data_source = "kwargs"
         if pairs is None:
-            pairs = self._generate_synthetic_pairs()
+            real_pairs = self._fetch_real_pairs()
+            if real_pairs is not None:
+                pairs = real_pairs
+                data_source = "real"
+            else:
+                pairs = self._generate_synthetic_pairs()
+                data_source = "synthetic"
 
         results: dict[str, object] = {}
         cointegrated_pairs: list[str] = []
@@ -67,6 +116,8 @@ class CointegrationExperiment(ResearchTask):
 
         total = len(results)
         n_coint = len(cointegrated_pairs)
+
+        results["data_source"] = data_source
 
         self._last_report = ResearchReport(
             experiment_name="cointegration",

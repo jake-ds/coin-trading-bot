@@ -79,6 +79,31 @@ class StatisticalArbEngine(BaseEngine):
         decisions: list[DecisionStep] = []
         pnl_update = 0.0
 
+        # Regime adaptation
+        regime_adj = self._get_regime_adjustments()
+        regime_label = "NORMAL"
+        if self._regime_detector:
+            regime_label = self._regime_detector.get_current_regime().value
+        t_mult = regime_adj["threshold_mult"]
+        s_mult = regime_adj["size_mult"]
+        regime_result = "정상 운영"
+        if regime_label == "HIGH":
+            regime_result = "보수적 모드 적용"
+        elif regime_label == "CRISIS":
+            regime_result = "위기 모드 — 신규 진입 중단"
+        decisions.append(DecisionStep(
+            label="시장 레짐",
+            observation=f"현재: {regime_label}, "
+                        f"threshold×{t_mult:.1f}, size×{s_mult:.1f}",
+            threshold="LOW: t×0.8/s×1.2, NORMAL: t×1.0/s×1.0, "
+                      "HIGH: t×1.3/s×0.7, CRISIS: 진입 중단",
+            result=regime_result,
+            category="evaluate",
+        ))
+
+        effective_entry_zscore = self._entry_zscore * regime_adj["threshold_mult"]
+        is_crisis = regime_label == "CRISIS"
+
         # Update price caches
         await self._update_price_cache()
 
@@ -204,9 +229,15 @@ class StatisticalArbEngine(BaseEngine):
                 continue
 
             # Check for new entry
-            if self._has_capacity():
+            if is_crisis:
+                decisions[-1].result = "SKIP - CRISIS 레짐, 신규 진입 중단"
+                decisions[-1].category = "skip"
+                continue
+
+            if self._has_capacity(pair_key):
                 entry = self._check_entry(
-                    pair_key, sym_a, sym_b, zscore, a[-1], b[-1]
+                    pair_key, sym_a, sym_b, zscore, a[-1], b[-1],
+                    entry_zscore_override=effective_entry_zscore,
                 )
                 if entry:
                     actions.append(entry)
@@ -215,6 +246,29 @@ class StatisticalArbEngine(BaseEngine):
                         f"Z-Score {float(zscore):.4f}"
                     )
                     decisions[-1].category = "execute"
+                    # Log dynamic sizing if available
+                    if self._dynamic_sizer and self._allocated_capital > 0:
+                        avg_price = (
+                            (a[-1] + b[-1]) / 2
+                            if (a[-1] > 0 and b[-1] > 0)
+                            else a[-1] or b[-1]
+                        )
+                        if avg_price > 0:
+                            ps = self._dynamic_sizer.calculate_size(
+                                symbol=sym_a,
+                                price=float(avg_price),
+                                portfolio_value=self._allocated_capital,
+                            )
+                            decisions.append(DecisionStep(
+                                label="포지션 사이징",
+                                observation=(
+                                    f"방법: {ps.method}, 변동성 배수: {ps.vol_multiplier:.2f}, "
+                                    f"수량: {ps.quantity:.6f}"
+                                ),
+                                threshold="변동성 배수 범위: [0.25, 2.0]",
+                                result=f"사이즈 결정: ${ps.notional_value:.2f}",
+                                category="evaluate",
+                            ))
                 else:
                     decisions[-1].result = (
                         f"HOLD - Z-Score {float(zscore):.4f}, 진입 기준 미달"
@@ -252,21 +306,49 @@ class StatisticalArbEngine(BaseEngine):
         zscore: float,
         price_a: float,
         price_b: float,
+        entry_zscore_override: float | None = None,
     ) -> dict[str, Any] | None:
         """Check if z-score warrants a new pairs trade entry."""
-        if abs(zscore) < self._entry_zscore:
+        effective_entry = (
+            entry_zscore_override
+            if entry_zscore_override is not None
+            else self._entry_zscore
+        )
+        if abs(zscore) < effective_entry:
             return None
 
         # z > +entry → A is relatively overpriced: short A, long B
         # z < -entry → A is relatively underpriced: long A, short B
-        if zscore > self._entry_zscore:
+        if zscore > effective_entry:
             side_a, side_b = "short", "long"
         else:
             side_a, side_b = "long", "short"
 
-        position_capital = self._allocated_capital / max(self._max_positions, 1)
-        qty_a = position_capital / 2 / price_a if price_a > 0 else 0
-        qty_b = position_capital / 2 / price_b if price_b > 0 else 0
+        # Dynamic sizing if available
+        if self._dynamic_sizer and self._allocated_capital > 0:
+            # Use the average of the two prices for sizing
+            avg_price = (
+                (price_a + price_b) / 2
+                if (price_a > 0 and price_b > 0)
+                else price_a or price_b
+            )
+            if avg_price > 0:
+                ps = self._dynamic_sizer.calculate_size(
+                    symbol=sym_a,
+                    price=avg_price,
+                    portfolio_value=self._allocated_capital,
+                )
+                # Split total quantity equally between the two legs
+                total_notional = ps.notional_value
+                qty_a = total_notional / 2 / price_a if price_a > 0 else 0
+                qty_b = total_notional / 2 / price_b if price_b > 0 else 0
+            else:
+                qty_a = 0
+                qty_b = 0
+        else:
+            position_capital = self._allocated_capital / max(self._max_positions, 1)
+            qty_a = position_capital / 2 / price_a if price_a > 0 else 0
+            qty_b = position_capital / 2 / price_b if price_b > 0 else 0
 
         self._add_position(
             symbol=pair_key,

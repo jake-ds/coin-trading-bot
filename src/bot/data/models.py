@@ -84,6 +84,65 @@ class PortfolioSnapshot(Base):
     positions_json: Mapped[str] = mapped_column(String(5000), default="[]")
 
 
+class EngineTradeRecord(Base):
+    """Persisted engine trade record (from EngineTracker)."""
+
+    __tablename__ = "engine_trades"
+    __table_args__ = (
+        Index(
+            "ix_engine_trades_engine_exit",
+            "engine_name", "exit_time",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(
+        Integer, primary_key=True, autoincrement=True,
+    )
+    engine_name: Mapped[str] = mapped_column(String(50), index=True)
+    symbol: Mapped[str] = mapped_column(String(50))
+    side: Mapped[str] = mapped_column(String(20))
+    entry_price: Mapped[float] = mapped_column(Float)
+    exit_price: Mapped[float] = mapped_column(Float)
+    quantity: Mapped[float] = mapped_column(Float)
+    pnl: Mapped[float] = mapped_column(Float)
+    cost: Mapped[float] = mapped_column(Float)
+    net_pnl: Mapped[float] = mapped_column(Float)
+    entry_time: Mapped[str] = mapped_column(String(50))
+    exit_time: Mapped[str] = mapped_column(String(50))
+    hold_time_seconds: Mapped[float] = mapped_column(
+        Float, default=0.0,
+    )
+
+
+class EngineMetricSnapshot(Base):
+    """Periodic snapshot of engine performance metrics."""
+
+    __tablename__ = "engine_metric_snapshots"
+    __table_args__ = (
+        Index(
+            "ix_engine_metrics_engine_ts",
+            "engine_name", "timestamp",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(
+        Integer, primary_key=True, autoincrement=True,
+    )
+    engine_name: Mapped[str] = mapped_column(String(50), index=True)
+    timestamp: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow,
+    )
+    total_trades: Mapped[int] = mapped_column(Integer, default=0)
+    winning_trades: Mapped[int] = mapped_column(Integer, default=0)
+    losing_trades: Mapped[int] = mapped_column(Integer, default=0)
+    win_rate: Mapped[float] = mapped_column(Float, default=0.0)
+    total_pnl: Mapped[float] = mapped_column(Float, default=0.0)
+    sharpe_ratio: Mapped[float] = mapped_column(Float, default=0.0)
+    max_drawdown: Mapped[float] = mapped_column(Float, default=0.0)
+    profit_factor: Mapped[float] = mapped_column(Float, default=0.0)
+    cost_ratio: Mapped[float] = mapped_column(Float, default=0.0)
+
+
 class AuditLogRecord(Base):
     """Immutable audit log entry for tracking all significant bot actions."""
 

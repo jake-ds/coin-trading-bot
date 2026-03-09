@@ -14,9 +14,8 @@ venv/
 node_modules/
 .mypy_cache/
 .ruff_cache/
-data/
-*.db
-*.sqlite
+data/*.db
+data/*.sqlite
 scripts/ralph/
 tests/
 docs/

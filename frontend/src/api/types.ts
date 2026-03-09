@@ -334,6 +334,113 @@ export interface PerformanceSummary {
   window_hours: number
 }
 
+// Trade Explorer types (V6-009)
+export interface TradeDetail {
+  engine_name: string
+  symbol: string
+  side: string
+  entry_price: number
+  exit_price: number
+  quantity: number
+  pnl: number       // gross
+  cost: number
+  net_pnl: number
+  entry_time: string
+  exit_time: string
+  hold_time_seconds: number
+}
+
+export interface TradeDetailResponse {
+  trades: TradeDetail[]
+  total: number
+  limit: number
+  offset: number
+}
+
+// Heatmap types (V6-010)
+export interface HeatmapHourlyDow {
+  hour: number
+  dow: number
+  pnl: number
+  trade_count: number
+  win_rate: number
+}
+
+export interface HeatmapEngineSymbol {
+  engine: string
+  symbol: string
+  pnl: number
+  trade_count: number
+  win_rate: number
+}
+
+export interface HeatmapMonthly {
+  year: number
+  month: number
+  pnl: number
+  trade_count: number
+  win_rate: number
+}
+
+// Risk Dashboard types (V6-011)
+export interface RiskPortfolioMetrics {
+  exposure_pct: number
+  heat: number
+  var_pct: number | null
+  parametric_var: number | null
+  cornish_fisher_var: number | null
+  cvar: number | null
+  stress_var: number | null
+  n_positions: number
+  portfolio_value: number
+  var_enabled: boolean
+  positions: Array<{ symbol: string; value: number; atr: number | null }>
+}
+
+export interface DrawdownPoint {
+  timestamp: string
+  drawdown_pct: number
+  equity: number
+}
+
+export interface CorrelationReport {
+  per_symbol: Record<
+    string,
+    { engines: string[]; total_notional: number; pct_of_capital: number }
+  >
+  cross_engine_correlations: Record<
+    string,
+    {
+      overlap_symbols: string[]
+      overlap_pct: number
+      concentration_score: number
+    }
+  >
+  alerts: string[]
+}
+
+// Metrics History types (V6-013)
+export interface DailySummaryEntry {
+  date: string
+  total_pnl: number
+  total_trades: number
+  winning_trades: number
+  total_cost: number
+  avg_win_rate: number
+}
+
+export interface MetricsHistoryResponse {
+  timestamps: string[]
+  sharpe: number[]
+  win_rate: number[]
+  total_pnl: number[]
+  max_drawdown: number[]
+}
+
+export interface MetricsCompareResponse {
+  engines: Record<string, { timestamps: string[]; values: number[] }>
+}
+
 // Scanner / Opportunity types
 export type OpportunityTypeName = 'funding_rate' | 'volatility' | 'cross_exchange_spread' | 'correlation'
 

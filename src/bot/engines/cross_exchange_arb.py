@@ -80,6 +80,31 @@ class CrossExchangeArbEngine(BaseEngine):
         decisions: list[DecisionStep] = []
         pnl_update = 0.0
 
+        # Regime adaptation
+        regime_adj = self._get_regime_adjustments()
+        regime_label = "NORMAL"
+        if self._regime_detector:
+            regime_label = self._regime_detector.get_current_regime().value
+        t_mult = regime_adj["threshold_mult"]
+        s_mult = regime_adj["size_mult"]
+        regime_result = "정상 운영"
+        if regime_label == "HIGH":
+            regime_result = "보수적 모드 적용"
+        elif regime_label == "CRISIS":
+            regime_result = "위기 모드 — 신규 진입 중단"
+        decisions.append(DecisionStep(
+            label="시장 레짐",
+            observation=f"현재: {regime_label}, "
+                        f"threshold×{t_mult:.1f}, size×{s_mult:.1f}",
+            threshold="LOW: t×0.8/s×1.2, NORMAL: t×1.0/s×1.0, "
+                      "HIGH: t×1.3/s×0.7, CRISIS: 진입 중단",
+            result=regime_result,
+            category="evaluate",
+        ))
+
+        effective_min_spread = self._min_spread_pct * regime_adj["threshold_mult"]
+        is_crisis = regime_label == "CRISIS"
+
         if len(self._exchanges) < 2:
             decisions.append(DecisionStep(
                 label="거래소 확인",
@@ -124,7 +149,7 @@ class CrossExchangeArbEngine(BaseEngine):
 
             # Use cost-based minimum spread (at least break-even after fees)
             cost_min_spread = self._cost_model.min_spread_for_profit(legs=4)
-            effective_min = max(self._min_spread_pct, cost_min_spread)
+            effective_min = max(effective_min_spread, cost_min_spread)
 
             decisions.append(DecisionStep(
                 label=f"{symbol} 거래소간 스프레드",
@@ -141,7 +166,31 @@ class CrossExchangeArbEngine(BaseEngine):
                 category="evaluate",
             ))
 
+            if is_crisis:
+                decisions[-1].result = "SKIP - CRISIS 레짐, 신규 진입 중단"
+                decisions[-1].category = "skip"
+                continue
+
             if spread_abs >= effective_min:
+                # Log dynamic sizing if available
+                if self._dynamic_sizer and self._allocated_capital > 0:
+                    mid = spread_info.get("mid_price", 0)
+                    if mid > 0:
+                        ps = self._dynamic_sizer.calculate_size(
+                            symbol=symbol,
+                            price=mid,
+                            portfolio_value=self._allocated_capital,
+                        )
+                        decisions.append(DecisionStep(
+                            label="포지션 사이징",
+                            observation=(
+                                f"방법: {ps.method}, 변동성 배수: {ps.vol_multiplier:.2f}, "
+                                f"수량: {ps.quantity:.6f}"
+                            ),
+                            threshold="변동성 배수 범위: [0.25, 2.0]",
+                            result=f"사이즈 결정: ${ps.notional_value:.2f}",
+                            category="evaluate",
+                        ))
                 arb_result = await self._execute_arb(symbol, spread_info)
                 if arb_result:
                     actions.append(arb_result)
@@ -235,14 +284,22 @@ class CrossExchangeArbEngine(BaseEngine):
             buy_price = spread_info["price_a"]
             sell_price = spread_info["price_b"]
 
-        # Calculate quantity based on max position
-        quantity = self._max_position_per_symbol / buy_price if buy_price > 0 else 0
+        # Calculate quantity based on max position (dynamic sizer if available)
+        if self._dynamic_sizer and self._allocated_capital > 0 and buy_price > 0:
+            ps = self._dynamic_sizer.calculate_size(
+                symbol=symbol,
+                price=buy_price,
+                portfolio_value=self._allocated_capital,
+            )
+            quantity = ps.quantity
+        else:
+            quantity = self._max_position_per_symbol / buy_price if buy_price > 0 else 0
         if quantity <= 0:
             return None
 
         gross_profit = (sell_price - buy_price) * quantity
         # Deduct round-trip costs (4 legs: buy+sell on each exchange)
-        notional = self._max_position_per_symbol
+        notional = quantity * buy_price
         cost = self._cost_model.round_trip_cost(notional, legs=4)
         net_profit = gross_profit - cost
 

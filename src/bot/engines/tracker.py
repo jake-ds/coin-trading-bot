@@ -111,6 +111,23 @@ class EngineTracker:
         }
         self._cycles.setdefault(engine_name, []).append(entry)
 
+    def bulk_load_trades(
+        self, engine_name: str, trades: list[TradeRecord]
+    ) -> None:
+        """Restore trades from persistence (startup recovery)."""
+        existing = self._trades.setdefault(engine_name, [])
+        history = self._pnl_history.setdefault(engine_name, [])
+        cum_pnl = history[-1]["cumulative_pnl"] if history else 0.0
+        for trade in trades:
+            existing.append(trade)
+            cum_pnl += trade.net_pnl
+            history.append({
+                "timestamp": trade.exit_time,
+                "pnl": trade.net_pnl,
+                "cumulative_pnl": round(cum_pnl, 4),
+                "symbol": trade.symbol,
+            })
+
     # ------------------------------------------------------------------
     # Metrics
     # ------------------------------------------------------------------

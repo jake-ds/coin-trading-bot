@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from bot.config import Settings
     from bot.engines.base import BaseEngine, EngineCycleResult
     from bot.engines.portfolio_manager import PortfolioManager
+    from bot.research.deployer import ResearchDeployer
 
 logger = structlog.get_logger(__name__)
 
@@ -44,6 +45,38 @@ class EngineManager:
         self._rebalance_history: list[dict] = []
         self._research_experiments: list[ResearchTask] = []
         self._research_reports: list[dict] = []
+        self._deployer: ResearchDeployer | None = None
+        self._regression_task: asyncio.Task | None = None
+        self._collector = None
+        self._backfill_task: asyncio.Task | None = None
+        self._correlation_controller = None
+        self._metrics_persistence = None
+        self._snapshot_task: asyncio.Task | None = None
+        self._regime_detector = None
+        self._regime_task: asyncio.Task | None = None
+        self._circuit_breaker_active: bool = False
+        self._circuit_breaker_paused_engines: set[str] = set()
+        self._circuit_breaker_task: asyncio.Task | None = None
+
+    def set_collector(self, collector) -> None:
+        """Set the DataCollector for backfill background loop."""
+        self._collector = collector
+
+    def set_deployer(self, deployer: ResearchDeployer) -> None:
+        """Set the ResearchDeployer for auto-deploying research findings."""
+        self._deployer = deployer
+
+    def set_correlation_controller(self, controller) -> None:
+        """Set the CorrelationRiskController for cross-engine risk monitoring."""
+        self._correlation_controller = controller
+
+    def set_metrics_persistence(self, persistence) -> None:
+        """Set the MetricsPersistence for saving trades/metrics to DB."""
+        self._metrics_persistence = persistence
+
+    def set_regime_detector(self, detector) -> None:
+        """Set the MarketRegimeDetector for real-time regime detection."""
+        self._regime_detector = detector
 
     # ------------------------------------------------------------------
     # Registration
@@ -148,6 +181,10 @@ class EngineManager:
         """Record cycle and extract trade records from cycle result."""
         self.tracker.record_cycle(engine_name, result)
 
+        # Update correlation controller with latest positions
+        if self._correlation_controller is not None:
+            self._sync_correlation_positions()
+
         # Extract trades from actions_taken (PnL-bearing actions)
         if result.pnl_update != 0 and result.actions_taken:
             for action in result.actions_taken:
@@ -173,6 +210,12 @@ class EngineManager:
                     hold_time_seconds=action.get("hold_time_seconds", 0),
                 )
                 self.tracker.record_trade(engine_name, trade)
+                if self._metrics_persistence is not None:
+                    asyncio.ensure_future(
+                        self._metrics_persistence.save_trade(
+                            engine_name, trade,
+                        )
+                    )
 
     # ------------------------------------------------------------------
     # Tuner and rebalance loops
@@ -188,7 +231,7 @@ class EngineManager:
         )
 
     async def start_background_loops(self) -> None:
-        """Start tuner, rebalance, and research background loops."""
+        """Start tuner, rebalance, research, and backfill background loops."""
         s = self._settings
         if s and getattr(s, "tuner_enabled", False):
             self._tuner_task = asyncio.create_task(
@@ -201,6 +244,48 @@ class EngineManager:
         if s and getattr(s, "research_enabled", False):
             self._research_task = asyncio.create_task(
                 self._research_loop(), name="research-loop"
+            )
+        if self._collector and getattr(s, "data_backfill_enabled", True):
+            self._backfill_task = asyncio.create_task(
+                self._collector._backfill_loop(
+                    registry=self.opportunity_registry,
+                    settings=s,
+                ),
+                name="backfill-loop",
+            )
+        if self._deployer and getattr(s, "research_auto_deploy", True):
+            self._regression_task = asyncio.create_task(
+                self._regression_check_loop(), name="regression-check-loop"
+            )
+        if (
+            self._metrics_persistence is not None
+            and getattr(s, "metrics_persistence_enabled", True)
+        ):
+            interval = getattr(
+                s, "metrics_snapshot_interval_minutes", 5.0,
+            )
+            self._snapshot_task = asyncio.create_task(
+                self._metrics_persistence._snapshot_loop(interval),
+                name="metrics-snapshot-loop",
+            )
+        if (
+            self._regime_detector is not None
+            and getattr(s, "regime_detection_enabled", True)
+        ):
+            interval_s = getattr(
+                s, "regime_detection_interval_seconds", 300.0,
+            )
+            self._regime_task = asyncio.create_task(
+                self._regime_detector._detection_loop(interval_s),
+                name="regime-detection-loop",
+            )
+        if (
+            self._regime_detector is not None
+            and getattr(s, "regime_adaptation_enabled", True)
+        ):
+            self._circuit_breaker_task = asyncio.create_task(
+                self._circuit_breaker_loop(),
+                name="circuit-breaker-loop",
             )
 
     async def _tuner_loop(self) -> None:
@@ -261,6 +346,19 @@ class EngineManager:
                     continue
 
                 all_metrics = self.tracker.get_all_metrics(window_hours=24)
+
+                # Factor in concentration risk when rebalancing
+                if self._correlation_controller is not None:
+                    self._sync_correlation_positions()
+                    report = (
+                        self._correlation_controller.get_concentration_report()
+                    )
+                    if report.get("alerts"):
+                        logger.warning(
+                            "rebalance_concentration_alerts",
+                            alerts=report["alerts"],
+                        )
+
                 new_allocs = self._portfolio_manager.rebalance_allocations(
                     all_metrics
                 )
@@ -306,7 +404,24 @@ class EngineManager:
                             self._research_reports[-50:]
                         )
 
-                        if report.improvement_significant:
+                        # Use deployer if available, otherwise fallback
+                        if (
+                            self._deployer
+                            and s
+                            and getattr(s, "research_auto_deploy", True)
+                        ):
+                            result = self._deployer.deploy(report)
+                            if result.success:
+                                logger.info(
+                                    "research_deployed",
+                                    experiment=report.experiment_name,
+                                    snapshot_id=result.snapshot_id,
+                                    changes=[
+                                        c.to_dict()
+                                        for c in result.deployed_changes
+                                    ],
+                                )
+                        elif report.improvement_significant:
                             changes = experiment.apply_findings()
                             if changes and s:
                                 self.tuner.apply_changes(changes, s)
@@ -331,6 +446,140 @@ class EngineManager:
                 logger.exception("research_loop_error")
 
             await asyncio.sleep(interval)
+
+    async def _regression_check_loop(self) -> None:
+        """Periodically check for performance regression after deployments."""
+        s = self._settings
+        initial_delay = 21600  # 6 hours before first check
+        interval = (
+            getattr(s, "research_regression_check_hours", 6.0) * 3600
+            if s
+            else 21600
+        )
+
+        await asyncio.sleep(initial_delay)
+
+        while True:
+            try:
+                if not self._deployer:
+                    await asyncio.sleep(interval)
+                    continue
+
+                # Check regression for each engine that has a recent deploy
+                history = self._deployer.get_deploy_history()
+                for record in reversed(history):
+                    if record.get("rolled_back"):
+                        continue
+                    # Check each engine that was affected
+                    engines_checked: set[str] = set()
+                    for change in record.get("changes", []):
+                        engine_name = change.get("engine_name", "")
+                        if engine_name and engine_name not in engines_checked:
+                            engines_checked.add(engine_name)
+                            if self._deployer.check_regression(engine_name):
+                                snapshot_id = record.get("snapshot_id", "")
+                                if snapshot_id:
+                                    logger.warning(
+                                        "auto_rollback_triggered",
+                                        engine=engine_name,
+                                        snapshot_id=snapshot_id,
+                                    )
+                                    self._deployer.rollback(snapshot_id)
+                    # Only check the most recent non-rolled-back deployment
+                    break
+
+            except Exception:
+                logger.exception("regression_check_loop_error")
+
+            await asyncio.sleep(interval)
+
+    def _sync_correlation_positions(self) -> None:
+        """Gather positions from all engines and push to correlation controller."""
+        if self._correlation_controller is None:
+            return
+        engine_positions: dict[str, list[dict]] = {}
+        for name, engine in self._engines.items():
+            positions = []
+            for sym, pos in engine.positions.items():
+                notional = pos.get("notional", 0)
+                if notional == 0:
+                    # Estimate notional from quantity * entry_price
+                    qty = pos.get("quantity", 0)
+                    price = pos.get("entry_price", 0)
+                    notional = abs(qty * price)
+                positions.append({
+                    "symbol": sym,
+                    "side": pos.get("side", "long"),
+                    "notional": abs(notional),
+                })
+            engine_positions[name] = positions
+        self._correlation_controller.update_positions(engine_positions)
+
+    # ------------------------------------------------------------------
+    # Circuit breaker
+    # ------------------------------------------------------------------
+
+    async def _circuit_breaker_check(self) -> None:
+        """Check if CRISIS regime warrants pausing all engines.
+
+        Triggers when CRISIS has been active for >= crisis_circuit_breaker_minutes.
+        Releases when regime is no longer CRISIS.
+        """
+        if self._regime_detector is None:
+            return
+        s = self._settings
+        if s and not getattr(s, "regime_adaptation_enabled", True):
+            return
+
+        threshold_min = (
+            getattr(s, "crisis_circuit_breaker_minutes", 30.0)
+            if s
+            else 30.0
+        )
+
+        if self._regime_detector.is_crisis():
+            duration = self._regime_detector.get_regime_duration()
+            if duration >= threshold_min and not self._circuit_breaker_active:
+                # Trigger circuit breaker — pause all running engines
+                self._circuit_breaker_active = True
+                self._circuit_breaker_paused_engines.clear()
+                for name, engine in self._engines.items():
+                    if engine.status.value == "running":
+                        await engine.pause()
+                        self._circuit_breaker_paused_engines.add(name)
+                logger.warning(
+                    "circuit_breaker_triggered",
+                    regime="CRISIS",
+                    duration_minutes=round(duration, 1),
+                    paused_engines=sorted(
+                        self._circuit_breaker_paused_engines,
+                    ),
+                )
+        else:
+            if self._circuit_breaker_active:
+                # CRISIS resolved — resume previously paused engines
+                resumed = []
+                for name in list(self._circuit_breaker_paused_engines):
+                    engine = self._engines.get(name)
+                    if engine and engine.status.value == "paused":
+                        await engine.resume()
+                        resumed.append(name)
+                logger.info(
+                    "circuit_breaker_released",
+                    resumed_engines=sorted(resumed),
+                )
+                self._circuit_breaker_active = False
+                self._circuit_breaker_paused_engines.clear()
+
+    async def _circuit_breaker_loop(self) -> None:
+        """Periodically check circuit breaker condition (every 60 seconds)."""
+        await asyncio.sleep(60)  # Initial delay
+        while True:
+            try:
+                await self._circuit_breaker_check()
+            except Exception as e:
+                logger.error("circuit_breaker_loop_error", error=str(e))
+            await asyncio.sleep(60)
 
     def _get_engine_params(self, engine_name: str) -> dict:
         """Read current engine-specific params from settings."""

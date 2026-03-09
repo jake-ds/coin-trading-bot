@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import structlog
 
 logger = structlog.get_logger(__name__)
@@ -37,6 +39,7 @@ class PortfolioManager:
         self._allocated: dict[str, float] = {}  # engine -> currently allocated
         self._engine_pnl: dict[str, float] = {}  # engine -> cumulative PnL
         self._peak_capital = total_capital
+        self._drawdown_history: list[dict] = []
 
     # ------------------------------------------------------------------
     # Properties
@@ -118,6 +121,14 @@ class PortfolioManager:
         current_total = self._total_capital + self.total_pnl
         if current_total > self._peak_capital:
             self._peak_capital = current_total
+        # Record drawdown history
+        self._drawdown_history.append({
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "drawdown_pct": round(self.get_global_drawdown(), 2),
+            "equity": round(current_total, 2),
+        })
+        if len(self._drawdown_history) > 1000:
+            self._drawdown_history = self._drawdown_history[-1000:]
 
     def get_engine_pnl(self, engine_name: str) -> float:
         return self._engine_pnl.get(engine_name, 0.0)

@@ -217,6 +217,8 @@ class TradingBot:
         dashboard_module.set_settings(self._settings)
         dashboard_module.set_trading_bot(self)
         dashboard_module.set_audit_logger(self._audit_logger)
+        if self._store:
+            dashboard_module.set_store_ref(self._store)
 
         # Import strategies to trigger registration
         self._load_strategies()
@@ -464,22 +466,29 @@ class TradingBot:
             engine_allocations=self._settings.engine_allocations,
             max_drawdown_pct=self._settings.engine_max_drawdown_pct,
         )
-        self._engine_manager = EngineManager(self._portfolio_mgr)
+        self._engine_manager = EngineManager(self._portfolio_mgr, settings=self._settings)
 
         is_paper = self._settings.trading_mode == TradingMode.PAPER
 
         # Create Binance Futures adapter for funding rate engine
+        # Prefer dedicated futures keys, fall back to spot keys
+        futures_api_key = (
+            self._settings.binance_futures_api_key or self._settings.binance_api_key
+        )
+        futures_secret = (
+            self._settings.binance_futures_secret_key or self._settings.binance_secret_key
+        )
         futures_exchanges = list(self._exchanges)
-        if self._settings.binance_api_key:
+        if futures_api_key:
             try:
                 from bot.exchanges.binance_futures import (
                     BinanceFuturesAdapter,
                 )
 
                 futures_adapter = BinanceFuturesAdapter(
-                    api_key=self._settings.binance_api_key,
-                    secret_key=self._settings.binance_secret_key,
-                    testnet=self._settings.binance_testnet,
+                    api_key=futures_api_key,
+                    secret_key=futures_secret,
+                    testnet=self._settings.binance_futures_testnet,
                 )
                 futures_exchanges = [futures_adapter] + list(
                     self._exchanges
@@ -564,6 +573,10 @@ class TradingBot:
             if hasattr(engine, "set_registry") and engine.name != "token_scanner":
                 engine.set_registry(registry)
 
+        # Wire DataCollector to EngineManager for backfill loop
+        if self._collector:
+            self._engine_manager.set_collector(self._collector)
+
         # Register cycle-complete callback for WebSocket broadcast
         async def _broadcast_engine_cycle(result):
             try:
@@ -576,10 +589,133 @@ class TradingBot:
         for engine in self._engine_manager.engines.values():
             engine.set_on_cycle_complete(_broadcast_engine_cycle)
 
+        # Register research experiments with data_provider for real data
+        self._register_research_experiments()
+
+        # Wire ResearchDeployer for auto-deploy pipeline
+        if self._settings.research_auto_deploy:
+            from bot.research.deployer import ResearchDeployer
+
+            deployer = ResearchDeployer(
+                tuner=self._engine_manager.tuner,
+                settings=self._settings,
+                tracker=self._engine_manager.tracker,
+            )
+            self._engine_manager.set_deployer(deployer)
+
+        # Wire CorrelationRiskController to engines (V6-008)
+        if self._settings.cross_engine_correlation_enabled:
+            from bot.risk.correlation_controller import (
+                CorrelationRiskController,
+            )
+
+            correlation_ctrl = CorrelationRiskController(
+                portfolio_risk=self._portfolio_risk,
+                max_symbol_concentration=(
+                    self._settings.max_symbol_concentration_pct / 100.0
+                ),
+            )
+            self._engine_manager.set_correlation_controller(correlation_ctrl)
+            for engine in self._engine_manager.engines.values():
+                if (
+                    hasattr(engine, "set_correlation_controller")
+                    and engine.name != "token_scanner"
+                ):
+                    engine.set_correlation_controller(correlation_ctrl)
+
+        # Wire DynamicPositionSizer to each engine (V6-007)
+        if self._settings.dynamic_sizing_enabled:
+            from bot.risk.dynamic_sizer import DynamicPositionSizer
+
+            sizer = DynamicPositionSizer(
+                volatility_service=None,  # Will use GARCH when VolatilityService is wired
+                portfolio_risk=self._portfolio_risk,
+                base_risk_pct=self._settings.risk_per_trade_pct,
+                vol_scale_factor=self._settings.vol_scale_factor,
+            )
+            for engine in self._engine_manager.engines.values():
+                if hasattr(engine, "set_sizer") and engine.name != "token_scanner":
+                    engine.set_sizer(sizer)
+
+        # Wire MetricsPersistence (V6-012)
+        if (
+            getattr(self._settings, "metrics_persistence_enabled", True)
+            and self._store is not None
+        ):
+            from bot.engines.metrics_persistence import MetricsPersistence
+
+            persistence = MetricsPersistence(
+                data_store=self._store,
+                tracker=self._engine_manager.tracker,
+            )
+            self._engine_manager.set_metrics_persistence(persistence)
+
+        # Wire MarketRegimeDetector (V6-014)
+        if getattr(self._settings, "regime_detection_enabled", True):
+            from bot.risk.regime_detector import MarketRegimeDetector
+
+            vol_svc = getattr(self, "_volatility_service", None)
+            crisis_thresh = getattr(
+                self._settings, "regime_crisis_threshold", 2.5,
+            )
+            detector = MarketRegimeDetector(
+                volatility_service=vol_svc,
+                crisis_threshold=crisis_thresh,
+            )
+            self._engine_manager.set_regime_detector(detector)
+            # Wire regime detector to each engine for threshold/size adaptation
+            for engine in self._engine_manager.engines.values():
+                if (
+                    hasattr(engine, "set_regime_detector")
+                    and engine.name != "token_scanner"
+                ):
+                    engine.set_regime_detector(detector)
+
         logger.info(
             "engine_mode_initialized",
             engines=list(self._engine_manager.engines.keys()),
             total_capital=capital,
+        )
+
+    def _register_research_experiments(self) -> None:
+        """Register all research experiments on the engine manager."""
+        from bot.research.data_provider import HistoricalDataProvider
+        from bot.research.experiments.cointegration import (
+            CointegrationExperiment,
+        )
+        from bot.research.experiments.funding_prediction import (
+            FundingPredictionExperiment,
+        )
+        from bot.research.experiments.optimal_grid import (
+            OptimalGridExperiment,
+        )
+        from bot.research.experiments.volatility_regime import (
+            VolatilityRegimeExperiment,
+        )
+
+        data_provider = None
+        if self._store:
+            data_provider = HistoricalDataProvider(self._store)
+
+        s = self._settings
+
+        self._engine_manager.register_experiment(
+            VolatilityRegimeExperiment(data_provider=data_provider)
+        )
+        self._engine_manager.register_experiment(
+            CointegrationExperiment(
+                data_provider=data_provider,
+                stat_arb_pairs=s.stat_arb_pairs if s else None,
+            )
+        )
+        self._engine_manager.register_experiment(
+            OptimalGridExperiment(
+                data_provider=data_provider,
+                grid_symbols=s.grid_symbols if s else None,
+            )
+        )
+        self._engine_manager.register_experiment(
+            FundingPredictionExperiment(data_provider=data_provider)
         )
 
     async def _run_engine_mode(self) -> None:
@@ -592,6 +728,7 @@ class TradingBot:
         logger.info("engine_mode_started")
 
         await self._engine_manager.start_all()
+        await self._engine_manager.start_background_loops()
 
         try:
             while self._running:
@@ -1899,32 +2036,78 @@ class TradingBot:
         return closed
 
     async def shutdown(self) -> None:
-        """Graceful shutdown."""
-        logger.info("bot_shutting_down")
+        """Graceful shutdown with timeout.
+
+        Sequence: stop engines → save metrics snapshot → cleanup DB → close.
+        Respects shutdown_timeout_seconds from settings.
+        """
+        timeout = getattr(self._settings, "shutdown_timeout_seconds", 30.0)
+        logger.info("bot_shutting_down", timeout_seconds=timeout)
         self._running = False
 
-        # Audit log shutdown
+        try:
+            await asyncio.wait_for(
+                self._shutdown_sequence(), timeout=timeout,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "shutdown_timeout_exceeded",
+                timeout_seconds=timeout,
+            )
+
+        dashboard_module.update_state(status="stopped")
+        logger.info("bot_shutdown_complete")
+
+    async def _shutdown_sequence(self) -> None:
+        """Internal shutdown sequence called within timeout wrapper."""
+        # 1. Stop engines
+        if self._engine_manager:
+            try:
+                await self._engine_manager.stop_all()
+                logger.info("shutdown_engines_stopped")
+            except Exception:
+                logger.exception("shutdown_engines_stop_error")
+
+        # 2. Save final metrics snapshot
+        if self._engine_manager:
+            persistence = getattr(
+                self._engine_manager, "_metrics_persistence", None,
+            )
+            if persistence:
+                try:
+                    await persistence.save_metrics_snapshot()
+                    logger.info("shutdown_metrics_snapshot_saved")
+                except Exception:
+                    logger.exception("shutdown_metrics_snapshot_error")
+
+        # 3. Audit log shutdown
         try:
             await self._audit_logger.log_bot_stopped()
         except Exception:
             pass
 
-        # Stop Telegram command polling
+        # 4. Stop Telegram command polling
         if self._telegram and hasattr(self._telegram, "stop_command_polling"):
             try:
                 await self._telegram.stop_command_polling()
             except Exception:
                 pass
 
-        # Notify shutdown via Telegram
+        # 5. Notify shutdown via Telegram
         if self._telegram:
-            await self._telegram.send_message("Bot shutting down.")
+            try:
+                await self._telegram.send_message("Bot shutting down.")
+            except Exception:
+                pass
 
-        # Stop WebSocket feed
+        # 6. Stop WebSocket feed
         if self._ws_feed:
-            await self._ws_feed.stop()
+            try:
+                await self._ws_feed.stop()
+            except Exception:
+                pass
 
-        # Cancel dashboard background task
+        # 7. Cancel dashboard background task
         if self._dashboard_task and not self._dashboard_task.done():
             self._dashboard_task.cancel()
             try:
@@ -1932,14 +2115,33 @@ class TradingBot:
             except asyncio.CancelledError:
                 pass
 
+        # 8. Close exchange connections
         for exchange in self._exchanges:
-            await exchange.close()
+            try:
+                await exchange.close()
+            except Exception:
+                pass
 
+        # 9. DB cleanup and close
         if self._store:
-            await self._store.close()
-
-        dashboard_module.update_state(status="stopped")
-        logger.info("bot_shutdown_complete")
+            # Run metrics cleanup if persistence is available
+            if self._engine_manager:
+                persistence = getattr(
+                    self._engine_manager, "_metrics_persistence", None,
+                )
+                if persistence:
+                    try:
+                        retention = getattr(
+                            self._settings, "metrics_retention_days", 90,
+                        )
+                        await persistence.cleanup(max_days=retention)
+                        logger.info("shutdown_metrics_cleanup_done")
+                    except Exception:
+                        logger.exception("shutdown_metrics_cleanup_error")
+            try:
+                await self._store.close()
+            except Exception:
+                pass
 
     def stop(self) -> None:
         """Signal the bot to stop."""
