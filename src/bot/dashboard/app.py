@@ -367,7 +367,7 @@ async def get_trades(
     }
 
 
-async def _get_all_positions() -> list[dict]:
+def _get_all_positions() -> list[dict]:
     """Return positions from engine internal state."""
     positions = []
 
@@ -397,7 +397,7 @@ async def _get_all_positions() -> list[dict]:
 @api_router.get("/positions")
 async def get_positions():
     """Get current open positions with SL/TP info."""
-    return {"positions": await _get_all_positions()}
+    return {"positions": _get_all_positions()}
 
 
 @api_router.get("/onchain-signals")
@@ -1601,7 +1601,7 @@ async def websocket_endpoint(websocket: WebSocket):
     # Send current state immediately on connect
     await ws_manager.send_personal(websocket, {
         "type": "status_update",
-        "payload": await _build_full_state_payload(),
+        "payload": _build_full_state_payload(),
     })
     try:
         while True:
@@ -1631,7 +1631,7 @@ def _build_engine_performance_summary() -> dict:
         return {}
 
 
-async def _build_full_state_payload() -> dict:
+def _build_full_state_payload() -> dict:
     """Build a complete state payload for WebSocket broadcast."""
     cycle_log = _bot_state.get("cycle_log", [])
     return {
@@ -1644,7 +1644,7 @@ async def _build_full_state_payload() -> dict:
         "market_regime": _get_market_regime_info(),
         "trades": _bot_state["trades"][-50:],
         "strategy_stats": _bot_state["strategy_stats"],
-        "open_positions": await _get_all_positions(),
+        "open_positions": _get_all_positions(),
         "cycle_log_latest": cycle_log[-1] if cycle_log else None,
         "emergency": _bot_state.get("emergency", {"active": False}),
         "engine_performance": _build_engine_performance_summary(),
@@ -1668,7 +1668,7 @@ async def broadcast_state_update() -> None:
     """Broadcast the full dashboard state to all WebSocket clients (rate-limited)."""
     await ws_manager.broadcast({
         "type": "status_update",
-        "payload": await _build_full_state_payload(),
+        "payload": _build_full_state_payload(),
     })
 
 

@@ -721,7 +721,7 @@ async def test_ws_state_includes_emergency(client):
             "reason": "test",
         }
     )
-    payload = await _build_full_state_payload()
+    payload = _build_full_state_payload()
     assert "emergency" in payload
     assert payload["emergency"]["active"] is True
     assert payload["emergency"]["reason"] == "test"
