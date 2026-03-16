@@ -224,13 +224,23 @@ class PreFlightChecker:
         for exchange in exchanges:
             try:
                 balances = await exchange.get_balance()
-                # Sum up all balances in USD-equivalent currencies
+                # Sum up stablecoin balances directly
                 usd_currencies = {"USDT", "USD", "BUSD", "USDC", "TUSD", "DAI"}
                 total_usd = sum(
                     amount
                     for currency, amount in balances.items()
                     if currency.upper() in usd_currencies
                 )
+                # Estimate non-stablecoin assets via ticker price
+                for currency, amount in balances.items():
+                    if amount <= 0 or currency.upper() in usd_currencies:
+                        continue
+                    try:
+                        ticker = await exchange.get_ticker(f"{currency.upper()}/USDT")
+                        if ticker and ticker.get("last"):
+                            total_usd += amount * ticker["last"]
+                    except Exception:
+                        pass
                 if total_usd >= self._min_balance_usd:
                     return CheckResult(
                         name="sufficient_balance",
