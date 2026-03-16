@@ -143,6 +143,26 @@ class EngineMetricSnapshot(Base):
     cost_ratio: Mapped[float] = mapped_column(Float, default=0.0)
 
 
+class EnginePositionRecord(Base):
+    """Persisted engine position for crash recovery."""
+
+    __tablename__ = "engine_positions"
+    __table_args__ = (
+        UniqueConstraint("engine_name", "symbol", name="uq_engine_pos_engine_symbol"),
+        Index("ix_engine_positions_engine", "engine_name"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    engine_name: Mapped[str] = mapped_column(String(50), index=True)
+    symbol: Mapped[str] = mapped_column(String(50))
+    side: Mapped[str] = mapped_column(String(50))
+    quantity: Mapped[float] = mapped_column(Float)
+    entry_price: Mapped[float] = mapped_column(Float)
+    opened_at: Mapped[str] = mapped_column(String(50))
+    extra_json: Mapped[str] = mapped_column(Text, default="{}")
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class AuditLogRecord(Base):
     """Immutable audit log entry for tracking all significant bot actions."""
 

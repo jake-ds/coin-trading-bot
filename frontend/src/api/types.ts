@@ -13,6 +13,8 @@ export interface PortfolioResponse {
     balances: Record<string, number>
     positions: unknown[]
     total_value: number
+    cash_value?: number
+    unrealized_pnl?: number
   }
 }
 

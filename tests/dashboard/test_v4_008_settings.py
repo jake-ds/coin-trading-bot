@@ -146,7 +146,7 @@ async def test_get_settings_grouped_by_section(client, settings):
     sections = {item["section"] for item in data["settings"]}
     assert "Risk Management" in sections
     assert "Trading" in sections
-    assert "Strategies" in sections
+    assert "OnChain Trader" in sections
 
 
 @pytest.mark.asyncio
@@ -168,8 +168,7 @@ async def test_get_settings_restart_fields_flagged(client, settings):
         item["key"] for item in data["settings"] if not item["requires_restart"]
     }
     assert "stop_loss_pct" in safe_fields
-    assert "take_profit_pct" in safe_fields
-    assert "signal_min_agreement" in safe_fields
+    assert "onchain_buy_threshold" in safe_fields
 
 
 @pytest.mark.asyncio
@@ -194,7 +193,7 @@ async def test_get_settings_includes_defaults(client, settings):
     data = resp.json()
     for item in data["settings"]:
         if item["key"] == "stop_loss_pct":
-            assert item["default"] == 3.0
+            assert item["default"] == 5.0
         if item["key"] == "max_concurrent_positions":
             assert item["default"] == 5
 
@@ -223,7 +222,7 @@ async def test_put_settings_updates_safe_values(client, settings):
     """PUT /api/settings updates safe (hot-reloadable) settings."""
     set_settings(settings)
     resp = await client.put("/api/settings", json={
-        "stop_loss_pct": 5.0,
+        "stop_loss_pct": 7.5,
         "take_profit_pct": 10.0,
     })
     assert resp.status_code == 200
@@ -232,7 +231,7 @@ async def test_put_settings_updates_safe_values(client, settings):
     assert "stop_loss_pct" in data["changed"]
     assert "take_profit_pct" in data["changed"]
     # Verify settings actually changed
-    assert settings.stop_loss_pct == 5.0
+    assert settings.stop_loss_pct == 7.5
     assert settings.take_profit_pct == 10.0
 
 
@@ -304,15 +303,15 @@ async def test_put_settings_multiple_safe_values(client, settings):
     set_settings(settings)
     resp = await client.put("/api/settings", json={
         "max_concurrent_positions": 3,
-        "signal_min_agreement": 3,
-        "trailing_stop_enabled": True,
+        "onchain_buy_threshold": 35.0,
+        "onchain_max_positions": 3,
     })
     data = resp.json()
     assert data["success"] is True
     assert len(data["changed"]) == 3
     assert settings.max_concurrent_positions == 3
-    assert settings.signal_min_agreement == 3
-    assert settings.trailing_stop_enabled is True
+    assert settings.onchain_buy_threshold == 35.0
+    assert settings.onchain_max_positions == 3
 
 
 @pytest.mark.asyncio
@@ -370,14 +369,14 @@ def test_reload_multiple_fields():
     s = _make_settings()
     changed = s.reload({
         "max_concurrent_positions": 10,
-        "signal_min_agreement": 4,
-        "trailing_stop_enabled": True,
+        "onchain_buy_threshold": 40.0,
+        "onchain_max_positions": 3,
         "log_level": "DEBUG",
     })
     assert len(changed) == 4
     assert s.max_concurrent_positions == 10
-    assert s.signal_min_agreement == 4
-    assert s.trailing_stop_enabled is True
+    assert s.onchain_buy_threshold == 40.0
+    assert s.onchain_max_positions == 3
     assert s.log_level == "DEBUG"
 
 
@@ -389,9 +388,8 @@ def test_reload_multiple_fields():
 def test_settings_metadata_covers_key_fields():
     """SETTINGS_METADATA covers essential fields."""
     assert "stop_loss_pct" in SETTINGS_METADATA
-    assert "take_profit_pct" in SETTINGS_METADATA
     assert "trading_mode" in SETTINGS_METADATA
-    assert "signal_min_agreement" in SETTINGS_METADATA
+    assert "onchain_buy_threshold" in SETTINGS_METADATA
     assert "binance_api_key" in SETTINGS_METADATA
     assert "log_level" in SETTINGS_METADATA
 
@@ -400,10 +398,9 @@ def test_settings_metadata_safe_fields_are_reloadable():
     """Safe fields in SETTINGS_METADATA have requires_restart=False."""
     safe_keys = [
         "stop_loss_pct",
-        "take_profit_pct",
         "max_concurrent_positions",
-        "signal_min_agreement",
-        "trailing_stop_enabled",
+        "onchain_buy_threshold",
+        "onchain_max_positions",
         "loop_interval_seconds",
     ]
     for key in safe_keys:

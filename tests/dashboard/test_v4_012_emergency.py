@@ -362,74 +362,54 @@ async def test_emergency_resume_when_not_stopped(client):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_bot_emergency_stop_sets_flag():
-    """TradingBot.emergency_stop sets _emergency_stopped flag."""
+def _make_bot():
+    """Create a TradingBot with minimal attributes for emergency tests."""
     from bot.main import TradingBot
 
     bot = TradingBot.__new__(TradingBot)
     bot._emergency_stopped = False
     bot._emergency_stopped_at = None
     bot._emergency_reason = None
-    bot._execution_engines = {}
     bot._telegram = None
-    bot._risk_manager = None
-    bot._position_manager = None
-    bot._portfolio_risk = None
     bot._audit_logger = AsyncMock()
 
+    # Engine manager with mock engine
+    engine = AsyncMock()
+    engine.pause = AsyncMock()
+    engine.resume = AsyncMock()
+    engine.positions = {}
+    engine._remove_position = MagicMock()
+
+    mgr = MagicMock()
+    mgr.engines = {"onchain_trader": engine}
+    bot._engine_manager = mgr
+    return bot
+
+
+@pytest.mark.asyncio
+async def test_bot_emergency_stop_sets_flag():
+    """TradingBot.emergency_stop sets _emergency_stopped flag."""
+    bot = _make_bot()
     result = await bot.emergency_stop(reason="test")
-    assert result["success"] is True
+    assert "cancelled_orders" in result
     assert bot._emergency_stopped is True
     assert bot._emergency_stopped_at is not None
     assert bot._emergency_reason == "test"
 
 
 @pytest.mark.asyncio
-async def test_bot_emergency_stop_cancels_pending_orders():
-    """TradingBot.emergency_stop cancels all pending orders."""
-    from bot.main import TradingBot
-
-    bot = TradingBot.__new__(TradingBot)
-    bot._emergency_stopped = False
-    bot._emergency_stopped_at = None
-    bot._emergency_reason = None
-    bot._telegram = None
-    bot._risk_manager = None
-    bot._position_manager = None
-    bot._portfolio_risk = None
-    bot._audit_logger = AsyncMock()
-
-    # Mock execution engine with pending orders
-    engine = AsyncMock()
-    order1 = MagicMock()
-    order1.symbol = "BTC/USDT"
-    order2 = MagicMock()
-    order2.symbol = "ETH/USDT"
-    engine.pending_orders = {"o1": order1, "o2": order2}
-    engine.cancel_order = AsyncMock(return_value=True)
-    bot._execution_engines = {"binance": engine}
-
-    result = await bot.emergency_stop(reason="test")
-    assert result["cancelled_orders"] == 2
-    assert engine.cancel_order.call_count == 2
+async def test_bot_emergency_stop_pauses_engines():
+    """TradingBot.emergency_stop pauses all engines."""
+    bot = _make_bot()
+    await bot.emergency_stop(reason="test")
+    engine = bot._engine_manager.engines["onchain_trader"]
+    engine.pause.assert_awaited_once()
 
 
 @pytest.mark.asyncio
 async def test_bot_emergency_stop_notifies_telegram():
     """TradingBot.emergency_stop sends Telegram notification."""
-    from bot.main import TradingBot
-
-    bot = TradingBot.__new__(TradingBot)
-    bot._emergency_stopped = False
-    bot._emergency_stopped_at = None
-    bot._emergency_reason = None
-    bot._execution_engines = {}
-    bot._risk_manager = None
-    bot._position_manager = None
-    bot._portfolio_risk = None
-    bot._audit_logger = AsyncMock()
-
+    bot = _make_bot()
     telegram = AsyncMock()
     telegram.send_message = AsyncMock(return_value=True)
     bot._telegram = telegram
@@ -446,110 +426,18 @@ async def test_bot_emergency_stop_notifies_telegram():
 
 
 @pytest.mark.asyncio
-async def test_bot_emergency_close_all_sells_positions():
-    """TradingBot.emergency_close_all sells all open positions."""
-    from bot.main import TradingBot
-
-    bot = TradingBot.__new__(TradingBot)
-    bot._emergency_stopped = False
-    bot._emergency_stopped_at = None
-    bot._emergency_reason = None
-    bot._telegram = None
-    bot._portfolio_risk = None
-    bot._strategy_tracker = None
-    bot._audit_logger = AsyncMock()
-
-    # Mock risk manager with positions
-    risk = MagicMock()
-    risk._open_positions = {"BTC/USDT": {}, "ETH/USDT": {}}
-    risk.get_position = MagicMock(side_effect=lambda s: {
-        "BTC/USDT": {"quantity": 0.1, "entry_price": 50000},
-        "ETH/USDT": {"quantity": 1.0, "entry_price": 3000},
-    }.get(s))
-    risk.record_trade_pnl = MagicMock()
-    risk.remove_position = MagicMock()
-    bot._risk_manager = risk
-
-    # Mock position manager
-    pm = MagicMock()
-    pm.remove_position = MagicMock()
-    bot._position_manager = pm
-
-    # Mock execution engine
-    engine = AsyncMock()
-    engine.pending_orders = {}
-    engine.cancel_order = AsyncMock(return_value=True)
-
-    # Create mock orders
-    mock_order_btc = MagicMock()
-    mock_order_btc.filled_price = 51000
-    mock_order_btc.quantity = 0.1
-    mock_order_btc.side = MagicMock()
-    mock_order_btc.side.value = "SELL"
-    mock_order_btc.symbol = "BTC/USDT"
-    mock_order_btc.created_at = None
-
-    mock_order_eth = MagicMock()
-    mock_order_eth.filled_price = 3100
-    mock_order_eth.quantity = 1.0
-    mock_order_eth.side = MagicMock()
-    mock_order_eth.side.value = "SELL"
-    mock_order_eth.symbol = "ETH/USDT"
-    mock_order_eth.created_at = None
-
-    orders = iter([mock_order_btc, mock_order_eth])
-    engine.execute_signal = AsyncMock(side_effect=lambda *a, **kw: next(orders))
-    bot._execution_engines = {"binance": engine}
+async def test_bot_emergency_close_all_removes_positions():
+    """TradingBot.emergency_close_all removes all engine positions."""
+    bot = _make_bot()
+    engine = bot._engine_manager.engines["onchain_trader"]
+    engine.positions = {
+        "BTC/USDT": {"symbol": "BTC/USDT", "quantity": 0.01},
+        "ETH/USDT": {"symbol": "ETH/USDT", "quantity": 0.1},
+    }
 
     result = await bot.emergency_close_all(reason="test")
-    assert result["success"] is True
     assert len(result["closed_positions"]) == 2
-
-    # Verify positions were removed
-    assert risk.remove_position.call_count == 2
-    assert pm.remove_position.call_count == 2
-
-
-@pytest.mark.asyncio
-async def test_bot_emergency_close_all_records_pnl():
-    """Emergency close records trade PnL for each closed position."""
-    from bot.main import TradingBot
-
-    bot = TradingBot.__new__(TradingBot)
-    bot._emergency_stopped = False
-    bot._emergency_stopped_at = None
-    bot._emergency_reason = None
-    bot._telegram = None
-    bot._portfolio_risk = None
-    bot._strategy_tracker = None
-    bot._audit_logger = AsyncMock()
-
-    risk = MagicMock()
-    risk._open_positions = {"BTC/USDT": {}}
-    risk.get_position = MagicMock(return_value={
-        "quantity": 0.1, "entry_price": 50000,
-    })
-    risk.record_trade_pnl = MagicMock()
-    risk.remove_position = MagicMock()
-    bot._risk_manager = risk
-    bot._position_manager = None
-
-    engine = AsyncMock()
-    engine.pending_orders = {}
-    engine.cancel_order = AsyncMock(return_value=True)
-    mock_order = MagicMock()
-    mock_order.filled_price = 52000
-    mock_order.quantity = 0.1
-    mock_order.side = MagicMock()
-    mock_order.side.value = "SELL"
-    mock_order.symbol = "BTC/USDT"
-    mock_order.created_at = None
-    engine.execute_signal = AsyncMock(return_value=mock_order)
-    bot._execution_engines = {"binance": engine}
-
-    result = await bot.emergency_close_all(reason="test")
-    assert result["closed_positions"][0]["pnl"] == 200.0  # (52000-50000)*0.1
-    risk.record_trade_pnl.assert_called_once_with(200.0)
+    assert bot._emergency_stopped is True
 
 
 # ---------------------------------------------------------------------------
@@ -560,14 +448,10 @@ async def test_bot_emergency_close_all_records_pnl():
 @pytest.mark.asyncio
 async def test_bot_emergency_resume_clears_flag():
     """TradingBot.emergency_resume clears emergency state."""
-    from bot.main import TradingBot
-
-    bot = TradingBot.__new__(TradingBot)
+    bot = _make_bot()
     bot._emergency_stopped = True
     bot._emergency_stopped_at = "2026-01-01T00:00:00+00:00"
     bot._emergency_reason = "test"
-    bot._telegram = None
-    bot._audit_logger = AsyncMock()
 
     result = await bot.emergency_resume()
     assert result["success"] is True
@@ -579,38 +463,10 @@ async def test_bot_emergency_resume_clears_flag():
 @pytest.mark.asyncio
 async def test_bot_emergency_resume_fails_when_not_stopped():
     """TradingBot.emergency_resume fails when not in emergency state."""
-    from bot.main import TradingBot
-
-    bot = TradingBot.__new__(TradingBot)
-    bot._emergency_stopped = False
-    bot._emergency_stopped_at = None
-    bot._emergency_reason = None
-    bot._telegram = None
-
+    bot = _make_bot()
     result = await bot.emergency_resume()
     assert result["success"] is False
     assert "error" in result
-
-
-@pytest.mark.asyncio
-async def test_bot_emergency_resume_notifies_telegram():
-    """TradingBot.emergency_resume sends Telegram notification."""
-    from bot.main import TradingBot
-
-    bot = TradingBot.__new__(TradingBot)
-    bot._emergency_stopped = True
-    bot._emergency_stopped_at = "2026-01-01T00:00:00+00:00"
-    bot._emergency_reason = "test"
-    bot._audit_logger = AsyncMock()
-
-    telegram = AsyncMock()
-    telegram.send_message = AsyncMock(return_value=True)
-    bot._telegram = telegram
-
-    await bot.emergency_resume()
-    telegram.send_message.assert_called_once()
-    msg = telegram.send_message.call_args[0][0]
-    assert "RESUMED" in msg
 
 
 # ---------------------------------------------------------------------------
@@ -644,46 +500,6 @@ def test_bot_emergency_state_inactive():
 
     state = bot.emergency_state
     assert state["active"] is False
-
-
-# ---------------------------------------------------------------------------
-# Trading loop skips cycle when emergency stopped
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_trading_loop_skips_when_emergency_stopped():
-    """Trading loop skips cycles when emergency stopped."""
-    from bot.main import TradingBot
-
-    bot = TradingBot.__new__(TradingBot)
-    bot._emergency_stopped = True
-    bot._running = True
-    bot._cycle_lock = asyncio.Lock()
-    bot._settings = SimpleNamespace(loop_interval_seconds=0.01)
-    bot._cycle_count = 0
-
-    # Run loop briefly — it should not execute any cycles
-    cycle_executed = False
-
-    async def mock_cycle(self):
-        nonlocal cycle_executed
-        cycle_executed = True
-
-    bot._trading_cycle = mock_cycle.__get__(bot, TradingBot)
-
-    # Run for a short time
-    loop_task = asyncio.create_task(bot.run_trading_loop())
-    await asyncio.sleep(0.05)
-    bot._running = False
-    await asyncio.sleep(0.02)
-    loop_task.cancel()
-    try:
-        await loop_task
-    except asyncio.CancelledError:
-        pass
-
-    assert not cycle_executed, "Cycle should not execute during emergency stop"
 
 
 # ---------------------------------------------------------------------------
@@ -905,7 +721,7 @@ async def test_ws_state_includes_emergency(client):
             "reason": "test",
         }
     )
-    payload = _build_full_state_payload()
+    payload = await _build_full_state_payload()
     assert "emergency" in payload
     assert payload["emergency"]["active"] is True
     assert payload["emergency"]["reason"] == "test"

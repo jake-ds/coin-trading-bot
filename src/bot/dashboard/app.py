@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from bot.config import ENGINE_DESCRIPTIONS, SETTINGS_METADATA
+from bot.config import ENGINE_DESCRIPTIONS, SETTINGS_METADATA  # noqa: F401
 from bot.dashboard.auth import (
     blacklist_refresh_token,
     create_access_token,
@@ -89,6 +89,13 @@ _audit_logger = None
 # Reference to DataStore for health check DB connectivity
 _store_ref = None
 
+# Reference to futures exchange adapter for live position fetching
+_futures_exchange = None
+# Cached exchange positions (to avoid hammering the API on every WS broadcast)
+_exchange_positions_cache: list[dict] = []
+_exchange_positions_cache_ts: float = 0.0
+_EXCHANGE_POSITIONS_CACHE_TTL: float = 10.0  # seconds
+
 
 def set_strategy_registry(registry) -> None:
     """Set the strategy registry reference for toggle endpoint."""
@@ -133,6 +140,12 @@ def set_store_ref(store) -> None:
     """Set the DataStore reference for health check DB connectivity."""
     global _store_ref
     _store_ref = store
+
+
+def set_futures_exchange(exchange) -> None:
+    """Set the futures exchange adapter for live position fetching."""
+    global _futures_exchange
+    _futures_exchange = exchange
 
 
 # ---------------------------------------------------------------------------
@@ -354,45 +367,29 @@ async def get_trades(
     }
 
 
-def _get_all_positions() -> list[dict]:
-    """Return legacy positions merged with engine positions."""
-    positions = list(_bot_state["open_positions"])
+async def _get_all_positions() -> list[dict]:
+    """Return positions from engine internal state."""
+    positions = []
 
+    # Add engine-tracked positions
     if _engine_manager is not None:
         for engine_name, engine in _engine_manager.engines.items():
-            # Standard engines using BaseEngine._positions
             for pos in engine.positions.values():
-                positions.append({
-                    "symbol": pos.get("symbol", ""),
+                sym = pos.get("symbol", "")
+                pos_data = {
+                    "symbol": sym,
                     "quantity": pos.get("quantity", 0),
                     "entry_price": pos.get("entry_price", 0),
-                    "current_price": pos.get("mark_price", pos.get("entry_price", 0)),
+                    "current_price": pos.get("current_price", pos.get("entry_price", 0)),
                     "unrealized_pnl": pos.get("unrealized_pnl", 0.0),
                     "stop_loss": 0,
                     "take_profit": 0,
                     "opened_at": pos.get("opened_at", ""),
                     "strategy": f"engine:{engine_name}",
-                })
-
-            # Grid engine: filled buy levels = open positions
-            grids = getattr(engine, "grids", None)
-            if grids:
-                last_prices = getattr(engine, "_last_prices", {})
-                for symbol, levels in grids.items():
-                    for lvl in levels:
-                        if lvl.filled and lvl.side == "buy":
-                            current = last_prices.get(symbol, lvl.price)
-                            positions.append({
-                                "symbol": symbol,
-                                "quantity": 0,
-                                "entry_price": lvl.price,
-                                "current_price": current,
-                                "unrealized_pnl": current - lvl.price,
-                                "stop_loss": 0,
-                                "take_profit": 0,
-                                "opened_at": "",
-                                "strategy": f"engine:{engine_name}",
-                            })
+                    "signal_score": pos.get("signal_score", 0),
+                    "signal_confidence": pos.get("signal_confidence", 0),
+                }
+                positions.append(pos_data)
 
     return positions
 
@@ -400,7 +397,18 @@ def _get_all_positions() -> list[dict]:
 @api_router.get("/positions")
 async def get_positions():
     """Get current open positions with SL/TP info."""
-    return {"positions": _get_all_positions()}
+    return {"positions": await _get_all_positions()}
+
+
+@api_router.get("/onchain-signals")
+async def get_onchain_signals():
+    """Get current on-chain composite signals for all symbols."""
+    if _engine_manager is None:
+        return {"signals": {}}
+    engine = _engine_manager.get_engine("onchain_trader")
+    if engine is None or not hasattr(engine, "latest_signals"):
+        return {"signals": {}}
+    return {"signals": engine.latest_signals}
 
 
 @api_router.get("/metrics")
@@ -580,30 +588,6 @@ async def get_analytics(
         "stats": stats,
         "range": range,
     }
-
-
-@api_router.get("/quant/risk-metrics")
-async def get_quant_risk_metrics():
-    """Get quantitative risk metrics (VaR, CVaR, Sortino, etc.)."""
-    return {"risk_metrics": _bot_state.get("quant_risk_metrics", {})}
-
-
-@api_router.get("/quant/correlation-matrix")
-async def get_correlation_matrix():
-    """Get correlation matrix between traded symbols."""
-    return {"correlation_matrix": _bot_state.get("correlation_matrix", {})}
-
-
-@api_router.get("/quant/portfolio-optimization")
-async def get_portfolio_optimization():
-    """Get current portfolio optimization results."""
-    return {"optimization": _bot_state.get("portfolio_optimization", {})}
-
-
-@api_router.get("/quant/garch")
-async def get_garch_metrics():
-    """Get GARCH volatility model metrics."""
-    return {"garch": _bot_state.get("garch_metrics", {})}
 
 
 @api_router.post("/strategies/{name}/toggle")
@@ -830,14 +814,6 @@ async def list_engines():
             content={"detail": "Engine mode not enabled"},
         )
     status = _engine_manager.get_status()
-    # Enrich with description metadata and tracked symbols
-    _symbol_map = {
-        "funding_rate_arb": "funding_arb_symbols",
-        "grid_trading": "grid_symbols",
-        "cross_exchange_arb": "cross_arb_symbols",
-        "stat_arb": "stat_arb_pairs",
-        "token_scanner": None,  # scanner scans all symbols
-    }
     for name, info in status.items():
         desc = ENGINE_DESCRIPTIONS.get(name, {})
         info["role_ko"] = desc.get("role_ko", "")
@@ -845,11 +821,14 @@ async def list_engines():
         info["description_ko"] = desc.get("description_ko", "")
         info["key_params"] = desc.get("key_params", "")
         # Add tracked symbols from settings
-        sym_field = _symbol_map.get(name)
-        if sym_field and _settings and hasattr(_settings, sym_field):
-            info["symbols"] = getattr(_settings, sym_field)
+        if name == "onchain_trader" and _settings:
+            info["symbols"] = getattr(_settings, "onchain_symbols", [])
         else:
             info["symbols"] = []
+        # Add onchain signals if available
+        engine_obj = _engine_manager.get_engine(name)
+        if engine_obj and hasattr(engine_obj, "latest_signals"):
+            info["onchain_signals"] = engine_obj.latest_signals
     return status
 
 
@@ -943,10 +922,7 @@ async def engine_params(name: str):
         )
     # Engine param prefix mapping
     _prefix_map = {
-        "funding_rate_arb": "funding_arb_",
-        "grid_trading": "grid_",
-        "cross_exchange_arb": "cross_arb_",
-        "stat_arb": "stat_arb_",
+        "onchain_trader": "onchain_",
     }
     prefix = _prefix_map.get(name)
     if prefix is None:
@@ -972,13 +948,13 @@ async def engine_params(name: str):
 
 @engine_router.get("/{name}/positions")
 async def engine_positions(name: str):
-    """Get current positions for a specific engine."""
+    """Get current positions for a specific engine (live from exchange)."""
     if _engine_manager is None:
         return JSONResponse(
             status_code=503,
             content={"detail": "Engine mode not enabled"},
         )
-    positions = _engine_manager.get_engine_positions(name)
+    positions = await _engine_manager.get_live_positions(name)
     return {"engine": name, "positions": positions}
 
 
@@ -1049,121 +1025,7 @@ async def performance_summary(
 app.include_router(perf_router)
 
 
-# ---------------------------------------------------------------------------
-# Research endpoints
-# ---------------------------------------------------------------------------
-
-research_router = APIRouter(
-    prefix="/api/research",
-    dependencies=[Depends(require_auth_strict)],
-)
-
-
-@research_router.get("/experiments")
-async def list_experiments():
-    """List registered research experiments with status."""
-    if _engine_manager is None:
-        return JSONResponse(
-            status_code=503,
-            content={"detail": "Engine mode not enabled"},
-        )
-    experiments = []
-    for exp in _engine_manager._research_experiments:
-        experiments.append({
-            "name": exp.__class__.__name__,
-            "target_engine": exp.target_engine,
-            "status": "registered",
-        })
-    return {"experiments": experiments}
-
-
-@research_router.get("/reports")
-async def list_reports():
-    """List research reports, most recent first."""
-    if _engine_manager is None:
-        return JSONResponse(
-            status_code=503,
-            content={"detail": "Engine mode not enabled"},
-        )
-    reports = list(reversed(_engine_manager._research_reports))
-    return {"reports": reports}
-
-
-@research_router.get("/deployments")
-async def list_deployments():
-    """List research deployment history with rollback status."""
-    if _engine_manager is None:
-        return JSONResponse(
-            status_code=503,
-            content={"detail": "Engine mode not enabled"},
-        )
-    deployer = getattr(_engine_manager, "_deployer", None)
-    if deployer is None:
-        return {"deployments": []}
-    history = deployer.get_deploy_history()
-    return {"deployments": list(reversed(history))}
-
-
-@research_router.post("/run")
-async def run_research_now():
-    """Manually trigger all research experiments immediately."""
-    if _engine_manager is None:
-        return JSONResponse(
-            status_code=503,
-            content={"detail": "Engine mode not enabled"},
-        )
-    experiments = _engine_manager._research_experiments
-    if not experiments:
-        return {"status": "no_experiments", "reports": []}
-
-    deployer = getattr(_engine_manager, "_deployer", None)
-    s = _settings or getattr(_engine_manager, "_settings", None)
-    auto_deploy = bool(s and getattr(s, "research_auto_deploy", True))
-
-    results = []
-    for experiment in experiments:
-        try:
-            report = experiment.run_experiment()
-            report_dict = report.to_dict()
-            _engine_manager._research_reports.append(report_dict)
-            _engine_manager._research_reports = (
-                _engine_manager._research_reports[-50:]
-            )
-
-            # Deploy through deployer (same logic as _research_loop)
-            deploy_info = None
-            if deployer and auto_deploy:
-                result = deployer.deploy(report)
-                if result.success:
-                    deploy_info = {
-                        "deployed": True,
-                        "snapshot_id": result.snapshot_id,
-                        "changes": [c.to_dict() for c in result.deployed_changes],
-                    }
-                else:
-                    deploy_info = {"deployed": False, "reason": "skipped by deployer"}
-            elif report.improvement_significant:
-                changes = experiment.apply_findings()
-                if changes and s:
-                    _engine_manager.tuner.apply_changes(changes, s)
-                    deploy_info = {
-                        "deployed": True,
-                        "snapshot_id": None,
-                        "changes": [c.to_dict() for c in changes],
-                    }
-
-            report_dict["deployment"] = deploy_info
-            results.append(report_dict)
-        except Exception as e:
-            results.append({
-                "experiment": experiment.__class__.__name__,
-                "error": str(e),
-            })
-
-    return {"status": "completed", "reports": results}
-
-
-app.include_router(research_router)
+# (Research endpoints removed — no longer applicable)
 
 
 # ---------------------------------------------------------------------------
@@ -1176,41 +1038,10 @@ risk_router = APIRouter(
 )
 
 
-def _get_portfolio_risk_manager():
-    """Get PortfolioRiskManager from EngineManager if available."""
-    if _engine_manager is None:
-        return None
-    return getattr(_engine_manager, "_portfolio_risk", None)
-
-
 @risk_router.get("/portfolio")
 async def get_risk_portfolio():
-    """Get all portfolio risk metrics (exposure, heat, VaR 3 types, CVaR, positions)."""
-    prm = _get_portfolio_risk_manager()
-    if prm is None:
-        return {"error": "not_available"}
-    metrics = prm.get_risk_metrics()
-    # Add position details
-    positions = []
-    for symbol, pos in prm.positions.items():
-        positions.append({
-            "symbol": symbol,
-            "value": pos.get("value", 0),
-            "atr": pos.get("atr"),
-        })
-    metrics["positions"] = positions
-    return metrics
-
-
-@risk_router.get("/correlation")
-async def get_risk_correlation():
-    """Get cross-engine correlation and symbol concentration report."""
-    if _engine_manager is None:
-        return {"error": "not_available"}
-    controller = getattr(_engine_manager, "_correlation_controller", None)
-    if controller is None:
-        return {"error": "not_available"}
-    return controller.get_concentration_report()
+    """Get basic risk metrics."""
+    return {"error": "not_available"}
 
 
 @risk_router.get("/drawdown")
@@ -1755,69 +1586,7 @@ def _aggregate_daily(trades: list[dict]) -> list[dict]:
 app.include_router(metrics_history_router)
 
 
-# ---------------------------------------------------------------------------
-# Scanner / opportunity discovery endpoints
-# ---------------------------------------------------------------------------
-
-scanner_router = APIRouter(
-    prefix="/api/scanner",
-    dependencies=[Depends(require_auth_strict)],
-)
-
-
-@scanner_router.get("/opportunities")
-async def scanner_opportunities():
-    """Get all discovered opportunities with summary."""
-    if _engine_manager is None:
-        return JSONResponse(
-            status_code=503,
-            content={"detail": "Engine mode not enabled"},
-        )
-    registry = _engine_manager.opportunity_registry
-    if registry is None:
-        return {"summary": {}, "opportunities": {}}
-    return {
-        "summary": registry.get_summary(),
-        "opportunities": registry.get_all_opportunities(),
-    }
-
-
-@scanner_router.get("/opportunities/{opp_type}")
-async def scanner_opportunities_by_type(
-    opp_type: str,
-    n: int = Query(20, ge=1, le=100, description="Max results"),
-    min_score: float = Query(0.0, ge=0, le=100, description="Min score"),
-):
-    """Get opportunities of a specific type."""
-    if _engine_manager is None:
-        return JSONResponse(
-            status_code=503,
-            content={"detail": "Engine mode not enabled"},
-        )
-    registry = _engine_manager.opportunity_registry
-    if registry is None:
-        return {"type": opp_type, "opportunities": []}
-
-    from bot.engines.opportunity_registry import OpportunityType
-
-    try:
-        otype = OpportunityType(opp_type)
-    except ValueError:
-        return JSONResponse(
-            status_code=400,
-            content={
-                "detail": f"Unknown opportunity type: {opp_type}. "
-                f"Valid: {[t.value for t in OpportunityType]}"
-            },
-        )
-    items = registry.get_top(otype, n=n, min_score=min_score)
-    return {
-        "type": opp_type,
-        "opportunities": [o.to_dict() for o in items],
-    }
-
-
-app.include_router(scanner_router)
+# (Scanner endpoints removed — replaced by onchain signals)
 
 
 # ---------------------------------------------------------------------------
@@ -1832,7 +1601,7 @@ async def websocket_endpoint(websocket: WebSocket):
     # Send current state immediately on connect
     await ws_manager.send_personal(websocket, {
         "type": "status_update",
-        "payload": _build_full_state_payload(),
+        "payload": await _build_full_state_payload(),
     })
     try:
         while True:
@@ -1862,7 +1631,7 @@ def _build_engine_performance_summary() -> dict:
         return {}
 
 
-def _build_full_state_payload() -> dict:
+async def _build_full_state_payload() -> dict:
     """Build a complete state payload for WebSocket broadcast."""
     cycle_log = _bot_state.get("cycle_log", [])
     return {
@@ -1875,7 +1644,7 @@ def _build_full_state_payload() -> dict:
         "market_regime": _get_market_regime_info(),
         "trades": _bot_state["trades"][-50:],
         "strategy_stats": _bot_state["strategy_stats"],
-        "open_positions": _get_all_positions(),
+        "open_positions": await _get_all_positions(),
         "cycle_log_latest": cycle_log[-1] if cycle_log else None,
         "emergency": _bot_state.get("emergency", {"active": False}),
         "engine_performance": _build_engine_performance_summary(),
@@ -1899,7 +1668,7 @@ async def broadcast_state_update() -> None:
     """Broadcast the full dashboard state to all WebSocket clients (rate-limited)."""
     await ws_manager.broadcast({
         "type": "status_update",
-        "payload": _build_full_state_payload(),
+        "payload": await _build_full_state_payload(),
     })
 
 

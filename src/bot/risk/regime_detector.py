@@ -1,6 +1,6 @@
 """MarketRegimeDetector — real-time market regime classification with CRISIS detection.
 
-Extends VolatilityService regime classification with CRISIS detection
+Classifies market regime with CRISIS detection
 (extreme volatility or large BTC drawdown). Tracks regime transition history.
 """
 
@@ -9,14 +9,17 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 from enum import Enum
-from typing import TYPE_CHECKING
+from typing import Any
 
 import structlog
 
-from bot.quant.volatility import VolatilityRegime
 
-if TYPE_CHECKING:
-    from bot.risk.volatility_service import VolatilityService
+class VolatilityRegime(str, Enum):
+    """Volatility regime classification (local definition)."""
+
+    LOW = "LOW"
+    NORMAL = "NORMAL"
+    HIGH = "HIGH"
 
 logger = structlog.get_logger(__name__)
 
@@ -40,7 +43,7 @@ class MarketRegimeDetector:
 
     def __init__(
         self,
-        volatility_service: VolatilityService | None = None,
+        volatility_service: Any | None = None,
         crisis_threshold: float = 2.5,
         lookback_window: int = 30,
     ):

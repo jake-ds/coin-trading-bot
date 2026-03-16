@@ -28,6 +28,7 @@ class BinanceAdapter(ExchangeAdapter):
                 "secret": secret_key,
                 "sandbox": testnet,
                 "enableRateLimit": True,
+                "timeout": 30000,  # 30s timeout (P2-11)
                 "options": options,
             }
         )
@@ -84,10 +85,6 @@ class BinanceAdapter(ExchangeAdapter):
         try:
             balance = await self._exchange.fetch_balance()
             return {
-                currency: float(data["free"])
-                for currency, data in balance.get("info", {}).items()
-                if isinstance(data, dict) and float(data.get("free", 0)) > 0
-            } if isinstance(balance.get("info"), dict) else {
                 currency: float(amount)
                 for currency, amount in balance.get("free", {}).items()
                 if float(amount) > 0
@@ -158,6 +155,98 @@ class BinanceAdapter(ExchangeAdapter):
             raise ConnectionError(f"Network error fetching order book: {e}") from e
         except ccxt.ExchangeError as e:
             raise RuntimeError(f"Exchange error: {e}") from e
+
+    # ------------------------------------------------------------------
+    # Margin trading methods
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _fmt_amount(amount: float) -> str:
+        """Format amount as a fixed-decimal string (no scientific notation)."""
+        return f"{amount:.8f}".rstrip("0").rstrip(".")
+
+    async def margin_borrow(self, coin: str, amount: float) -> str:
+        """Borrow an asset from the cross-margin account.
+
+        Returns the transaction ID on success.
+        """
+        try:
+            result = await self._exchange.sapi_post_margin_loan(
+                {"asset": coin, "amount": self._fmt_amount(amount)}
+            )
+            tran_id = str(result.get("tranId", ""))
+            return tran_id
+        except ccxt.NetworkError as e:
+            raise ConnectionError(f"Network error borrowing {coin}: {e}") from e
+        except ccxt.ExchangeError as e:
+            raise RuntimeError(f"Margin borrow failed for {coin}: {e}") from e
+
+    async def margin_repay(self, coin: str, amount: float) -> None:
+        """Repay a borrowed asset to the cross-margin account."""
+        try:
+            await self._exchange.sapi_post_margin_repay(
+                {"asset": coin, "amount": self._fmt_amount(amount)}
+            )
+        except ccxt.NetworkError as e:
+            raise ConnectionError(f"Network error repaying {coin}: {e}") from e
+        except ccxt.ExchangeError as e:
+            raise RuntimeError(f"Margin repay failed for {coin}: {e}") from e
+
+    async def create_margin_order(
+        self,
+        symbol: str,
+        side: OrderSide,
+        order_type: OrderType,
+        quantity: float,
+        price: float | None = None,
+    ) -> Order:
+        """Place an order on the cross-margin account."""
+        try:
+            result = await self._exchange.create_order(
+                symbol=symbol,
+                type=order_type.value.lower(),
+                side=side.value.lower(),
+                amount=quantity,
+                price=price,
+                params={"type": "margin"},
+            )
+            return self._parse_order(result)
+        except ccxt.InsufficientFunds as e:
+            raise ValueError(f"Insufficient margin funds: {e}") from e
+        except ccxt.NetworkError as e:
+            raise ConnectionError(f"Network error placing margin order: {e}") from e
+        except ccxt.ExchangeError as e:
+            raise RuntimeError(f"Margin order failed: {e}") from e
+
+    async def get_margin_balance(self) -> dict[str, float]:
+        """Fetch free balances from the cross-margin account."""
+        try:
+            balance = await self._exchange.fetch_balance({"type": "margin"})
+            return {
+                currency: float(amount)
+                for currency, amount in balance.get("free", {}).items()
+                if float(amount) > 0
+            }
+        except ccxt.NetworkError as e:
+            raise ConnectionError(f"Network error fetching margin balance: {e}") from e
+        except ccxt.ExchangeError as e:
+            raise RuntimeError(f"Margin balance fetch failed: {e}") from e
+
+    async def transfer_to_margin(self, coin: str, amount: float) -> str:
+        """Transfer asset from spot wallet to cross-margin account.
+
+        type=1 means SPOT → CROSS_MARGIN in Binance SAPI.
+        Returns the transaction ID.
+        """
+        try:
+            result = await self._exchange.sapi_post_margin_transfer(
+                {"asset": coin, "amount": self._fmt_amount(amount), "type": "1"}
+            )
+            return str(result.get("tranId", ""))
+        except ccxt.NetworkError as e:
+            raise ConnectionError(f"Network error transferring {coin}: {e}") from e
+        except ccxt.ExchangeError as e:
+            raise RuntimeError(f"Transfer to margin failed for {coin}: {e}") from e
 
     async def close(self) -> None:
         await self._exchange.close()

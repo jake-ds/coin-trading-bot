@@ -267,51 +267,14 @@ class DataCollector:
         )
         return total
 
-    def auto_discover_symbols(
-        self,
-        registry: object,
-        min_score: float = 30.0,
-    ) -> list[str]:
-        """Discover symbols from OpportunityRegistry and add to dynamic set.
-
-        Args:
-            registry: OpportunityRegistry instance.
-            min_score: Minimum opportunity score to include.
-
-        Returns:
-            List of newly discovered symbols.
-        """
-        from bot.engines.opportunity_registry import OpportunityType
-
-        new_symbols: list[str] = []
-        existing = set(self._symbols) | self._dynamic_symbols
-
-        for op_type in OpportunityType:
-            discovered = registry.get_symbols(op_type, n=20, min_score=min_score)
-            for sym in discovered:
-                if sym not in existing:
-                    self._dynamic_symbols.add(sym)
-                    existing.add(sym)
-                    new_symbols.append(sym)
-
-        if new_symbols:
-            logger.info(
-                "auto_discover_new_symbols",
-                count=len(new_symbols),
-                symbols=new_symbols[:10],
-            )
-        return new_symbols
-
     async def _backfill_loop(
         self,
-        registry: object | None = None,
         settings: object | None = None,
     ) -> None:
-        """Background loop: periodically discover symbols and backfill data.
+        """Background loop: periodically backfill dynamic symbols.
 
-        Runs every data_backfill_interval_hours (default 6h). On each cycle:
-        1. Discovers new symbols from OpportunityRegistry
-        2. Backfills dynamic symbols with recent data (7 days)
+        Runs every data_backfill_interval_hours (default 6h).
+        Backfills dynamic symbols with recent data (7 days).
         """
         await asyncio.sleep(300)  # 5 min initial delay
 
@@ -327,11 +290,7 @@ class DataCollector:
                     await asyncio.sleep(interval)
                     continue
 
-                # 1. Discover new symbols from registry
-                if registry:
-                    self.auto_discover_symbols(registry)
-
-                # 2. Backfill dynamic symbols (recent 7 days)
+                # Backfill dynamic symbols (recent 7 days)
                 if self._dynamic_symbols:
                     await self.bulk_backfill(
                         symbols=sorted(self._dynamic_symbols),

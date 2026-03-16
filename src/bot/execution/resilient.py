@@ -133,5 +133,14 @@ class ResilientExchange:
     async def get_order_book(self, symbol: str, limit: int = 20) -> dict:
         return await self._call_with_breaker("get_order_book", symbol, limit)
 
+    def __getattr__(self, name: str) -> Any:
+        """Delegate unknown attributes to the underlying exchange adapter.
+
+        This allows ResilientExchange to transparently expose adapter-specific
+        methods (e.g. margin_borrow, create_margin_order) so that hasattr()
+        checks work correctly against the underlying adapter's capabilities.
+        """
+        return getattr(self._exchange, name)
+
     async def close(self) -> None:
         await self._exchange.close()

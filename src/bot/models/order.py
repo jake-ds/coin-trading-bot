@@ -28,8 +28,6 @@ class Order(FrozenModel):
     @field_validator("price")
     @classmethod
     def market_order_price(cls, v: float, info) -> float:
-        if info.data.get("type") == OrderType.MARKET and v != 0:
-            raise ValueError("Market orders should have price=0 (filled at market)")
         if info.data.get("type") == OrderType.LIMIT and v <= 0:
             raise ValueError("Limit orders must have a positive price")
         return v

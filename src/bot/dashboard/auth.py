@@ -22,11 +22,35 @@ ALGORITHM = "HS256"
 _refresh_blacklist: set[str] = set()
 
 
+_INSECURE_JWT_SECRETS = {"", "dev-secret-not-for-production"}
+
+
 def _get_jwt_secret(settings) -> str:
     """Get JWT secret from settings or generate one."""
     if hasattr(settings, "jwt_secret") and settings.jwt_secret:
         return settings.jwt_secret
     return "dev-secret-not-for-production"
+
+
+def check_live_auth_security(settings) -> list[str]:
+    """Return a list of security issues that block live trading.
+
+    Empty list means all checks pass.
+    """
+    issues: list[str] = []
+    password = getattr(settings, "dashboard_password", "changeme")
+    if password == "changeme":
+        issues.append(
+            "Dashboard password is default 'changeme'. "
+            "Set DASHBOARD_PASSWORD env var."
+        )
+    jwt_sec = getattr(settings, "jwt_secret", "")
+    if jwt_sec in _INSECURE_JWT_SECRETS:
+        issues.append(
+            "JWT secret is insecure (empty or default). "
+            "Set JWT_SECRET env var to a random string (32+ chars)."
+        )
+    return issues
 
 
 def is_auth_enabled(settings) -> bool:

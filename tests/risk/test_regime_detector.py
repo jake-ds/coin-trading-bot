@@ -8,8 +8,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
-from bot.quant.volatility import VolatilityRegime
-from bot.risk.regime_detector import MarketRegime, MarketRegimeDetector
+from bot.risk.regime_detector import MarketRegime, MarketRegimeDetector, VolatilityRegime
 
 # ──────────────────────────────────────────────────────────────
 # Helpers

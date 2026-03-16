@@ -10,6 +10,7 @@ from bot.data.models import (
     AuditLogRecord,
     Base,
     EngineMetricSnapshot,
+    EnginePositionRecord,
     EngineTradeRecord,
     FundingRateRecord,
     OHLCVRecord,
@@ -494,3 +495,98 @@ class DataStore:
                 }
                 for r in reversed(records)
             ]
+
+    # --- Engine Position Persistence (crash recovery) ---
+
+    async def save_engine_position(
+        self,
+        engine_name: str,
+        symbol: str,
+        position_data: dict,
+    ) -> None:
+        """Upsert an engine position for crash recovery."""
+        from datetime import datetime as dt
+
+        async with self._session_factory() as session:
+            # Check if exists
+            stmt = select(EnginePositionRecord).where(
+                EnginePositionRecord.engine_name == engine_name,
+                EnginePositionRecord.symbol == symbol,
+            )
+            result = await session.execute(stmt)
+            existing = result.scalar_one_or_none()
+
+            # Separate known fields from extras
+            side = position_data.get("side", "")
+            quantity = position_data.get("quantity", 0.0)
+            entry_price = position_data.get("entry_price", 0.0)
+            opened_at = position_data.get("opened_at", "")
+            extra = {
+                k: v for k, v in position_data.items()
+                if k not in ("symbol", "side", "quantity", "entry_price", "opened_at")
+            }
+
+            if existing:
+                existing.side = side
+                existing.quantity = quantity
+                existing.entry_price = entry_price
+                existing.opened_at = opened_at
+                existing.extra_json = json.dumps(extra)
+                existing.updated_at = dt.utcnow()
+            else:
+                session.add(EnginePositionRecord(
+                    engine_name=engine_name,
+                    symbol=symbol,
+                    side=side,
+                    quantity=quantity,
+                    entry_price=entry_price,
+                    opened_at=opened_at,
+                    extra_json=json.dumps(extra),
+                    updated_at=dt.utcnow(),
+                ))
+            await session.commit()
+
+    async def remove_engine_position(
+        self, engine_name: str, symbol: str
+    ) -> None:
+        """Remove a persisted engine position."""
+        async with self._session_factory() as session:
+            stmt = delete(EnginePositionRecord).where(
+                EnginePositionRecord.engine_name == engine_name,
+                EnginePositionRecord.symbol == symbol,
+            )
+            await session.execute(stmt)
+            await session.commit()
+
+    async def get_engine_positions(
+        self, engine_name: str,
+    ) -> list[dict]:
+        """Load all persisted positions for an engine."""
+        async with self._session_factory() as session:
+            stmt = select(EnginePositionRecord).where(
+                EnginePositionRecord.engine_name == engine_name,
+            )
+            result = await session.execute(stmt)
+            records = result.scalars().all()
+            positions = []
+            for r in records:
+                data = {
+                    "symbol": r.symbol,
+                    "side": r.side,
+                    "quantity": r.quantity,
+                    "entry_price": r.entry_price,
+                    "opened_at": r.opened_at,
+                }
+                extra = json.loads(r.extra_json) if r.extra_json else {}
+                data.update(extra)
+                positions.append(data)
+            return positions
+
+    async def clear_engine_positions(self, engine_name: str) -> None:
+        """Remove all persisted positions for an engine."""
+        async with self._session_factory() as session:
+            stmt = delete(EnginePositionRecord).where(
+                EnginePositionRecord.engine_name == engine_name,
+            )
+            await session.execute(stmt)
+            await session.commit()

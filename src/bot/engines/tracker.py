@@ -28,6 +28,7 @@ class TradeRecord:
     entry_time: str  # ISO format
     exit_time: str  # ISO format
     hold_time_seconds: float = 0.0
+    mode: str = "paper"  # "paper" or "live" (P2-13)
 
 
 @dataclass
@@ -133,20 +134,35 @@ class EngineTracker:
     # ------------------------------------------------------------------
 
     def get_metrics(
-        self, engine_name: str, window_hours: float = 24
+        self,
+        engine_name: str,
+        window_hours: float = 24,
+        mode: str | None = None,
     ) -> EngineMetrics:
-        """Compute metrics from trades within a time window."""
+        """Compute metrics from trades within a time window.
+
+        Args:
+            mode: If set, only include trades with this mode ("paper"/"live").
+        """
         trades = self._filter_trades(engine_name, window_hours)
+        if mode is not None:
+            trades = [t for t in trades if getattr(t, "mode", "paper") == mode]
         return self._compute_metrics(trades)
 
     def get_all_metrics(
-        self, window_hours: float = 24
+        self,
+        window_hours: float = 24,
+        mode: str | None = None,
     ) -> dict[str, EngineMetrics]:
-        """Compute metrics for every engine with recorded trades."""
+        """Compute metrics for every engine with recorded trades.
+
+        Args:
+            mode: If set, only include trades with this mode ("paper"/"live").
+        """
         result: dict[str, EngineMetrics] = {}
         all_engines = set(self._trades.keys()) | set(self._cycles.keys())
         for name in all_engines:
-            result[name] = self.get_metrics(name, window_hours)
+            result[name] = self.get_metrics(name, window_hours, mode=mode)
         return result
 
     def get_pnl_history(self, engine_name: str) -> list[dict]:

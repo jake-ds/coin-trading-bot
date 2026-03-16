@@ -165,7 +165,12 @@ function Dashboard() {
 
       {/* Portfolio summary */}
       <div className="mb-6">
-        <PortfolioSummary totalValue={totalValue} totalReturn={totalReturn} />
+        <PortfolioSummary
+          totalValue={totalValue}
+          totalReturn={totalReturn}
+          cashValue={portfolio?.cash_value}
+          unrealizedPnl={portfolio?.unrealized_pnl}
+        />
       </div>
 
       {/* Metric cards grid */}

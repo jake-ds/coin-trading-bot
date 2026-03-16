@@ -162,3 +162,56 @@ class RateLimiter:
             "tokens_remaining": round(self._tokens, 1),
             "metrics": self._metrics.to_dict(),
         }
+
+
+# Binance API weight costs per endpoint category (P2-12)
+BINANCE_WEIGHT_MAP: dict[str, int] = {
+    "fetch_ticker": 2,
+    "fetch_order_book": 5,
+    "fetch_ohlcv": 5,
+    "fetch_balance": 5,
+    "fetch_funding_rate": 1,
+    "fetch_positions": 5,
+    "create_order": 1,
+    "cancel_order": 1,
+    "fetch_order": 1,
+    "set_leverage": 1,
+    "set_margin_mode": 1,
+    "default": 1,
+}
+
+
+class WeightAwareRateLimiter(RateLimiter):
+    """Rate limiter that consumes tokens proportional to Binance API weight.
+
+    Binance enforces a weight budget (1200 weight/minute). Heavy endpoints
+    like order book depth consume more weight than lightweight ones like
+    fetch_ticker.
+    """
+
+    def __init__(
+        self,
+        weight_per_minute: int = 1200,
+        name: str = "binance_weight",
+        weight_map: dict[str, int] | None = None,
+    ):
+        # Convert weight budget to tokens/second
+        tokens_per_second = weight_per_minute / 60.0
+        super().__init__(
+            max_requests_per_second=tokens_per_second,
+            burst_size=weight_per_minute,
+            name=name,
+        )
+        self._weight_map = weight_map or BINANCE_WEIGHT_MAP
+
+    async def acquire_weighted(self, endpoint: str = "default") -> float:
+        """Acquire tokens weighted by endpoint cost.
+
+        Returns wait time in seconds.
+        """
+        weight = self._weight_map.get(endpoint, self._weight_map.get("default", 1))
+        total_wait = 0.0
+        for _ in range(weight):
+            wait = await self.acquire()
+            total_wait += wait
+        return total_wait

@@ -13,8 +13,10 @@ from typing import TYPE_CHECKING, Any, Callable
 import structlog
 
 if TYPE_CHECKING:
+    from bot.data.store import DataStore
     from bot.engines.portfolio_manager import PortfolioManager
     from bot.exchanges.base import ExchangeAdapter
+    from bot.monitoring.telegram import TelegramNotifier
 
 logger = structlog.get_logger(__name__)
 
@@ -85,6 +87,9 @@ class BaseEngine(ABC):
     allocation from the PortfolioManager.
     """
 
+    # Override in subclasses that only support paper trading
+    supports_live: bool = True
+
     def __init__(
         self,
         portfolio_manager: PortfolioManager,
@@ -112,6 +117,16 @@ class BaseEngine(ABC):
         self._dynamic_sizer: Any | None = None  # DynamicPositionSizer (V6-007)
         self._correlation_controller: Any | None = None  # CorrelationRiskController (V6-008)
         self._regime_detector: Any | None = None  # MarketRegimeDetector (V6-015)
+
+        # Position persistence (P0-1)
+        self._store: DataStore | None = None
+
+        # Telegram alert integration (P1-9)
+        self._telegram: TelegramNotifier | None = None
+
+        # Circuit breaker (P1-6): consecutive error tracking
+        self._consecutive_errors: int = 0
+        self._max_consecutive_errors: int = 5
 
     # ------------------------------------------------------------------
     # Abstract interface — subclasses must implement
@@ -193,6 +208,14 @@ class BaseEngine(ABC):
         """Attach a MarketRegimeDetector for regime-based adaptation."""
         self._regime_detector = detector
 
+    def set_store(self, store: DataStore) -> None:
+        """Attach a DataStore for position persistence."""
+        self._store = store
+
+    def set_telegram(self, telegram: TelegramNotifier) -> None:
+        """Attach a TelegramNotifier for critical alerts."""
+        self._telegram = telegram
+
     def _get_regime_adjustments(self) -> dict[str, float]:
         """Return threshold/size multipliers based on current market regime.
 
@@ -215,21 +238,38 @@ class BaseEngine(ABC):
     # ------------------------------------------------------------------
 
     async def start(self) -> None:
-        """Request capital and mark as running."""
+        """Request capital, restore positions from DB, and mark as running."""
         if self._status == EngineStatus.RUNNING:
             return
         self._running = True
         self._paused = False
         self._status = EngineStatus.RUNNING
         self._error_message = None
+        self._consecutive_errors = 0
         # Request initial capital allocation
         self._allocated_capital = self._portfolio_manager.request_capital(
             self.name, self._portfolio_manager.get_max_allocation(self.name)
         )
+        # Restore positions from DB (P0-1)
+        # Paper mode: clear stale DB positions — they can't be verified
+        if self._paper_mode and self._store is not None:
+            try:
+                await self._store.clear_engine_positions(self.name)
+                logger.info("paper_mode_stale_positions_cleared", engine=self.name)
+            except Exception:
+                pass
+            restored = 0
+        else:
+            restored = await self._restore_positions_from_db()
+        if restored > 0:
+            await self._send_alert(
+                f"Restored {restored} positions from DB on startup"
+            )
         logger.info(
             "engine_started",
             engine=self.name,
             allocated_capital=self._allocated_capital,
+            restored_positions=restored,
         )
 
     async def stop(self) -> None:
@@ -280,6 +320,7 @@ class BaseEngine(ABC):
                     result.duration_ms = duration_ms
                     self._cycle_count += 1
                     self._total_pnl += result.pnl_update
+                    self._consecutive_errors = 0  # reset on success
 
                     # Report PnL to portfolio manager
                     if result.pnl_update != 0:
@@ -314,14 +355,31 @@ class BaseEngine(ABC):
                         pnl_update=result.pnl_update,
                     )
                 except Exception as e:
+                    self._consecutive_errors += 1
                     self._status = EngineStatus.ERROR
                     self._error_message = str(e)
                     logger.error(
                         "engine_cycle_error",
                         engine=self.name,
                         error=str(e),
+                        consecutive_errors=self._consecutive_errors,
                         exc_info=True,
                     )
+                    # Circuit breaker (P1-6): auto-stop after N consecutive errors
+                    if self._consecutive_errors >= self._max_consecutive_errors:
+                        logger.critical(
+                            "engine_circuit_breaker_triggered",
+                            engine=self.name,
+                            consecutive_errors=self._consecutive_errors,
+                            last_error=str(e),
+                        )
+                        await self._send_alert(
+                            f"CIRCUIT BREAKER: Stopped after "
+                            f"{self._consecutive_errors} consecutive errors. "
+                            f"Last: {str(e)[:200]}"
+                        )
+                        self._running = False
+                        break
                     # Wait before retrying on error
                     await asyncio.sleep(self._loop_interval)
                     # Reset to running to allow retry
@@ -344,7 +402,7 @@ class BaseEngine(ABC):
         entry_price: float,
         **extra: Any,
     ) -> None:
-        """Track a new position internally."""
+        """Track a new position internally and persist to DB."""
         self._positions[symbol] = {
             "symbol": symbol,
             "side": side,
@@ -353,10 +411,83 @@ class BaseEngine(ABC):
             "opened_at": datetime.now(timezone.utc).isoformat(),
             **extra,
         }
+        # Persist to DB asynchronously
+        if self._store is not None:
+            asyncio.ensure_future(self._persist_position(symbol))
 
     def _remove_position(self, symbol: str) -> dict | None:
-        """Remove and return a tracked position."""
-        return self._positions.pop(symbol, None)
+        """Remove and return a tracked position, clearing from DB."""
+        pos = self._positions.pop(symbol, None)
+        if pos is not None and self._store is not None:
+            asyncio.ensure_future(self._unpersist_position(symbol))
+        return pos
+
+    async def _persist_position(self, symbol: str) -> None:
+        """Save a single position to the database."""
+        if self._store is None:
+            return
+        pos = self._positions.get(symbol)
+        if pos is None:
+            return
+        try:
+            await self._store.save_engine_position(self.name, symbol, pos)
+        except Exception as e:
+            logger.error(
+                "position_persist_failed",
+                engine=self.name,
+                symbol=symbol,
+                error=str(e),
+            )
+
+    async def _unpersist_position(self, symbol: str) -> None:
+        """Remove a position from the database."""
+        if self._store is None:
+            return
+        try:
+            await self._store.remove_engine_position(self.name, symbol)
+        except Exception as e:
+            logger.error(
+                "position_unpersist_failed",
+                engine=self.name,
+                symbol=symbol,
+                error=str(e),
+            )
+
+    async def _restore_positions_from_db(self) -> int:
+        """Restore positions from DB on startup. Returns count restored."""
+        if self._store is None:
+            return 0
+        try:
+            saved = await self._store.get_engine_positions(self.name)
+            for pos in saved:
+                symbol = pos.get("symbol", "")
+                if symbol:
+                    self._positions[symbol] = pos
+            if saved:
+                logger.info(
+                    "positions_restored_from_db",
+                    engine=self.name,
+                    count=len(saved),
+                    symbols=[p.get("symbol") for p in saved],
+                )
+            return len(saved)
+        except Exception as e:
+            logger.error(
+                "positions_restore_failed",
+                engine=self.name,
+                error=str(e),
+            )
+            return 0
+
+    async def _send_alert(self, message: str) -> None:
+        """Send a Telegram alert if notifier is configured."""
+        if self._telegram is not None:
+            try:
+                await self._telegram.send_message(
+                    f"[{self.name}] {message}"
+                )
+            except Exception:
+                logger.debug("telegram_alert_failed", engine=self.name)
 
     def _has_capacity(self, symbol: str | None = None) -> bool:
         """Check if the engine can open more positions.

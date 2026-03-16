@@ -180,7 +180,7 @@ class TestPositionsEndpoint:
         assert data["positions"] == []
 
     @pytest.mark.asyncio
-    async def test_positions_with_data(self, client):
+    async def test_open_positions_with_data(self, client):
         positions = [
             {
                 "symbol": "BTC/USDT",
@@ -206,29 +206,10 @@ class TestPositionsEndpoint:
             },
         ]
         update_state(open_positions=positions)
-        resp = await client.get("/api/positions")
+        resp = await client.get("/api/open-positions")
         data = resp.json()
         assert len(data["positions"]) == 2
         assert data["positions"][0]["symbol"] == "BTC/USDT"
         assert data["positions"][0]["unrealized_pnl"] == 1000.0
         assert data["positions"][1]["symbol"] == "ETH/USDT"
         assert data["positions"][1]["unrealized_pnl"] == -500.0
-
-    @pytest.mark.asyncio
-    async def test_positions_matches_open_positions(self, client):
-        """Verify /api/positions returns same data as /api/open-positions."""
-        positions = [
-            {
-                "symbol": "BTC/USDT",
-                "quantity": 1.0,
-                "entry_price": 50000.0,
-                "current_price": 51000.0,
-                "unrealized_pnl": 1000.0,
-                "stop_loss": 49000.0,
-                "take_profit": 55000.0,
-            },
-        ]
-        update_state(open_positions=positions)
-        resp_new = await client.get("/api/positions")
-        resp_old = await client.get("/api/open-positions")
-        assert resp_new.json()["positions"] == resp_old.json()["positions"]

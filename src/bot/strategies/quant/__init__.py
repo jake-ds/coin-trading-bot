@@ -1,1 +1,0 @@
-"""Quantitative trading strategies."""

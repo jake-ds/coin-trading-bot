@@ -1,0 +1,17 @@
+# Ralph Progress Log — V4 Live-Ready Dashboard & Infrastructure
+Started: 2026-02-22
+
+## Codebase Patterns
+- **Strategy pattern**: All strategies extend BaseStrategy ABC, register via strategy_registry.register()
+- **Async-first**: All I/O uses async/await. Strategy analyze() is async.
+- **Config**: pydantic-settings with .env + YAML override. New features disabled by default.
+- **Testing**: pytest + pytest-asyncio. Always clean strategy_registry in fixtures.
+- **Imports**: Always update __init__.py when adding new modules.
+- **Dependencies**: Add to pyproject.toml AND requirements.txt.
+- **Dashboard state**: Module-level dict in bot.dashboard.app. Test fixtures must reset all fields.
+- **API endpoints**: V4 moves to /api/* prefix. /health stays at root for Docker healthcheck.
+- **Frontend build**: npm run build outputs to src/bot/dashboard/static/. FastAPI serves as SPA.
+- **Auth**: JWT via python-jose. Disabled when dashboard_password='changeme'.
+- **Baseline**: 1400+ tests passing on main branch (V2 + V3 complete).
+
+---

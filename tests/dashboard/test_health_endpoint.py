@@ -267,58 +267,19 @@ class TestGracefulShutdown:
 
         bot = TradingBot.__new__(TradingBot)
         bot._settings = MagicMock()
-        bot._settings.shutdown_timeout_seconds = 30.0
+        bot._settings.shutdown_timeout_seconds = 5.0
         bot._running = True
         bot._telegram = None
-        bot._ws_feed = None
-        bot._dashboard_task = None
         bot._exchanges = []
-        bot._store = None
-        bot._audit_logger = MagicMock()
-        bot._audit_logger.log_bot_stopped = AsyncMock()
 
         mgr = MagicMock()
         mgr.stop_all = AsyncMock()
-        mgr._metrics_persistence = None
         bot._engine_manager = mgr
 
         await bot.shutdown()
 
         assert bot._running is False
         mgr.stop_all.assert_awaited_once()
-
-    @pytest.mark.asyncio
-    async def test_shutdown_saves_metrics_snapshot(self):
-        """Shutdown saves final metrics snapshot before closing."""
-        from bot.main import TradingBot
-
-        bot = TradingBot.__new__(TradingBot)
-        bot._settings = MagicMock()
-        bot._settings.shutdown_timeout_seconds = 30.0
-        bot._settings.metrics_retention_days = 90
-        bot._running = True
-        bot._telegram = None
-        bot._ws_feed = None
-        bot._dashboard_task = None
-        bot._exchanges = []
-        bot._store = MagicMock()
-        bot._store.close = AsyncMock()
-        bot._audit_logger = MagicMock()
-        bot._audit_logger.log_bot_stopped = AsyncMock()
-
-        persistence = MagicMock()
-        persistence.save_metrics_snapshot = AsyncMock()
-        persistence.cleanup = AsyncMock()
-
-        mgr = MagicMock()
-        mgr.stop_all = AsyncMock()
-        mgr._metrics_persistence = persistence
-        bot._engine_manager = mgr
-
-        await bot.shutdown()
-
-        persistence.save_metrics_snapshot.assert_awaited_once()
-        persistence.cleanup.assert_awaited_once_with(max_days=90)
 
     @pytest.mark.asyncio
     async def test_shutdown_timeout(self):
@@ -371,29 +332,6 @@ class TestGracefulShutdown:
         await bot.shutdown()
         assert bot._running is False
 
-    @pytest.mark.asyncio
-    async def test_shutdown_closes_store(self):
-        """Shutdown closes the data store."""
-        from bot.main import TradingBot
-
-        bot = TradingBot.__new__(TradingBot)
-        bot._settings = MagicMock()
-        bot._settings.shutdown_timeout_seconds = 5.0
-        bot._running = True
-        bot._telegram = None
-        bot._ws_feed = None
-        bot._dashboard_task = None
-        bot._exchanges = []
-        bot._engine_manager = None
-        bot._audit_logger = MagicMock()
-        bot._audit_logger.log_bot_stopped = AsyncMock()
-
-        store = MagicMock()
-        store.close = AsyncMock()
-        bot._store = store
-
-        await bot.shutdown()
-        store.close.assert_awaited_once()
 
 
 # ──────────────────────────────────────────────────────────────

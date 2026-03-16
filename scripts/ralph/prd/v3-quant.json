@@ -1,0 +1,318 @@
+{
+  "project": "CoinTradingBot-V3-Quant",
+  "branchName": "ralph/v3-quant-trading-system",
+  "description": "Quantitative finance trading system: statistical arbitrage, mean reversion, momentum factors, volatility models, portfolio optimization, and advanced risk metrics. Source code exists on feat/v3-quant-trading-system branch — each story ports modules incrementally, adds tests, and verifies integration.",
+  "sourceRef": "feat/v3-quant-trading-system",
+  "userStories": [
+    {
+      "id": "V3-001",
+      "title": "Add quant dependencies and package scaffold",
+      "description": "Add statsmodels, scipy, arch to pyproject.toml. Create src/bot/quant/__init__.py (empty initially) and src/bot/strategies/quant/__init__.py. Ensure all existing tests still pass after dependency addition.",
+      "acceptanceCriteria": [
+        "pyproject.toml: add statsmodels>=0.14.0, scipy>=1.11.0, arch>=6.0.0 to dependencies",
+        "Create src/bot/quant/__init__.py with docstring",
+        "Create src/bot/strategies/quant/__init__.py with empty content",
+        "pip install -e . succeeds with new deps",
+        "All existing tests pass, ruff check passes"
+      ],
+      "priority": 1,
+      "passes": true,
+      "notes": "Foundation story — no logic, just plumbing."
+    },
+    {
+      "id": "V3-002",
+      "title": "Statistical utilities: cointegration, z-score, hedge ratio",
+      "description": "Port src/bot/quant/statistics.py from the V3 branch. Functions: engle_granger_cointegration, rolling_ols_hedge_ratio, calculate_zscore, calculate_half_life, adf_test, estimate_ou_params.",
+      "acceptanceCriteria": [
+        "Create src/bot/quant/statistics.py with all 6 functions",
+        "Export all functions from src/bot/quant/__init__.py",
+        "Create tests/quant/__init__.py and tests/quant/test_statistics.py",
+        "Tests cover: cointegration on synthetic cointegrated series, z-score normalization, half-life > 0, ADF rejects unit root, OU params valid",
+        "All existing tests pass, ruff check passes"
+      ],
+      "priority": 2,
+      "passes": true,
+      "notes": "Reference: git show feat/v3-quant-trading-system:src/bot/quant/statistics.py"
+    },
+    {
+      "id": "V3-003",
+      "title": "Risk metrics: VaR, CVaR, Sortino, Calmar",
+      "description": "Port src/bot/quant/risk_metrics.py. Functions: parametric_var, historical_var, cornish_fisher_var, cvar, sortino_ratio, calmar_ratio, information_ratio.",
+      "acceptanceCriteria": [
+        "Create src/bot/quant/risk_metrics.py with all 7 functions",
+        "Export all functions from src/bot/quant/__init__.py",
+        "Create tests/quant/test_risk_metrics.py",
+        "Tests cover: VaR values are negative (losses), CVaR <= VaR, Sortino >= 0 for positive returns, parametric vs historical consistency",
+        "All existing tests pass, ruff check passes"
+      ],
+      "priority": 3,
+      "passes": true,
+      "notes": "Reference: git show feat/v3-quant-trading-system:src/bot/quant/risk_metrics.py"
+    },
+    {
+      "id": "V3-004",
+      "title": "GARCH volatility model",
+      "description": "Port src/bot/quant/volatility.py. Classes/functions: GARCHModel (fit, forecast, get_current_vol), classify_volatility_regime.",
+      "acceptanceCriteria": [
+        "Create src/bot/quant/volatility.py with GARCHModel class and classify_volatility_regime function",
+        "Export from src/bot/quant/__init__.py",
+        "Create tests/quant/test_volatility.py",
+        "Tests cover: GARCH fit on synthetic data, forecast returns positive vol, regime classification returns valid enum, insufficient data handled gracefully",
+        "All existing tests pass, ruff check passes"
+      ],
+      "priority": 4,
+      "passes": true,
+      "notes": "Reference: git show feat/v3-quant-trading-system:src/bot/quant/volatility.py"
+    },
+    {
+      "id": "V3-005",
+      "title": "Portfolio optimization: min variance, max Sharpe, risk parity",
+      "description": "Port src/bot/quant/portfolio.py. Functions: min_variance_portfolio, max_sharpe_portfolio, risk_parity_portfolio, efficient_frontier.",
+      "acceptanceCriteria": [
+        "Create src/bot/quant/portfolio.py with all 4 functions",
+        "Export from src/bot/quant/__init__.py",
+        "Create tests/quant/test_portfolio.py",
+        "Tests cover: weights sum to 1.0, all weights >= 0, min variance has lowest vol, risk parity has roughly equal risk contributions, efficient frontier has multiple points",
+        "All existing tests pass, ruff check passes"
+      ],
+      "priority": 5,
+      "passes": true,
+      "notes": "Reference: git show feat/v3-quant-trading-system:src/bot/quant/portfolio.py"
+    },
+    {
+      "id": "V3-006",
+      "title": "Microstructure analysis: VWAP, microprice, order book imbalance",
+      "description": "Port src/bot/quant/microstructure.py. Functions: vwap_midprice, microprice, orderbook_imbalance, detect_walls.",
+      "acceptanceCriteria": [
+        "Create src/bot/quant/microstructure.py with all 4 functions",
+        "Export all functions from src/bot/quant/__init__.py",
+        "Create tests/quant/test_microstructure.py",
+        "Tests cover: VWAP between bid and ask, microprice weighted toward heavier side, imbalance in [-1, 1], walls detected at correct levels",
+        "All existing tests pass, ruff check passes"
+      ],
+      "priority": 6,
+      "passes": true,
+      "notes": "Reference: git show feat/v3-quant-trading-system:src/bot/quant/microstructure.py"
+    },
+    {
+      "id": "V3-007",
+      "title": "Pair data provider",
+      "description": "Port src/bot/data/pair_data.py. PairDataProvider class that aligns multi-symbol price data for pairs trading and correlation analysis.",
+      "acceptanceCriteria": [
+        "Create src/bot/data/pair_data.py with PairDataProvider class",
+        "Create tests/data/test_pair_data.py",
+        "Tests cover: aligned data has same timestamps, missing data handled, returns dict of symbol -> prices",
+        "All existing tests pass, ruff check passes"
+      ],
+      "priority": 7,
+      "passes": true,
+      "notes": "Reference: git show feat/v3-quant-trading-system:src/bot/data/pair_data.py"
+    },
+    {
+      "id": "V3-008",
+      "title": "Pairs trading strategy",
+      "description": "Port src/bot/strategies/quant/pairs_trading.py. Statistical pairs trading using Engle-Granger cointegration and rolling hedge ratio with z-score entry/exit.",
+      "acceptanceCriteria": [
+        "Create src/bot/strategies/quant/pairs_trading.py with PairsTradingStrategy extending BaseStrategy",
+        "Strategy registers with strategy_registry",
+        "analyze() accepts pair_prices kwarg, returns BUY/SELL/HOLD based on z-score",
+        "Create tests/strategies/quant/__init__.py and tests/strategies/quant/test_pairs_trading.py",
+        "Tests cover: BUY when z-score < -2, SELL when z-score > 2, HOLD in between, HOLD when no pair_prices provided",
+        "All existing tests pass, ruff check passes"
+      ],
+      "priority": 8,
+      "passes": true,
+      "notes": "Reference: git show feat/v3-quant-trading-system:src/bot/strategies/quant/pairs_trading.py"
+    },
+    {
+      "id": "V3-009",
+      "title": "Mean reversion strategy",
+      "description": "Port src/bot/strategies/quant/mean_reversion.py. Single-asset mean reversion using z-score with regime awareness (disabled in trending markets).",
+      "acceptanceCriteria": [
+        "Create src/bot/strategies/quant/mean_reversion.py with MeanReversionStrategy extending BaseStrategy",
+        "Strategy registers with strategy_registry",
+        "analyze() returns BUY when z-score < -entry_threshold, SELL when > entry_threshold",
+        "adapt_to_regime() disables in TRENDING_UP/TRENDING_DOWN",
+        "Create tests/strategies/quant/test_mean_reversion.py",
+        "Tests cover: signals at threshold crossings, HOLD in trending regime, HOLD with insufficient data",
+        "All existing tests pass, ruff check passes"
+      ],
+      "priority": 9,
+      "passes": true,
+      "notes": "Reference: git show feat/v3-quant-trading-system:src/bot/strategies/quant/mean_reversion.py"
+    },
+    {
+      "id": "V3-010",
+      "title": "Momentum factor strategy",
+      "description": "Port src/bot/strategies/quant/momentum_factor.py. Cross-timeframe momentum factor using weighted z-score composite across multiple lookback periods.",
+      "acceptanceCriteria": [
+        "Create src/bot/strategies/quant/momentum_factor.py with MomentumFactorStrategy extending BaseStrategy",
+        "Strategy registers with strategy_registry",
+        "analyze() accepts multi_timeframe_candles kwarg, computes weighted momentum z-score",
+        "Create tests/strategies/quant/test_momentum_factor.py",
+        "Tests cover: BUY on strong positive momentum, SELL on strong negative, HOLD when neutral, HOLD without multi_timeframe_candles",
+        "All existing tests pass, ruff check passes"
+      ],
+      "priority": 10,
+      "passes": true,
+      "notes": "Reference: git show feat/v3-quant-trading-system:src/bot/strategies/quant/momentum_factor.py"
+    },
+    {
+      "id": "V3-011",
+      "title": "Volatility breakout strategy",
+      "description": "Port src/bot/strategies/quant/volatility_breakout.py. GARCH-based volatility breakout — BUY when realized vol exceeds forecasted vol (breakout), with regime awareness.",
+      "acceptanceCriteria": [
+        "Create src/bot/strategies/quant/volatility_breakout.py with VolatilityBreakoutStrategy extending BaseStrategy",
+        "Strategy registers with strategy_registry",
+        "analyze() uses GARCH forecast vs realized vol for breakout detection",
+        "Create tests/strategies/quant/test_volatility_breakout.py",
+        "Tests cover: signal generation on vol breakout, HOLD in normal vol, graceful fallback on GARCH failure",
+        "All existing tests pass, ruff check passes"
+      ],
+      "priority": 11,
+      "passes": true,
+      "notes": "Reference: git show feat/v3-quant-trading-system:src/bot/strategies/quant/volatility_breakout.py"
+    },
+    {
+      "id": "V3-012",
+      "title": "Triangular arbitrage strategy",
+      "description": "Port src/bot/strategies/quant/triangular_arb.py. Graph-based triangular arbitrage detecting 3-leg cycles with profit above threshold.",
+      "acceptanceCriteria": [
+        "Create src/bot/strategies/quant/triangular_arb.py with TriangularArbStrategy extending BaseStrategy",
+        "Strategy registers with strategy_registry",
+        "analyze() accepts tickers kwarg, detects triangular arb opportunities",
+        "Create tests/strategies/quant/test_triangular_arb.py",
+        "Tests cover: detects arb opportunity when cycle profit > threshold, HOLD when no profitable cycle, HOLD without tickers",
+        "All existing tests pass, ruff check passes"
+      ],
+      "priority": 12,
+      "passes": true,
+      "notes": "Reference: git show feat/v3-quant-trading-system:src/bot/strategies/quant/triangular_arb.py"
+    },
+    {
+      "id": "V3-013",
+      "title": "VaR integration into PortfolioRiskManager",
+      "description": "Extend src/bot/risk/portfolio_risk.py to include VaR-based risk checks. Add var_enabled, var_confidence, max_portfolio_var_pct fields. VaR check in validate_new_position.",
+      "acceptanceCriteria": [
+        "Add VaR fields to PortfolioRiskManager: var_enabled, var_confidence, max_portfolio_var_pct",
+        "Add calculate_portfolio_var() method using parametric VaR from quant.risk_metrics",
+        "validate_new_position() checks VaR when var_enabled=True",
+        "Update tests/risk/test_portfolio_risk.py with VaR test cases",
+        "All existing tests pass, ruff check passes"
+      ],
+      "priority": 13,
+      "passes": true,
+      "notes": "Reference: git show feat/v3-quant-trading-system:src/bot/risk/portfolio_risk.py"
+    },
+    {
+      "id": "V3-014",
+      "title": "V3 config settings",
+      "description": "Add all V3-related settings to src/bot/config.py: var_enabled, var_confidence, max_portfolio_var_pct, quant_pairs, triangular_arb_enabled, rebalance_enabled, rebalance_method, rebalance_threshold_pct, garch_enabled.",
+      "acceptanceCriteria": [
+        "Add all V3 config fields to Settings class with appropriate defaults (all features disabled by default)",
+        "var_enabled: bool = False, var_confidence: float = 0.95, max_portfolio_var_pct: float = 5.0",
+        "quant_pairs: list[list[str]] = [], triangular_arb_enabled: bool = False",
+        "rebalance_enabled: bool = False, rebalance_method: str = 'risk_parity', rebalance_threshold_pct: float = 5.0",
+        "garch_enabled: bool = False",
+        "All existing tests pass, ruff check passes"
+      ],
+      "priority": 14,
+      "passes": true,
+      "notes": "Config fields already partially exist on main (from V2-028 work). Verify no conflicts."
+    },
+    {
+      "id": "V3-015",
+      "title": "Portfolio rebalancer",
+      "description": "Port src/bot/execution/rebalancer.py. PortfolioRebalancer that computes target weights (risk parity or max Sharpe) and generates rebalance orders.",
+      "acceptanceCriteria": [
+        "Create src/bot/execution/rebalancer.py with PortfolioRebalancer class",
+        "Methods: calculate_target_weights(), generate_rebalance_orders(), should_rebalance()",
+        "Supports risk_parity and max_sharpe methods",
+        "Create tests/execution/test_rebalancer.py",
+        "Tests cover: weights sum to 1, rebalance triggered when drift > threshold, orders generated correctly",
+        "All existing tests pass, ruff check passes"
+      ],
+      "priority": 15,
+      "passes": true,
+      "notes": "Reference: git show feat/v3-quant-trading-system:src/bot/execution/rebalancer.py"
+    },
+    {
+      "id": "V3-016",
+      "title": "Quant backtesting engine",
+      "description": "Port src/bot/backtest/quant_backtest.py. PairsBacktestEngine and PortfolioBacktestEngine for quant strategy backtesting.",
+      "acceptanceCriteria": [
+        "Create src/bot/backtest/quant_backtest.py with PairsBacktestEngine and PortfolioBacktestEngine",
+        "PairsBacktestEngine: simulate pairs trading with entry/exit on z-score thresholds",
+        "PortfolioBacktestEngine: simulate portfolio rebalancing strategies",
+        "Create tests/backtest/test_quant_backtest.py",
+        "Tests cover: pairs backtest produces trades, portfolio backtest tracks equity, metrics computed correctly",
+        "All existing tests pass, ruff check passes"
+      ],
+      "priority": 16,
+      "passes": true,
+      "notes": "Reference: git show feat/v3-quant-trading-system:src/bot/backtest/quant_backtest.py"
+    },
+    {
+      "id": "V3-017",
+      "title": "Dashboard quant endpoints",
+      "description": "Add quant-specific API endpoints to the dashboard: /quant/risk-metrics, /quant/correlation-matrix, /quant/portfolio-optimization, /quant/garch.",
+      "acceptanceCriteria": [
+        "Add GET /quant/risk-metrics endpoint returning VaR, CVaR, Sortino, Calmar",
+        "Add GET /quant/correlation-matrix endpoint returning symbol correlation matrix",
+        "Add GET /quant/portfolio-optimization endpoint returning optimal weights",
+        "Add GET /quant/garch endpoint returning GARCH forecast",
+        "Update tests/dashboard/test_app.py with tests for all 4 endpoints",
+        "All existing tests pass, ruff check passes"
+      ],
+      "priority": 17,
+      "passes": true,
+      "notes": "Reference: git show feat/v3-quant-trading-system:src/bot/dashboard/app.py (look for /quant/ routes)"
+    },
+    {
+      "id": "V3-018",
+      "title": "Test directory restructure",
+      "description": "Move flat test files into the organized subdirectory structure matching the V3 branch. Create missing __init__.py files in test subdirectories.",
+      "acceptanceCriteria": [
+        "Ensure all test subdirectories have __init__.py: tests/quant/, tests/strategies/quant/, tests/backtest/, tests/data/, tests/execution/, tests/risk/, tests/monitoring/, tests/models/, tests/exchanges/, tests/dashboard/, tests/integration/",
+        "Verify test discovery still works: pytest tests/ --co finds all tests",
+        "All existing tests pass, ruff check passes"
+      ],
+      "priority": 18,
+      "passes": true,
+      "notes": "Some __init__.py files may already exist. Only create missing ones."
+    },
+    {
+      "id": "V3-019",
+      "title": "V3 integration test",
+      "description": "Port tests/test_v3_integration.py — comprehensive integration test proving all quant components work together end-to-end.",
+      "acceptanceCriteria": [
+        "Create tests/test_v3_integration.py covering all V3 modules",
+        "Test quant math pipeline: statistics → risk_metrics → GARCH → portfolio optimization → microstructure",
+        "Test all 5 quant strategies generate valid signals",
+        "Test VaR integration with PortfolioRiskManager",
+        "Test quant backtesting (pairs + portfolio)",
+        "Test dashboard quant endpoints return valid data",
+        "All tests pass in under 30 seconds, ruff check passes"
+      ],
+      "priority": 19,
+      "passes": true,
+      "notes": "Reference: git show feat/v3-quant-trading-system:tests/test_v3_integration.py"
+    },
+    {
+      "id": "V3-020",
+      "title": "Final verification and quant __init__.py exports",
+      "description": "Ensure src/bot/quant/__init__.py exports all functions/classes from all 5 modules. Run full test suite (V2 + V3). Verify ruff passes on entire codebase.",
+      "acceptanceCriteria": [
+        "src/bot/quant/__init__.py exports all public functions from statistics, risk_metrics, volatility, portfolio, microstructure",
+        "__all__ list includes all 20+ exported names",
+        "All V2 tests (1263+) still pass",
+        "All V3 tests pass",
+        "ruff check src/ tests/ passes with no errors",
+        "pytest tests/ -v completes successfully"
+      ],
+      "priority": 20,
+      "passes": true,
+      "notes": "Final verification story — ensure everything is wired together."
+    }
+  ]
+}

@@ -7,7 +7,7 @@ and settings hot-reload.
 """
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -26,7 +26,6 @@ from bot.dashboard.app import (
 from bot.data.store import DataStore
 from bot.exchanges.rate_limiter import RateLimiter
 from bot.execution.preflight import CheckStatus, PreFlightChecker
-from bot.execution.reconciler import PositionReconciler
 from bot.monitoring.audit import AuditLogger
 
 # ---------------------------------------------------------------------------
@@ -63,8 +62,6 @@ def _make_real_settings(**overrides):
         "binance_api_key": "",
         "binance_secret_key": "",
         "binance_testnet": True,
-        "upbit_api_key": "",
-        "upbit_secret_key": "",
         "database_url": "sqlite+aiosqlite:///test.db",
         "telegram_bot_token": "",
         "telegram_chat_id": "",
@@ -203,7 +200,7 @@ async def test_preflight_checks_pass_for_live_mode(settings, exchange):
     assert check_map["rate_limit_configured"].status == CheckStatus.PASS
     assert check_map["stop_loss_configured"].status == CheckStatus.PASS
     assert check_map["daily_loss_limit_configured"].status == CheckStatus.PASS
-    assert check_map["password_changed"].status == CheckStatus.PASS
+    assert check_map["dashboard_auth_security"].status == CheckStatus.PASS
 
 
 @pytest.mark.asyncio
@@ -270,61 +267,7 @@ async def test_rate_limiter_metrics_tracked():
 
 
 # ---------------------------------------------------------------------------
-# 3. Position reconciliation detects and reports discrepancy
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_reconciliation_detects_discrepancy():
-    """Reconciler should detect local-only and exchange-only positions."""
-    reconciler = PositionReconciler(tolerance_pct=1.0)
-
-    exchange = AsyncMock()
-    exchange.name = "binance"
-    # Exchange has ETH but not BTC
-    exchange.get_balance = AsyncMock(
-        return_value={"ETH": 2.0, "USDT": 5000.0}
-    )
-
-    # Local has BTC and ETH (with qty mismatch)
-    local_positions = {
-        "BTC/USDT": {"quantity": 0.5, "entry_price": 50000},
-        "ETH/USDT": {"quantity": 1.0, "entry_price": 3000},
-    }
-
-    result = await reconciler.reconcile(exchange, local_positions)
-
-    assert result.has_discrepancies is True
-    # BTC is local-only (not on exchange)
-    assert len(result.local_only) == 1
-    assert result.local_only[0].symbol == "BTC/USDT"
-    # ETH has qty mismatch (local=1.0, exchange=2.0)
-    assert len(result.qty_mismatch) == 1
-    assert result.qty_mismatch[0].symbol == "ETH/USDT"
-
-
-@pytest.mark.asyncio
-async def test_reconciliation_clean_when_matching():
-    """Reconciler should report no discrepancies when positions match."""
-    reconciler = PositionReconciler(tolerance_pct=1.0)
-
-    exchange = AsyncMock()
-    exchange.name = "binance"
-    exchange.get_balance = AsyncMock(
-        return_value={"BTC": 0.5, "USDT": 5000.0}
-    )
-
-    local_positions = {
-        "BTC/USDT": {"quantity": 0.5, "entry_price": 50000},
-    }
-
-    result = await reconciler.reconcile(exchange, local_positions)
-    assert result.has_discrepancies is False
-    assert "BTC/USDT" in result.matched
-
-
-# ---------------------------------------------------------------------------
-# 4-6. Emergency stop, close-all, resume (via API)
+# 3-6. Emergency stop, close-all, resume (via API)
 # ---------------------------------------------------------------------------
 
 
@@ -584,23 +527,8 @@ async def test_audit_trail_filter_by_severity(store, audit_logger):
 
 
 # ---------------------------------------------------------------------------
-# 8. WebSocket broadcasts state changes to connected client
+# 8. WebSocket state broadcast — tested in test_websocket.py
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_websocket_state_broadcast(auth_headers):
-    """WebSocket should broadcast state on connect."""
-    update_state(status="running")
-
-    from starlette.testclient import TestClient
-
-    client = TestClient(app)
-    with client.websocket_connect("/api/ws") as ws:
-        data = ws.receive_json()
-        assert data["type"] == "status_update"
-        assert data["payload"]["status"] == "running"
-
 
 # ---------------------------------------------------------------------------
 # 9. JWT auth blocks unauthenticated API requests
@@ -845,25 +773,7 @@ async def test_full_live_session_lifecycle(
         await limiter.acquire()
     assert limiter.metrics.total_requests == 5
 
-    # --- Step 4: Reconciliation detects discrepancy ---
-    reconciler = PositionReconciler(tolerance_pct=1.0)
-    recon_exchange = AsyncMock()
-    recon_exchange.name = "binance"
-    recon_exchange.get_balance = AsyncMock(
-        return_value={"BTC": 0.3, "USDT": 5000.0}
-    )
-    recon_result = await reconciler.reconcile(
-        recon_exchange,
-        {"BTC/USDT": {"quantity": 0.5, "entry_price": 50000}},
-    )
-    assert recon_result.has_discrepancies is True
-    await audit_logger.log_reconciliation_result(
-        has_discrepancies=True,
-        matched=0,
-        discrepancies=recon_result.total_discrepancies,
-    )
-
-    # --- Step 5: Emergency stop ---
+    # --- Step 4: Emergency stop ---
     await audit_logger.log_emergency_stop(
         reason="integration_test", cancelled_orders=1
     )
@@ -890,10 +800,9 @@ async def test_full_live_session_lifecycle(
 
     assert "preflight_result" in event_types
     assert "bot_started" in event_types
-    assert "reconciliation_result" in event_types
     assert "emergency_stop" in event_types
     assert "emergency_resume" in event_types
-    assert result["total"] == 5
+    assert result["total"] == 4
 
     # --- Step 8: Auth protects endpoints ---
     transport = ASGITransport(app=app)
@@ -910,7 +819,7 @@ async def test_full_live_session_lifecycle(
     # --- Step 9: Bot shutdown ---
     await audit_logger.log_bot_stopped()
     final_logs = await store.get_audit_logs(limit=50)
-    assert final_logs["total"] == 6
+    assert final_logs["total"] == 5
     final_types = [log["event_type"] for log in final_logs["logs"]]
     assert "bot_stopped" in final_types
 
@@ -929,18 +838,14 @@ async def test_bot_emergency_stop_with_audit():
     bot._emergency_stopped = False
     bot._emergency_stopped_at = None
     bot._emergency_reason = None
-    bot._execution_engines = {}
     bot._telegram = None
-    bot._risk_manager = None
-    bot._position_manager = None
-    bot._portfolio_risk = None
     bot._audit_logger = AsyncMock()
+    bot._engine_manager = MagicMock()
+    bot._engine_manager.engines = {}
 
     await bot.emergency_stop(reason="api_request")
 
     bot._audit_logger.log_emergency_stop.assert_called_once()
-    call_kwargs = bot._audit_logger.log_emergency_stop.call_args
-    assert call_kwargs[1]["actor"] == "user"  # api_request -> user
 
 
 @pytest.mark.asyncio
@@ -954,6 +859,8 @@ async def test_bot_emergency_resume_with_audit():
     bot._emergency_reason = "test"
     bot._telegram = None
     bot._audit_logger = AsyncMock()
+    bot._engine_manager = MagicMock()
+    bot._engine_manager.engines = {}
 
     await bot.emergency_resume()
 

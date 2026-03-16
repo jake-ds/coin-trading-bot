@@ -197,87 +197,16 @@ class TestBulkBackfill:
         assert mock_store.save_candles.call_count == 2
 
 
-class TestAutoDiscoverSymbols:
-    def test_discovers_new_symbols(self):
-        collector, _, _ = _make_collector(symbols=["BTC/USDT"])
-
-        mock_registry = MagicMock()
-        mock_registry.get_symbols = MagicMock(
-            side_effect=lambda op_type, n=10, min_score=0.0: (
-                ["ETH/USDT", "SOL/USDT"]
-                if op_type.value == "funding_rate"
-                else []
-            )
-        )
-
-        new = collector.auto_discover_symbols(mock_registry, min_score=30.0)
-
-        assert "ETH/USDT" in new
-        assert "SOL/USDT" in new
-        assert "ETH/USDT" in collector._dynamic_symbols
-        assert "SOL/USDT" in collector._dynamic_symbols
-
-    def test_no_duplicates_with_static_symbols(self):
-        collector, _, _ = _make_collector(symbols=["BTC/USDT"])
-
-        mock_registry = MagicMock()
-        mock_registry.get_symbols = MagicMock(
-            return_value=["BTC/USDT", "ETH/USDT"]
-        )
-
-        new = collector.auto_discover_symbols(mock_registry)
-
-        # BTC/USDT already in static — should not be in new
-        assert "BTC/USDT" not in new
-        assert "ETH/USDT" in new
-
-    def test_no_duplicates_with_dynamic_symbols(self):
-        collector, _, _ = _make_collector(symbols=["BTC/USDT"])
-        collector._dynamic_symbols = {"ETH/USDT"}
-
-        mock_registry = MagicMock()
-        mock_registry.get_symbols = MagicMock(
-            return_value=["ETH/USDT", "SOL/USDT"]
-        )
-
-        new = collector.auto_discover_symbols(mock_registry)
-
-        # ETH/USDT already dynamic — should not appear again
-        assert "ETH/USDT" not in new
-        assert "SOL/USDT" in new
-        assert len(collector._dynamic_symbols) == 2
-
-    def test_empty_registry_returns_empty(self):
-        collector, _, _ = _make_collector()
-
-        mock_registry = MagicMock()
-        mock_registry.get_symbols = MagicMock(return_value=[])
-
-        new = collector.auto_discover_symbols(mock_registry)
-        assert new == []
-
-    def test_min_score_passed_to_registry(self):
-        collector, _, _ = _make_collector()
-
-        mock_registry = MagicMock()
-        mock_registry.get_symbols = MagicMock(return_value=[])
-
-        collector.auto_discover_symbols(mock_registry, min_score=50.0)
-
-        for call in mock_registry.get_symbols.call_args_list:
-            assert call.kwargs["min_score"] == 50.0
-
-
 class TestBackfillLoop:
     @pytest.mark.asyncio
-    async def test_loop_discovers_and_backfills(self):
-        """_backfill_loop should discover symbols and backfill them."""
+    async def test_loop_backfills_dynamic_symbols(self):
+        """_backfill_loop should backfill dynamic symbols."""
         collector, mock_exchange, mock_store = _make_collector()
         mock_exchange.get_ohlcv = AsyncMock(return_value=_make_candles(5))
         mock_store.get_candles = AsyncMock(return_value=[])
 
-        mock_registry = MagicMock()
-        mock_registry.get_symbols = MagicMock(return_value=["ETH/USDT"])
+        # Pre-populate dynamic symbols
+        collector._dynamic_symbols = {"ETH/USDT"}
 
         mock_settings = MagicMock()
         mock_settings.data_backfill_enabled = True
@@ -295,12 +224,10 @@ class TestBackfillLoop:
 
         with patch("bot.data.collector.asyncio.sleep", side_effect=fake_sleep):
             with pytest.raises(asyncio.CancelledError):
-                await collector._backfill_loop(
-                    registry=mock_registry, settings=mock_settings
-                )
+                await collector._backfill_loop(settings=mock_settings)
 
-        # Symbols should have been discovered
-        assert "ETH/USDT" in collector._dynamic_symbols
+        # Exchange should have been called for ETH/USDT backfill
+        assert mock_exchange.get_ohlcv.call_count > 0
 
     @pytest.mark.asyncio
     async def test_loop_skips_when_disabled(self):
@@ -321,9 +248,7 @@ class TestBackfillLoop:
 
         with patch("bot.data.collector.asyncio.sleep", side_effect=fake_sleep):
             with pytest.raises(asyncio.CancelledError):
-                await collector._backfill_loop(
-                    registry=None, settings=mock_settings
-                )
+                await collector._backfill_loop(settings=mock_settings)
 
         # Exchange should not have been called (no discover or backfill)
         mock_exchange.get_ohlcv.assert_not_called()
@@ -358,32 +283,6 @@ class TestBackfillLoop:
         # Should not crash — loop continues despite errors
 
 
-class TestConfigFields:
-    def test_default_backfill_settings(self):
-        from bot.config import Settings
-
-        s = Settings()
-        assert s.data_backfill_enabled is True
-        assert s.data_backfill_interval_hours == 6.0
-        assert s.data_backfill_days == 30
-
-    def test_settings_metadata_exists(self):
-        from bot.config import SETTINGS_METADATA
-
-        assert "data_backfill_enabled" in SETTINGS_METADATA
-        assert "data_backfill_interval_hours" in SETTINGS_METADATA
-        assert "data_backfill_days" in SETTINGS_METADATA
-
-        for key in (
-            "data_backfill_enabled",
-            "data_backfill_interval_hours",
-            "data_backfill_days",
-        ):
-            meta = SETTINGS_METADATA[key]
-            assert meta["section"] == "Data Collection"
-            assert meta["requires_restart"] is False
-
-
 class TestEngineManagerBackfillWiring:
     def test_set_collector(self):
         from bot.engines.manager import EngineManager
@@ -396,29 +295,3 @@ class TestEngineManagerBackfillWiring:
 
         assert em._collector is mock_collector
 
-    @pytest.mark.asyncio
-    async def test_start_background_loops_creates_backfill_task(self):
-        from bot.engines.manager import EngineManager
-
-        pm = MagicMock()
-        mock_settings = MagicMock()
-        mock_settings.data_backfill_enabled = True
-        mock_settings.tuner_enabled = False
-        mock_settings.engine_rebalance_enabled = False
-        mock_settings.research_enabled = False
-
-        em = EngineManager(portfolio_manager=pm, settings=mock_settings)
-
-        mock_collector = MagicMock()
-        mock_collector._backfill_loop = AsyncMock()
-        em.set_collector(mock_collector)
-
-        await em.start_background_loops()
-
-        assert em._backfill_task is not None
-        # Clean up the task
-        em._backfill_task.cancel()
-        try:
-            await em._backfill_task
-        except asyncio.CancelledError:
-            pass

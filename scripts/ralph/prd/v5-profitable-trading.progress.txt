@@ -1,0 +1,45 @@
+# Ralph Progress Log — V5 Profitable Trading System Upgrade
+Started: 2026-02-23
+
+## Codebase Patterns
+
+### From V4 (carry-forward)
+- **Strategy pattern**: All strategies extend BaseStrategy ABC, register via strategy_registry.register()
+- **Async-first**: All I/O uses async/await. Strategy analyze() is async.
+- **Config**: pydantic-settings with .env + YAML override. New features disabled by default.
+- **Testing**: pytest + pytest-asyncio. Always clean strategy_registry in fixtures.
+- **Imports**: Always update __init__.py when adding new modules.
+- **Dependencies**: Add to pyproject.toml AND requirements.txt.
+- **Dashboard state**: Module-level dict in bot.dashboard.app. Test fixtures must reset all fields.
+- **API endpoints**: All under /api/* prefix. /health stays at root for Docker healthcheck.
+- **Frontend build**: npm run build outputs to src/bot/dashboard/static/. FastAPI serves as SPA.
+- **Auth**: JWT via python-jose. Disabled when dashboard_password='changeme'. Auth router at `/api/auth/*`.
+- **Settings metadata**: `SETTINGS_METADATA` dict in `bot.config` maps field names to section, description, type, requires_restart.
+- **Hot-reload**: `Settings.reload(updates)` method applies runtime changes to safe settings. Uses `object.__setattr__`.
+- **WebSocket**: `ws_manager` singleton in `bot.dashboard.websocket`. Rate-limited to 1/s. `broadcast_immediate` for critical events.
+- **Recharts**: Use `recharts` for React charts. Tooltip formatters need `any` types due to recharts TS limitations.
+- **Rate limiter**: Token bucket in `bot.exchanges.rate_limiter.RateLimiter`.
+- **Reconciliation**: `PositionReconciler` in `bot.execution.reconciler`.
+- **Emergency**: `TradingBot.emergency_stop()`, `.emergency_close_all()`, `.emergency_resume()`.
+- **Audit**: `AuditLogger` in `bot.monitoring.audit`. `asyncio.ensure_future()` for fire-and-forget logging.
+- **Test count baseline**: 1865 tests passing on main branch (V4 complete).
+
+### Engine System Patterns
+- **BaseEngine ABC** in `bot.engines.base`: All engines extend this. Provides `run()` loop, `_execute_cycle()` abstract, lifecycle (start/stop/pause/resume).
+- **DecisionStep**: Dataclass for engine decisions — label (Korean), observation, threshold, result, category (evaluate/decide/execute/skip). Stored in EngineCycleResult.
+- **EngineCycleResult**: Per-cycle result with decisions, actions, positions, signals, pnl_update. Last 50 stored per engine.
+- **EngineManager**: Registers engines, manages asyncio tasks, aggregates cycle logs and positions.
+- **PortfolioManager**: Capital allocation (request/release), PnL tracking, drawdown protection. Allocations in config: funding_rate_arb=0.30, grid_trading=0.25, stat_arb=0.20, cross_exchange_arb=0.15.
+- **Engine config**: All engine params in Settings (config.py) with SETTINGS_METADATA entries. Engines read config on each cycle.
+- **Paper mode**: All engines simulate trades in paper mode. No live execution implemented.
+- **Engine API**: GET /api/engines (list), POST /api/engines/{name}/start|stop|pause|resume, GET /api/engines/{name}/cycle-log, GET /api/engines/{name}/positions.
+- **Frontend engine page**: Engines.tsx fetches /api/engines every 5s, shows status cards with action buttons.
+
+### V5-Specific Notes
+- CostModel percentages: stored as raw values (0.02 means 0.02%), NOT fractions. Binance VIP0: maker=0.02%, taker=0.04%.
+- Engine modifications must keep backward compatibility: new CostModel params have defaults.
+- EngineTracker is in-memory only (resets on restart) — sufficient for paper mode.
+- ParameterTuner changes Settings via reload(), engines pick up new values on next cycle.
+- Research experiments use synthetic/mock data — no real exchange API calls.
+
+---

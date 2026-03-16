@@ -27,6 +27,7 @@ def _make_settings(
     stop_loss_pct=3.0,
     daily_loss_limit_pct=5.0,
     dashboard_password="changeme",
+    jwt_secret="",
     **kwargs,
 ):
     """Create a mock settings object for pre-flight tests."""
@@ -35,7 +36,7 @@ def _make_settings(
         daily_loss_limit_pct=daily_loss_limit_pct,
         dashboard_password=dashboard_password,
         dashboard_username="admin",
-        jwt_secret="",
+        jwt_secret=jwt_secret,
         **kwargs,
     )
 
@@ -343,15 +344,27 @@ class TestDailyLossLimitCheck:
 
 class TestPasswordCheck:
     def test_pass_changed(self, checker):
-        settings = _make_settings(dashboard_password="securepassword123")
+        settings = _make_settings(
+            dashboard_password="securepassword123",
+            jwt_secret="a-real-secret-for-testing-1234567890",
+        )
         result = checker._check_password_changed(settings)
         assert result.status == CheckStatus.PASS
 
-    def test_warn_default(self, checker):
+    def test_fail_default_password(self, checker):
         settings = _make_settings(dashboard_password="changeme")
         result = checker._check_password_changed(settings)
-        assert result.status == CheckStatus.WARN
+        assert result.status == CheckStatus.FAIL
         assert "changeme" in result.message
+
+    def test_fail_insecure_jwt(self, checker):
+        settings = _make_settings(
+            dashboard_password="securepassword123",
+            jwt_secret="",
+        )
+        result = checker._check_password_changed(settings)
+        assert result.status == CheckStatus.FAIL
+        assert "JWT" in result.message
 
 
 class TestValidationReportCheck:
@@ -460,6 +473,7 @@ class TestRunAllChecks:
                 stop_loss_pct=3.0,
                 daily_loss_limit_pct=5.0,
                 dashboard_password="securepassword",
+                jwt_secret="a-real-secret-for-testing-1234567890",
             )
             result = await checker.run_all_checks(
                 settings=settings,
@@ -490,7 +504,27 @@ class TestRunAllChecks:
         settings = _make_settings(
             stop_loss_pct=3.0,
             daily_loss_limit_pct=5.0,
-            dashboard_password="changeme",  # Will warn
+            dashboard_password="securepassword",
+            jwt_secret="a-real-secret-for-testing-1234567890",
+        )
+        result = await checker.run_all_checks(
+            settings=settings,
+            exchanges=[mock_exchange],
+            symbols=["BTC/USDT"],
+            rate_limit_enabled=False,  # Will warn about rate limiting
+        )
+        # Rate limit and validation report checks will be WARN
+        assert result.overall == CheckStatus.WARN
+        assert result.has_warnings
+        assert not result.has_failures
+
+    @pytest.mark.asyncio
+    async def test_fail_insecure_auth_blocks_startup(self, mock_exchange):
+        checker = PreFlightChecker()
+        settings = _make_settings(
+            stop_loss_pct=3.0,
+            daily_loss_limit_pct=5.0,
+            dashboard_password="changeme",  # Will FAIL (insecure auth)
         )
         result = await checker.run_all_checks(
             settings=settings,
@@ -498,10 +532,8 @@ class TestRunAllChecks:
             symbols=["BTC/USDT"],
             rate_limit_enabled=True,
         )
-        # Password and validation report checks will be WARN
-        assert result.overall == CheckStatus.WARN
-        assert result.has_warnings
-        assert not result.has_failures
+        assert result.overall == CheckStatus.FAIL
+        assert result.has_failures
 
     @pytest.mark.asyncio
     async def test_last_result_stored(self, mock_exchange):

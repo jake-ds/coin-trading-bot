@@ -362,20 +362,25 @@ class PreFlightChecker:
         )
 
     def _check_password_changed(self, settings: Any) -> CheckResult:
-        """Check 7: Verify dashboard password has been changed from default."""
-        password = getattr(settings, "dashboard_password", "changeme")
-        if password != "changeme":
+        """Check 7: Verify dashboard auth security for live trading.
+
+        In live mode, default password and insecure JWT secret are FAIL (not WARN).
+        """
+        from bot.dashboard.auth import check_live_auth_security
+
+        issues = check_live_auth_security(settings)
+        if not issues:
             return CheckResult(
-                name="password_changed",
+                name="dashboard_auth_security",
                 status=CheckStatus.PASS,
-                message="Dashboard password has been changed from default",
+                message="Dashboard auth is properly configured",
             )
 
         return CheckResult(
-            name="password_changed",
-            status=CheckStatus.WARN,
-            message="Dashboard password is still 'changeme'. Auth is disabled.",
-            details={"auth_disabled": True},
+            name="dashboard_auth_security",
+            status=CheckStatus.FAIL,
+            message="Dashboard auth insecure: " + "; ".join(issues),
+            details={"issues": issues},
         )
 
     def _check_validation_report(self) -> CheckResult:

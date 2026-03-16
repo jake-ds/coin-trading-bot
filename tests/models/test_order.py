@@ -40,17 +40,18 @@ class TestOrder:
         assert order.type == OrderType.MARKET
         assert order.price == 0
 
-    def test_market_order_with_nonzero_price_rejected(self):
-        with pytest.raises(ValidationError):
-            Order(
-                id="order-003",
-                exchange="binance",
-                symbol="BTC/USDT",
-                side=OrderSide.BUY,
-                type=OrderType.MARKET,
-                price=50000.0,
-                quantity=0.1,
-            )
+    def test_market_order_with_nonzero_price_allowed(self):
+        """Market orders may have a fill price from the exchange."""
+        order = Order(
+            id="order-003",
+            exchange="binance",
+            symbol="BTC/USDT",
+            side=OrderSide.BUY,
+            type=OrderType.MARKET,
+            price=50000.0,
+            quantity=0.1,
+        )
+        assert order.price == 50000.0
 
     def test_limit_order_with_zero_price_rejected(self):
         with pytest.raises(ValidationError):
