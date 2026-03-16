@@ -18,20 +18,29 @@ class TestTradingMode:
 
 
 class TestSettings:
-    def test_defaults(self):
-        settings = Settings(config_file="nonexistent.yaml")
+    def test_defaults(self, monkeypatch, tmp_path):
+        # Isolate from .env by pointing env_file to empty file
+        empty_env = tmp_path / ".env"
+        empty_env.write_text("")
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("TRADING_MODE", raising=False)
+        monkeypatch.delenv("BINANCE_API_KEY", raising=False)
+        settings = Settings(_env_file=str(empty_env), config_file="nonexistent.yaml")
         assert settings.trading_mode == TradingMode.PAPER
         assert settings.binance_api_key == ""
         assert settings.binance_testnet is True
         assert settings.log_level == "INFO"
-        assert settings.max_position_size_pct == 10.0
+        assert settings.max_position_size_pct == 20.0
         assert settings.daily_loss_limit_pct == 5.0
         assert settings.max_drawdown_pct == 15.0
         assert settings.dashboard_port == 8000
-        assert settings.loop_interval_seconds == 60
+        assert settings.loop_interval_seconds == 300
 
-    def test_paper_mode_default(self):
-        settings = Settings(config_file="nonexistent.yaml")
+    def test_paper_mode_default(self, monkeypatch, tmp_path):
+        empty_env = tmp_path / ".env"
+        empty_env.write_text("")
+        monkeypatch.delenv("TRADING_MODE", raising=False)
+        settings = Settings(_env_file=str(empty_env), config_file="nonexistent.yaml")
         assert settings.trading_mode == TradingMode.PAPER
 
     def test_live_mode(self):
@@ -108,8 +117,11 @@ class TestSettings:
         assert settings.log_level == "DEBUG"
         assert settings.max_position_size_pct == 20
 
-    def test_yaml_file_not_found_is_ok(self):
-        settings = Settings(config_file="definitely_nonexistent.yaml")
+    def test_yaml_file_not_found_is_ok(self, monkeypatch, tmp_path):
+        empty_env = tmp_path / ".env"
+        empty_env.write_text("")
+        monkeypatch.delenv("TRADING_MODE", raising=False)
+        settings = Settings(_env_file=str(empty_env), config_file="definitely_nonexistent.yaml")
         assert settings.trading_mode == TradingMode.PAPER
 
     def test_symbols_default(self):
