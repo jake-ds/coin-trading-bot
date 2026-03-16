@@ -107,6 +107,38 @@ class BaseFetcher(ABC):
             )
             return None
 
+    async def _get_absolute(self, url: str, params: dict | None = None) -> dict | None:
+        """Make a GET request to an absolute URL (different host)."""
+        cache_key = f"{url}:{params}"
+        cached = self._get_cached(cache_key)
+        if cached is not None:
+            return cached
+
+        await self._rate_limit()
+
+        try:
+            session = await self._get_session()
+            async with session.get(url, params=params) as resp:
+                if resp.status != 200:
+                    logger.warning(
+                        "api_request_failed",
+                        fetcher=self.__class__.__name__,
+                        url=url,
+                        status=resp.status,
+                    )
+                    return None
+                data = await resp.json()
+                self._set_cached(cache_key, data)
+                return data
+        except Exception as e:
+            logger.warning(
+                "api_request_error",
+                fetcher=self.__class__.__name__,
+                url=url,
+                error=str(e),
+            )
+            return None
+
     @abstractmethod
     async def fetch(self) -> Any:
         """Fetch and return processed data. Returns None on failure."""

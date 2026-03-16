@@ -173,21 +173,21 @@ async def test_defillama_fetch():
                 {"tvl": 100_000_000_000},
                 {"tvl": 105_000_000_000},
             ]
-        if "stablecoins" in path and "charts" not in path:
+        return None
+
+    async def mock_get_absolute(url, params=None):
+        if "stablecoins" in url and "charts" not in url:
             return {
                 "peggedAssets": [
-                    {
-                        "chainCirculating": {
-                            "Ethereum": {"current": {"peggedUSD": 50_000_000_000}}
-                        }
-                    }
+                    {"circulating": {"peggedUSD": 50_000_000_000}}
                 ]
             }
-        if "stablecoincharts" in path:
+        if "stablecoincharts" in url:
             return None
         return None
 
     fetcher._get = mock_get
+    fetcher._get_absolute = mock_get_absolute
     result = await fetcher.fetch()
     assert result is not None
     assert result.total_tvl == 105_000_000_000

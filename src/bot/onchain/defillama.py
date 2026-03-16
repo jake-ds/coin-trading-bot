@@ -61,20 +61,24 @@ class DeFiLlamaFetcher(BaseFetcher):
         return {"total_tvl": current_tvl, "change_24h": change_24h}
 
     async def _fetch_stablecoins(self) -> dict | None:
-        """Fetch stablecoin total supply."""
-        data = await self._get("/stablecoins", params={"includePrices": "false"})
+        """Fetch stablecoin total supply from stablecoins.llama.fi."""
+        data = await self._get_absolute(
+            "https://stablecoins.llama.fi/stablecoins",
+            params={"includePrices": "false"},
+        )
         if data is None or "peggedAssets" not in data:
             return None
 
         total_supply = 0.0
         for asset in data["peggedAssets"]:
-            chains = asset.get("chainCirculating", {})
-            for chain_data in chains.values():
-                current = chain_data.get("current", {})
-                total_supply += current.get("peggedUSD", 0.0)
+            circ = asset.get("circulating", {})
+            total_supply += circ.get("peggedUSD", 0.0)
 
         # For change, use stablecoin chart data
-        chart_data = await self._get("/stablecoincharts/all", params={"stablecoin": "1"})
+        chart_data = await self._get_absolute(
+            "https://stablecoins.llama.fi/stablecoincharts/all",
+            params={"stablecoin": "1"},
+        )
         change_24h = 0.0
         if chart_data and isinstance(chart_data, list) and len(chart_data) >= 2:
             current_entry = chart_data[-1]
