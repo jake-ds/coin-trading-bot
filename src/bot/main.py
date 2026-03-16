@@ -528,17 +528,20 @@ class TradingBot:
             logger.warning("preflight_no_exchanges")
             return
 
-        self._preflight_checker = PreFlightChecker(
+        self._preflight_checker = PreFlightChecker()
+        result = await self._preflight_checker.run_all_checks(
+            settings=self._settings,
             exchanges=self._exchanges,
             symbols=self._settings.onchain_symbols,
-            settings=self._settings,
+            rate_limit_enabled=self._settings.rate_limit_enabled,
         )
-        results = await self._preflight_checker.run_all()
-        dashboard_module.update_state(preflight=results)
+        dashboard_module.update_state(preflight=result.to_dict())
 
-        failures = [r for r in results if not r.get("passed", True)]
-        if failures:
-            logger.warning("preflight_failures", failures=failures)
+        if result.has_failures:
+            logger.warning(
+                "preflight_failures",
+                failures=[c.to_dict() for c in result.checks if c.status.value == "FAIL"],
+            )
 
 
 def main() -> None:
