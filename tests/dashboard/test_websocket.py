@@ -175,10 +175,9 @@ class TestWebSocketEndpoint:
         assert "cycle_metrics" in payload
         assert "portfolio" in payload
         assert "metrics" in payload
-        assert "regime" in payload
         assert "trades" in payload
-        assert "strategy_stats" in payload
         assert "open_positions" in payload
+        assert "onchain_signals" in payload
 
     @pytest.mark.asyncio
     async def test_websocket_receives_state_with_data(self):
@@ -189,13 +188,11 @@ class TestWebSocketEndpoint:
             status="running",
             metrics={"total_return_pct": 5.0, "win_rate": 65.0},
             portfolio={"balances": {"USDT": 10000}, "positions": [], "total_value": 10500.0},
-            regime="TRENDING_UP",
         )
         payload = _build_full_state_payload()
         assert payload["status"] == "running"
         assert payload["metrics"]["total_return_pct"] == 5.0
         assert payload["portfolio"]["total_value"] == 10500.0
-        assert payload["regime"] == "TRENDING_UP"
 
     @pytest.mark.asyncio
     async def test_websocket_manager_connect_disconnect(self):

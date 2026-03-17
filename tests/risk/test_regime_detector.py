@@ -390,48 +390,6 @@ class TestEngineManagerIntegration:
 
 
 # ──────────────────────────────────────────────────────────────
-# Dashboard endpoint
-# ──────────────────────────────────────────────────────────────
-
-
-class TestDashboardEndpoint:
-    @pytest.mark.asyncio
-    async def test_no_engine_manager(self):
-        from bot.dashboard.app import get_market_regime, set_engine_manager
-
-        set_engine_manager(None)
-        result = await get_market_regime()
-        assert result["current"] == "NORMAL"
-        assert result["history"] == []
-
-    @pytest.mark.asyncio
-    async def test_no_detector(self):
-        from bot.dashboard.app import get_market_regime, set_engine_manager
-
-        mgr = MagicMock(spec=[])
-        set_engine_manager(mgr)
-        result = await get_market_regime()
-        assert result["current"] == "NORMAL"
-
-    @pytest.mark.asyncio
-    async def test_with_detector(self):
-        from bot.dashboard.app import get_market_regime, set_engine_manager
-
-        mgr = MagicMock()
-        svc = _mock_vol_service(regime=VolatilityRegime.HIGH)
-        detector = MarketRegimeDetector(volatility_service=svc)
-        detector.detect_regime()
-        mgr._regime_detector = detector
-        set_engine_manager(mgr)
-
-        result = await get_market_regime()
-        assert result["current"] == "HIGH"
-        assert "since" in result
-        assert "duration_minutes" in result
-        assert isinstance(result["history"], list)
-
-
-# ──────────────────────────────────────────────────────────────
 # Imports
 # ──────────────────────────────────────────────────────────────
 

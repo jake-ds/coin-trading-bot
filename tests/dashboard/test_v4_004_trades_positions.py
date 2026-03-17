@@ -206,7 +206,7 @@ class TestPositionsEndpoint:
             },
         ]
         update_state(open_positions=positions)
-        resp = await client.get("/api/open-positions")
+        resp = await client.get("/api/positions")
         data = resp.json()
         assert len(data["positions"]) == 2
         assert data["positions"][0]["symbol"] == "BTC/USDT"

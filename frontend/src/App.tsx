@@ -1,20 +1,10 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Routes, Route, Link, useLocation } from 'react-router-dom'
 import Dashboard from './pages/Dashboard'
-import Trades from './pages/Trades'
+import Signals from './pages/Signals'
 import Positions from './pages/Positions'
-import Strategies from './pages/Strategies'
-import Analytics from './pages/Analytics'
+import Trades from './pages/Trades'
 import Settings from './pages/Settings'
-import CycleLog from './pages/CycleLog'
-import Engines from './pages/Engines'
-import EngineDetail from './pages/EngineDetail'
-import Performance from './pages/Performance'
-import Research from './pages/Research'
-import Scanner from './pages/Scanner'
-import TradeExplorer from './pages/TradeExplorer'
-import Heatmaps from './pages/Heatmaps'
-import RiskDashboard from './pages/RiskDashboard'
 import Login from './pages/Login'
 import ConnectionIndicator from './components/common/ConnectionIndicator'
 import ProtectedRoute from './components/common/ProtectedRoute'
@@ -25,18 +15,9 @@ import type { Trade } from './api/types'
 
 const navItems = [
   { path: '/', label: 'Dashboard' },
-  { path: '/engines', label: 'Engines' },
-  { path: '/performance', label: 'Performance' },
-  { path: '/research', label: 'Research' },
-  { path: '/scanner', label: 'Scanner' },
+  { path: '/signals', label: 'Signals' },
   { path: '/positions', label: 'Positions' },
   { path: '/trades', label: 'Trades' },
-  { path: '/trade-explorer', label: 'Explorer' },
-  { path: '/heatmaps', label: 'Heatmaps' },
-  { path: '/risk', label: 'Risk' },
-  { path: '/strategies', label: 'Strategies' },
-  { path: '/analytics', label: 'Analytics' },
-  { path: '/cycle-log', label: 'Cycle Log' },
   { path: '/settings', label: 'Settings' },
 ]
 
@@ -123,19 +104,9 @@ function App() {
         <main className="max-w-7xl mx-auto px-6 py-6">
           <Routes>
             <Route path="/" element={<Dashboard />} />
-            <Route path="/engines" element={<Engines />} />
-            <Route path="/engines/:name" element={<EngineDetail />} />
-            <Route path="/performance" element={<Performance />} />
-            <Route path="/research" element={<Research />} />
-            <Route path="/scanner" element={<Scanner />} />
+            <Route path="/signals" element={<Signals />} />
             <Route path="/positions" element={<Positions />} />
             <Route path="/trades" element={<Trades />} />
-            <Route path="/trade-explorer" element={<TradeExplorer />} />
-            <Route path="/heatmaps" element={<Heatmaps />} />
-            <Route path="/risk" element={<RiskDashboard />} />
-            <Route path="/strategies" element={<Strategies />} />
-            <Route path="/analytics" element={<Analytics />} />
-            <Route path="/cycle-log" element={<CycleLog />} />
             <Route path="/settings" element={<Settings />} />
           </Routes>
         </main>

@@ -355,15 +355,15 @@ class TestProtectedRoutes:
         assert resp.status_code == 401
 
     @pytest.mark.asyncio
-    async def test_strategies_protected(self, client, auth_settings):
+    async def test_positions_protected(self, client, auth_settings):
         set_settings(auth_settings)
-        resp = await client.get("/api/strategies")
+        resp = await client.get("/api/positions")
         assert resp.status_code == 401
 
     @pytest.mark.asyncio
-    async def test_analytics_protected(self, client, auth_settings):
+    async def test_signals_protected(self, client, auth_settings):
         set_settings(auth_settings)
-        resp = await client.get("/api/analytics")
+        resp = await client.get("/api/onchain-signals")
         assert resp.status_code == 401
 
     @pytest.mark.asyncio
@@ -379,15 +379,15 @@ class TestProtectedRoutes:
 
         # All should return 200
         for path in ["/api/status", "/api/trades", "/api/portfolio", "/api/metrics",
-                     "/api/strategies", "/api/analytics", "/api/regime"]:
+                     "/api/positions", "/api/onchain-signals"]:
             resp = await client.get(path, headers=headers)
             assert resp.status_code == 200, f"Failed for {path}: {resp.status_code}"
 
     @pytest.mark.asyncio
-    async def test_toggle_protected(self, client, auth_settings):
+    async def test_emergency_protected(self, client, auth_settings):
         """POST endpoints also require auth."""
         set_settings(auth_settings)
-        resp = await client.post("/api/strategies/test/toggle")
+        resp = await client.post("/api/emergency/stop")
         assert resp.status_code == 401
 
     @pytest.mark.asyncio

@@ -1,8 +1,7 @@
 """FastAPI monitoring dashboard with React SPA frontend."""
 
 import asyncio
-import html
-import math
+import collections
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -74,9 +73,6 @@ _bot_state = {
     "emergency": {"active": False, "activated_at": None, "reason": None},
 }
 
-# Reference to strategy_registry — set by main.py via set_strategy_registry()
-_strategy_registry = None
-
 # Reference to settings — set by main.py via set_settings()
 _settings = None
 
@@ -96,11 +92,36 @@ _exchange_positions_cache: list[dict] = []
 _exchange_positions_cache_ts: float = 0.0
 _EXCHANGE_POSITIONS_CACHE_TTL: float = 10.0  # seconds
 
+# Reference to EngineManager — set by main.py via set_engine_manager()
+_engine_manager = None
 
+# Signal history — 24 hours at 5-minute intervals (288 slots)
+_signal_history: collections.deque = collections.deque(maxlen=288)
+
+
+def record_signal_snapshot() -> None:
+    """Record current onchain signals into the history deque.
+
+    Called after each engine cycle by the TradingBot orchestrator.
+    """
+    if _engine_manager is None:
+        return
+    engine = _engine_manager.get_engine("onchain_trader")
+    if engine is None or not hasattr(engine, "latest_signals"):
+        return
+    signals = engine.latest_signals
+    if not signals:
+        return
+    _signal_history.append({
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "signals": signals,
+    })
+
+
+# Keep set_strategy_registry for backward compatibility with main.py
 def set_strategy_registry(registry) -> None:
-    """Set the strategy registry reference for toggle endpoint."""
-    global _strategy_registry
-    _strategy_registry = registry
+    """Set the strategy registry reference (no-op, kept for compatibility)."""
+    pass
 
 
 def set_settings(settings) -> None:
@@ -148,6 +169,17 @@ def set_futures_exchange(exchange) -> None:
     _futures_exchange = exchange
 
 
+def set_engine_manager(manager) -> None:
+    """Set the EngineManager reference for engine control endpoints."""
+    global _engine_manager
+    _engine_manager = manager
+
+
+def get_engine_manager():
+    """Get the current EngineManager reference."""
+    return _engine_manager
+
+
 # ---------------------------------------------------------------------------
 # Auth request/response models
 # ---------------------------------------------------------------------------
@@ -156,6 +188,7 @@ def set_futures_exchange(exchange) -> None:
 class LoginRequest(BaseModel):
     username: str
     password: str
+    remember_me: bool = False
 
 
 class RefreshRequest(BaseModel):
@@ -259,7 +292,7 @@ async def login(body: LoginRequest):
         )
 
     access_token = create_access_token(_settings, body.username)
-    refresh_token = create_refresh_token(_settings, body.username)
+    refresh_token = create_refresh_token(_settings, body.username, remember_me=body.remember_me)
     logger.info("auth_login_success", username=body.username)
     if _audit_logger:
         asyncio.ensure_future(_audit_logger.log_auth_login(body.username, success=True))
@@ -368,7 +401,7 @@ async def get_trades(
 
 
 def _get_all_positions() -> list[dict]:
-    """Return positions from engine internal state."""
+    """Return positions from engine internal state, fallback to bot state."""
     positions = []
 
     # Add engine-tracked positions
@@ -391,6 +424,10 @@ def _get_all_positions() -> list[dict]:
                 }
                 positions.append(pos_data)
 
+    # Fallback to bot state if no engine positions
+    if not positions:
+        positions = list(_bot_state.get("open_positions", []))
+
     return positions
 
 
@@ -411,10 +448,18 @@ async def get_onchain_signals():
     return {"signals": engine.latest_signals}
 
 
-@api_router.get("/metrics")
-async def get_metrics():
-    """Get performance metrics."""
-    return {"metrics": _bot_state["metrics"]}
+@api_router.get("/signals/history")
+async def get_signal_history(
+    hours: float = Query(24, ge=1, le=48, description="Hours of history"),
+):
+    """Get signal history time-series data."""
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+    cutoff_str = cutoff.isoformat()
+    filtered = [
+        entry for entry in _signal_history
+        if entry["timestamp"] >= cutoff_str
+    ]
+    return {"history": filtered}
 
 
 @api_router.get("/portfolio")
@@ -423,55 +468,10 @@ async def get_portfolio():
     return {"portfolio": _bot_state["portfolio"]}
 
 
-@api_router.get("/strategies")
-async def get_strategies():
-    """Get per-strategy performance stats with active status from registry."""
-    stats = _bot_state["strategy_stats"]
-    # Merge active status from registry if available
-    if _strategy_registry is not None:
-        enriched = {}
-        for name, s in stats.items():
-            entry = dict(s) if isinstance(s, dict) else s
-            entry["active"] = _strategy_registry.is_active(name)
-            enriched[name] = entry
-        return {"strategies": enriched}
-    return {"strategies": stats}
-
-
-@api_router.get("/equity-curve")
-async def get_equity_curve():
-    """Get equity curve time-series data for charting."""
-    return {"equity_curve": _bot_state["equity_curve"]}
-
-
-@api_router.get("/open-positions")
-async def get_open_positions():
-    """Get current open positions with SL/TP info."""
-    return {"positions": _bot_state["open_positions"]}
-
-
-@api_router.get("/regime")
-async def get_regime():
-    """Get current market regime."""
-    return {"regime": _bot_state["regime"]}
-
-
-@api_router.get("/cycle-log")
-async def get_cycle_log():
-    """Get cycle decision log (last 50 cycles)."""
-    return {"cycle_log": _bot_state["cycle_log"]}
-
-
-@api_router.get("/reconciliation")
-async def get_reconciliation():
-    """Get last position reconciliation result and timestamp."""
-    return {"reconciliation": _bot_state.get("reconciliation", {})}
-
-
-@api_router.get("/preflight")
-async def get_preflight():
-    """Get last pre-flight check results."""
-    return {"preflight": _bot_state.get("preflight", {})}
+@api_router.get("/metrics")
+async def get_metrics():
+    """Get performance metrics."""
+    return {"metrics": _bot_state["metrics"]}
 
 
 @api_router.get("/emergency")
@@ -514,132 +514,6 @@ async def emergency_resume():
         )
     result = await _trading_bot.emergency_resume()
     return result
-
-
-@api_router.get("/audit")
-async def get_audit_logs(
-    event_type: str | None = Query(None, description="Filter by event type"),
-    severity: str | None = Query(None, description="Filter by severity"),
-    start_date: str | None = Query(None, description="Start date (ISO format)"),
-    end_date: str | None = Query(None, description="End date (ISO format)"),
-    page: int = Query(1, ge=1, description="Page number"),
-    limit: int = Query(50, ge=1, le=200, description="Items per page"),
-):
-    """Get paginated audit log with optional filters."""
-    if _audit_logger is None or _audit_logger.store is None:
-        return {"logs": [], "total": 0, "page": 1, "limit": limit, "total_pages": 1}
-
-    # Parse date strings to datetime
-    start = None
-    end = None
-    if start_date:
-        try:
-            start = datetime.fromisoformat(start_date.replace("Z", "+00:00"))
-        except ValueError:
-            pass
-    if end_date:
-        try:
-            end = datetime.fromisoformat(end_date.replace("Z", "+00:00"))
-        except ValueError:
-            pass
-
-    result = await _audit_logger.store.get_audit_logs(
-        event_type=event_type,
-        severity=severity,
-        start=start,
-        end=end,
-        page=page,
-        limit=limit,
-    )
-    return result
-
-
-@api_router.get("/analytics")
-async def get_analytics(
-    range: str = Query("all", description="Date range: 7d, 30d, 90d, all"),
-):
-    """Get performance analytics: equity curve, drawdown, monthly returns, stats."""
-    equity_curve = _bot_state.get("equity_curve", [])
-    trades = _bot_state.get("trades", [])
-    metrics = _bot_state.get("metrics", {})
-
-    # Filter by date range
-    filtered_curve = _filter_by_range(equity_curve, range)
-    filtered_trades = _filter_by_range(trades, range)
-
-    # Compute drawdown series from equity curve
-    drawdown_series = _compute_drawdown_series(filtered_curve)
-
-    # Map trade markers to equity curve
-    trade_markers = _compute_trade_markers(filtered_trades, filtered_curve)
-
-    # Compute monthly returns
-    monthly_returns = _compute_monthly_returns(equity_curve)
-
-    # Compute extended stats from trade PnLs
-    trade_pnls = [t.get("pnl", 0) for t in trades if "pnl" in t]
-    stats = _compute_analytics_stats(metrics, trade_pnls)
-
-    return {
-        "equity_curve": filtered_curve,
-        "drawdown": drawdown_series,
-        "trade_markers": trade_markers,
-        "monthly_returns": monthly_returns,
-        "stats": stats,
-        "range": range,
-    }
-
-
-@api_router.post("/strategies/{name}/toggle")
-async def toggle_strategy(
-    name: str,
-    force: bool = Query(False, description="Force disable"),
-):
-    """Toggle a strategy's active state (enable/disable)."""
-    if _strategy_registry is None:
-        return {"error": "Strategy registry not available", "success": False}
-
-    strategy = _strategy_registry.get(name)
-    if strategy is None:
-        return {"error": f"Strategy '{name}' not found", "success": False}
-
-    if _strategy_registry.is_active(name):
-        # Check for open positions when disabling
-        if not force:
-            open_positions = _bot_state.get("open_positions", [])
-            strategy_positions = [
-                p for p in open_positions
-                if p.get("strategy") == name
-            ]
-            if strategy_positions:
-                count = len(strategy_positions)
-                return {
-                    "name": name,
-                    "active": True,
-                    "success": False,
-                    "has_open_positions": True,
-                    "open_position_count": count,
-                    "warning": (
-                        f"Strategy '{name}' has {count} "
-                        f"open position(s). "
-                        f"Use force=true to disable anyway."
-                    ),
-                }
-        _strategy_registry.disable(name)
-        new_state = "disabled"
-    else:
-        _strategy_registry.enable(name)
-        new_state = "enabled"
-
-    logger.info("strategy_toggled", name=name, state=new_state)
-    # Audit log
-    if _audit_logger:
-        asyncio.ensure_future(_audit_logger.log_strategy_toggled(
-            name=name, active=new_state == "enabled",
-        ))
-    # Broadcast strategy toggle via WebSocket
-    asyncio.ensure_future(broadcast_state_update())
-    return {"name": name, "active": new_state == "enabled", "success": True}
 
 
 # ---------------------------------------------------------------------------
@@ -784,21 +658,6 @@ app.include_router(api_router)
 # ---------------------------------------------------------------------------
 # Engine management endpoints (under /api/engines)
 # ---------------------------------------------------------------------------
-
-# Reference to EngineManager — set by main.py via set_engine_manager()
-_engine_manager = None
-
-
-def set_engine_manager(manager) -> None:
-    """Set the EngineManager reference for engine control endpoints."""
-    global _engine_manager
-    _engine_manager = manager
-
-
-def get_engine_manager():
-    """Get the current EngineManager reference."""
-    return _engine_manager
-
 
 engine_router = APIRouter(
     prefix="/api/engines", dependencies=[Depends(require_auth_strict)]
@@ -977,619 +836,6 @@ app.include_router(engine_router)
 
 
 # ---------------------------------------------------------------------------
-# Performance summary endpoint
-# ---------------------------------------------------------------------------
-
-perf_router = APIRouter(
-    prefix="/api/performance", dependencies=[Depends(require_auth_strict)]
-)
-
-
-@perf_router.get("/summary")
-async def performance_summary(
-    hours: float = Query(24, ge=0, description="Time window in hours"),
-):
-    """Get aggregated performance summary across all engines."""
-    if _engine_manager is None:
-        return JSONResponse(
-            status_code=503,
-            content={"detail": "Engine mode not enabled"},
-        )
-    all_metrics = _engine_manager.tracker.get_all_metrics(window_hours=hours)
-    engines_data = {name: m.to_dict() for name, m in all_metrics.items()}
-
-    # Compute totals
-    total_pnl = sum(m.total_pnl for m in all_metrics.values())
-    total_trades = sum(m.total_trades for m in all_metrics.values())
-    total_cost = sum(m.total_cost for m in all_metrics.values())
-    total_wins = sum(m.winning_trades for m in all_metrics.values())
-    overall_win_rate = total_wins / total_trades if total_trades > 0 else 0.0
-
-    # Overall Sharpe (simple average of per-engine Sharpes)
-    sharpes = [m.sharpe_ratio for m in all_metrics.values() if m.total_trades >= 2]
-    overall_sharpe = sum(sharpes) / len(sharpes) if sharpes else 0.0
-
-    return {
-        "engines": engines_data,
-        "totals": {
-            "total_pnl": round(total_pnl, 4),
-            "total_trades": total_trades,
-            "overall_sharpe": round(overall_sharpe, 4),
-            "overall_win_rate": round(overall_win_rate, 4),
-            "total_cost": round(total_cost, 4),
-        },
-        "window_hours": hours,
-    }
-
-
-app.include_router(perf_router)
-
-
-# (Research endpoints removed — no longer applicable)
-
-
-# ---------------------------------------------------------------------------
-# Risk endpoints
-# ---------------------------------------------------------------------------
-
-risk_router = APIRouter(
-    prefix="/api/risk",
-    dependencies=[Depends(require_auth_strict)],
-)
-
-
-@risk_router.get("/portfolio")
-async def get_risk_portfolio():
-    """Get basic risk metrics."""
-    return {"error": "not_available"}
-
-
-@risk_router.get("/drawdown")
-async def get_risk_drawdown():
-    """Get drawdown history time-series from PortfolioManager."""
-    if _engine_manager is None:
-        return {"history": []}
-    pm = getattr(_engine_manager, "_portfolio_manager", None)
-    if pm is None:
-        return {"history": []}
-    return {"history": getattr(pm, "_drawdown_history", [])}
-
-
-app.include_router(risk_router)
-
-
-# ---------------------------------------------------------------------------
-# Market regime endpoints (V6-014)
-# ---------------------------------------------------------------------------
-
-market_router = APIRouter(
-    prefix="/api/market",
-    dependencies=[Depends(require_auth_strict)],
-)
-
-
-@market_router.get("/regime")
-async def get_market_regime():
-    """Return current market regime, duration, and transition history."""
-    if _engine_manager is None:
-        return {
-            "current": "NORMAL",
-            "since": None,
-            "duration_minutes": 0,
-            "history": [],
-        }
-    detector = getattr(_engine_manager, "_regime_detector", None)
-    if detector is None:
-        return {
-            "current": "NORMAL",
-            "since": None,
-            "duration_minutes": 0,
-            "history": [],
-        }
-    return {
-        "current": detector.get_current_regime().value,
-        "since": detector._regime_since.isoformat(),
-        "duration_minutes": round(detector.get_regime_duration(), 1),
-        "history": detector.get_regime_history()[-20:],
-    }
-
-
-app.include_router(market_router)
-
-
-# ---------------------------------------------------------------------------
-# Trade detail / explorer endpoints
-# ---------------------------------------------------------------------------
-
-trades_detail_router = APIRouter(
-    prefix="/api/trades",
-    dependencies=[Depends(require_auth_strict)],
-)
-
-
-@trades_detail_router.get("/detail")
-async def get_trade_detail(
-    engine: str | None = None,
-    symbol: str | None = None,
-    start: str | None = None,
-    end: str | None = None,
-    win_only: bool | None = None,
-    limit: int = 20,
-    offset: int = 0,
-):
-    """Get detailed trade records from EngineTracker with filtering."""
-    if _engine_manager is None:
-        return {"trades": [], "total": 0, "limit": limit, "offset": offset}
-
-    all_trades = _collect_tracker_trades(engine, symbol, start, end, win_only)
-    total = len(all_trades)
-    page_trades = all_trades[offset: offset + limit]
-
-    return {
-        "trades": page_trades,
-        "total": total,
-        "limit": limit,
-        "offset": offset,
-    }
-
-
-@trades_detail_router.get("/export")
-async def export_trades(
-    format: str = "csv",
-    engine: str | None = None,
-    symbol: str | None = None,
-    start: str | None = None,
-    end: str | None = None,
-):
-    """Export trade records as CSV."""
-    from fastapi.responses import Response
-
-    if _engine_manager is None:
-        return Response(content="", media_type="text/csv")
-
-    all_trades = _collect_tracker_trades(engine, symbol, start, end, None)
-
-    header = (
-        "timestamp,engine,symbol,side,entry_price,exit_price,"
-        "quantity,gross_pnl,cost,net_pnl,hold_time"
-    )
-    rows = [header]
-    for t in all_trades:
-        hold_secs = t.get("hold_time_seconds", 0)
-        hold_str = _format_hold_time(hold_secs)
-        rows.append(
-            f"{t.get('exit_time', '')},{t.get('engine_name', '')},"
-            f"{t.get('symbol', '')},{t.get('side', '')},"
-            f"{t.get('entry_price', 0)},{t.get('exit_price', 0)},"
-            f"{t.get('quantity', 0)},{t.get('pnl', 0)},"
-            f"{t.get('cost', 0)},{t.get('net_pnl', 0)},{hold_str}"
-        )
-    csv_content = "\n".join(rows)
-    return Response(
-        content=csv_content,
-        media_type="text/csv",
-        headers={"Content-Disposition": "attachment; filename=trades.csv"},
-    )
-
-
-def _collect_tracker_trades(
-    engine: str | None,
-    symbol: str | None,
-    start: str | None,
-    end: str | None,
-    win_only: bool | None,
-) -> list[dict]:
-    """Gather and filter trade records from EngineTracker."""
-    if _engine_manager is None:
-        return []
-
-    tracker = _engine_manager.tracker
-    result: list[dict] = []
-
-    engines = [engine] if engine else list(tracker._trades.keys())
-
-    for eng_name in engines:
-        trades = tracker._trades.get(eng_name, [])
-        for t in trades:
-            trade_dict = {
-                "engine_name": t.engine_name,
-                "symbol": t.symbol,
-                "side": t.side,
-                "entry_price": t.entry_price,
-                "exit_price": t.exit_price,
-                "quantity": t.quantity,
-                "pnl": round(t.pnl, 4),
-                "cost": round(t.cost, 4),
-                "net_pnl": round(t.net_pnl, 4),
-                "entry_time": t.entry_time,
-                "exit_time": t.exit_time,
-                "hold_time_seconds": t.hold_time_seconds,
-            }
-
-            # Apply filters
-            if symbol and t.symbol != symbol:
-                continue
-            if start and t.exit_time < start:
-                continue
-            if end and t.exit_time > end:
-                continue
-            if win_only is True and t.net_pnl <= 0:
-                continue
-            if win_only is False and t.net_pnl >= 0:
-                continue
-
-            result.append(trade_dict)
-
-    # Sort by exit_time descending (newest first)
-    result.sort(key=lambda x: x.get("exit_time", ""), reverse=True)
-    return result
-
-
-def _format_hold_time(seconds: float) -> str:
-    """Format hold time in seconds to human-readable 'Xh Ym' format."""
-    if seconds <= 0:
-        return "0m"
-    hours = int(seconds // 3600)
-    minutes = int((seconds % 3600) // 60)
-    if hours > 0:
-        return f"{hours}h {minutes}m"
-    return f"{minutes}m"
-
-
-app.include_router(trades_detail_router)
-
-
-# ---------------------------------------------------------------------------
-# Heatmap / analytics endpoints
-# ---------------------------------------------------------------------------
-
-heatmap_router = APIRouter(
-    prefix="/api/analytics",
-    dependencies=[Depends(require_auth_strict)],
-)
-
-
-@heatmap_router.get("/heatmap")
-async def get_heatmap(
-    type: str = "hourly_dow",
-    engine: str | None = None,
-    days: int | None = None,
-):
-    """Get heatmap data for various analytics views.
-
-    type=hourly_dow: PnL by hour (0-23) and day-of-week (0=Mon .. 6=Sun)
-    type=engine_symbol: PnL by engine × symbol
-    type=monthly: PnL by year/month
-    """
-    if _engine_manager is None:
-        return {"data": []}
-
-    trades = _collect_tracker_trades(engine, None, None, None, None)
-
-    # Optional period filter
-    if days is not None:
-        from datetime import datetime, timedelta, timezone
-
-        cutoff = (
-            datetime.now(timezone.utc) - timedelta(days=days)
-        ).isoformat()
-        trades = [t for t in trades if t.get("exit_time", "") >= cutoff]
-
-    if type == "hourly_dow":
-        return {"data": _heatmap_hourly_dow(trades)}
-    elif type == "engine_symbol":
-        return {"data": _heatmap_engine_symbol(trades)}
-    elif type == "monthly":
-        return {"data": _heatmap_monthly(trades)}
-    else:
-        return {"data": [], "error": f"Unknown heatmap type: {type}"}
-
-
-def _heatmap_hourly_dow(trades: list[dict]) -> list[dict]:
-    """Compute PnL by hour × day-of-week grid."""
-    from datetime import datetime
-
-    grid: dict[tuple[int, int], dict] = {}
-    for dow in range(7):
-        for hour in range(24):
-            grid[(dow, hour)] = {"hour": hour, "dow": dow, "pnl": 0.0, "trade_count": 0, "wins": 0}
-
-    for t in trades:
-        exit_time = t.get("exit_time", "")
-        if not exit_time:
-            continue
-        try:
-            dt = datetime.fromisoformat(exit_time.replace("Z", "+00:00"))
-            dow = dt.weekday()  # 0=Mon .. 6=Sun
-            hour = dt.hour
-            cell = grid[(dow, hour)]
-            cell["pnl"] = round(cell["pnl"] + t.get("net_pnl", 0), 4)
-            cell["trade_count"] += 1
-            if t.get("net_pnl", 0) > 0:
-                cell["wins"] += 1
-        except (ValueError, KeyError):
-            continue
-
-    result = []
-    for cell in grid.values():
-        win_rate = (
-            round(cell["wins"] / cell["trade_count"], 4)
-            if cell["trade_count"] > 0
-            else 0.0
-        )
-        result.append({
-            "hour": cell["hour"],
-            "dow": cell["dow"],
-            "pnl": cell["pnl"],
-            "trade_count": cell["trade_count"],
-            "win_rate": win_rate,
-        })
-
-    return result
-
-
-def _heatmap_engine_symbol(trades: list[dict]) -> list[dict]:
-    """Compute PnL by engine × symbol matrix."""
-    grid: dict[tuple[str, str], dict] = {}
-
-    for t in trades:
-        eng = t.get("engine_name", "")
-        sym = t.get("symbol", "")
-        key = (eng, sym)
-        if key not in grid:
-            grid[key] = {"engine": eng, "symbol": sym, "pnl": 0.0, "trade_count": 0, "wins": 0}
-        cell = grid[key]
-        cell["pnl"] = round(cell["pnl"] + t.get("net_pnl", 0), 4)
-        cell["trade_count"] += 1
-        if t.get("net_pnl", 0) > 0:
-            cell["wins"] += 1
-
-    result = []
-    for cell in grid.values():
-        win_rate = (
-            round(cell["wins"] / cell["trade_count"], 4)
-            if cell["trade_count"] > 0
-            else 0.0
-        )
-        result.append({
-            "engine": cell["engine"],
-            "symbol": cell["symbol"],
-            "pnl": cell["pnl"],
-            "trade_count": cell["trade_count"],
-            "win_rate": win_rate,
-        })
-
-    return result
-
-
-def _heatmap_monthly(trades: list[dict]) -> list[dict]:
-    """Compute PnL by year/month."""
-    from datetime import datetime
-
-    grid: dict[tuple[int, int], dict] = {}
-
-    for t in trades:
-        exit_time = t.get("exit_time", "")
-        if not exit_time:
-            continue
-        try:
-            dt = datetime.fromisoformat(exit_time.replace("Z", "+00:00"))
-            key = (dt.year, dt.month)
-            if key not in grid:
-                grid[key] = {
-                    "year": dt.year, "month": dt.month,
-                    "pnl": 0.0, "trade_count": 0, "wins": 0,
-                }
-            cell = grid[key]
-            cell["pnl"] = round(cell["pnl"] + t.get("net_pnl", 0), 4)
-            cell["trade_count"] += 1
-            if t.get("net_pnl", 0) > 0:
-                cell["wins"] += 1
-        except (ValueError, KeyError):
-            continue
-
-    result = []
-    for cell in grid.values():
-        win_rate = (
-            round(cell["wins"] / cell["trade_count"], 4)
-            if cell["trade_count"] > 0
-            else 0.0
-        )
-        result.append({
-            "year": cell["year"],
-            "month": cell["month"],
-            "pnl": cell["pnl"],
-            "trade_count": cell["trade_count"],
-            "win_rate": win_rate,
-        })
-
-    # Sort chronologically
-    result.sort(key=lambda x: (x["year"], x["month"]))
-    return result
-
-
-app.include_router(heatmap_router)
-
-
-# ---------------------------------------------------------------------------
-# Metrics history endpoints (V6-013)
-# ---------------------------------------------------------------------------
-
-metrics_history_router = APIRouter(
-    prefix="/api/metrics",
-    dependencies=[Depends(require_auth_strict)],
-)
-
-
-@metrics_history_router.get("/history")
-async def get_metrics_history(
-    engine: str = Query(..., description="Engine name"),
-    days: int = Query(30, ge=1, le=365, description="Lookback days"),
-):
-    """Return time-series of engine metric snapshots."""
-    if _engine_manager is None:
-        return {"timestamps": [], "sharpe": [], "win_rate": [],
-                "total_pnl": [], "max_drawdown": []}
-
-    persistence = getattr(_engine_manager, "_metrics_persistence", None)
-    if persistence is None:
-        return {"timestamps": [], "sharpe": [], "win_rate": [],
-                "total_pnl": [], "max_drawdown": []}
-
-    store = persistence._data_store
-    start = datetime.now(timezone.utc) - timedelta(days=days)
-    snapshots = await store.get_engine_metric_snapshots(
-        engine_name=engine, start=start, limit=2000,
-    )
-
-    timestamps = []
-    sharpe = []
-    win_rate = []
-    total_pnl = []
-    max_drawdown = []
-    for s in snapshots:
-        timestamps.append(s["timestamp"])
-        sharpe.append(s["sharpe_ratio"])
-        win_rate.append(s["win_rate"])
-        total_pnl.append(s["total_pnl"])
-        max_drawdown.append(s["max_drawdown"])
-
-    return {
-        "timestamps": timestamps,
-        "sharpe": sharpe,
-        "win_rate": win_rate,
-        "total_pnl": total_pnl,
-        "max_drawdown": max_drawdown,
-    }
-
-
-@metrics_history_router.get("/compare")
-async def get_metrics_compare(
-    engines: str = Query(
-        ..., description="Comma-separated engine names"
-    ),
-    metric: str = Query("sharpe", description="Metric to compare"),
-    days: int = Query(30, ge=1, le=365, description="Lookback days"),
-):
-    """Compare a single metric across multiple engines over time."""
-    if _engine_manager is None:
-        return {"engines": {}}
-
-    persistence = getattr(_engine_manager, "_metrics_persistence", None)
-    if persistence is None:
-        return {"engines": {}}
-
-    store = persistence._data_store
-    start = datetime.now(timezone.utc) - timedelta(days=days)
-    engine_list = [e.strip() for e in engines.split(",") if e.strip()]
-
-    valid_metrics = {
-        "sharpe": "sharpe_ratio",
-        "win_rate": "win_rate",
-        "total_pnl": "total_pnl",
-        "max_drawdown": "max_drawdown",
-        "profit_factor": "profit_factor",
-        "cost_ratio": "cost_ratio",
-    }
-    field = valid_metrics.get(metric, "sharpe_ratio")
-
-    result: dict[str, dict] = {}
-    for eng in engine_list:
-        snapshots = await store.get_engine_metric_snapshots(
-            engine_name=eng, start=start, limit=2000,
-        )
-        timestamps = [s["timestamp"] for s in snapshots]
-        values = [s.get(field, 0.0) for s in snapshots]
-        result[eng] = {"timestamps": timestamps, "values": values}
-
-    return {"engines": result}
-
-
-@metrics_history_router.get("/daily-summary")
-async def get_daily_summary(
-    days: int = Query(30, ge=1, le=365, description="Lookback days"),
-):
-    """Return daily aggregated PnL/trades summary from engine trades."""
-    if _engine_manager is None:
-        return {"daily": []}
-
-    persistence = getattr(_engine_manager, "_metrics_persistence", None)
-    if persistence is None:
-        # Fallback: compute from in-memory tracker
-        return _daily_summary_from_tracker(days)
-
-    store = persistence._data_store
-    start = datetime.now(timezone.utc) - timedelta(days=days)
-    trades = await store.get_engine_trades(start=start, limit=10000)
-
-    if not trades:
-        return _daily_summary_from_tracker(days)
-
-    return {"daily": _aggregate_daily(trades)}
-
-
-def _daily_summary_from_tracker(days: int) -> dict:
-    """Build daily summary from in-memory EngineTracker trades."""
-    if _engine_manager is None:
-        return {"daily": []}
-
-    trades = _collect_tracker_trades(None, None, None, None, None)
-
-    if not trades:
-        return {"daily": []}
-
-    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
-    cutoff_str = cutoff.isoformat()
-    filtered = [t for t in trades if t.get("exit_time", "") >= cutoff_str]
-
-    return {"daily": _aggregate_daily(filtered)}
-
-
-def _aggregate_daily(trades: list[dict]) -> list[dict]:
-    """Aggregate a list of trade dicts into daily summaries."""
-    daily: dict[str, dict] = {}
-    for t in trades:
-        exit_time = t.get("exit_time", "")
-        if not exit_time:
-            continue
-        date_str = exit_time[:10]  # YYYY-MM-DD
-        if date_str not in daily:
-            daily[date_str] = {
-                "date": date_str,
-                "total_pnl": 0.0,
-                "total_trades": 0,
-                "winning_trades": 0,
-                "total_cost": 0.0,
-            }
-        entry = daily[date_str]
-        net = t.get("net_pnl", 0.0)
-        entry["total_pnl"] += net
-        entry["total_trades"] += 1
-        if net > 0:
-            entry["winning_trades"] += 1
-        entry["total_cost"] += t.get("cost", 0.0)
-
-    result = []
-    for date_str in sorted(daily.keys()):
-        entry = daily[date_str]
-        total = entry["total_trades"]
-        wins = entry["winning_trades"]
-        entry["total_pnl"] = round(entry["total_pnl"], 2)
-        entry["total_cost"] = round(entry["total_cost"], 2)
-        entry["avg_win_rate"] = (
-            round(wins / total, 4) if total > 0 else 0.0
-        )
-        result.append(entry)
-    return result
-
-
-app.include_router(metrics_history_router)
-
-
-# (Scanner endpoints removed — replaced by onchain signals)
-
-
-# ---------------------------------------------------------------------------
 # WebSocket endpoint (at /api/ws — registered directly on app)
 # ---------------------------------------------------------------------------
 
@@ -1631,36 +877,29 @@ def _build_engine_performance_summary() -> dict:
         return {}
 
 
+def _build_onchain_signals() -> dict:
+    """Get current onchain signals from engine for WebSocket payload."""
+    if _engine_manager is None:
+        return {}
+    engine = _engine_manager.get_engine("onchain_trader")
+    if engine is None or not hasattr(engine, "latest_signals"):
+        return {}
+    return engine.latest_signals
+
+
 def _build_full_state_payload() -> dict:
     """Build a complete state payload for WebSocket broadcast."""
-    cycle_log = _bot_state.get("cycle_log", [])
     return {
         "status": _bot_state["status"],
         "started_at": _bot_state["started_at"],
         "cycle_metrics": _bot_state["cycle_metrics"],
         "portfolio": _bot_state["portfolio"],
         "metrics": _bot_state["metrics"],
-        "regime": _bot_state["regime"],
-        "market_regime": _get_market_regime_info(),
         "trades": _bot_state["trades"][-50:],
-        "strategy_stats": _bot_state["strategy_stats"],
         "open_positions": _get_all_positions(),
-        "cycle_log_latest": cycle_log[-1] if cycle_log else None,
         "emergency": _bot_state.get("emergency", {"active": False}),
         "engine_performance": _build_engine_performance_summary(),
-    }
-
-
-def _get_market_regime_info() -> dict | None:
-    """Build market regime info for WebSocket payload."""
-    if _engine_manager is None:
-        return None
-    detector = getattr(_engine_manager, "_regime_detector", None)
-    if detector is None:
-        return None
-    return {
-        "current": detector.get_current_regime().value,
-        "duration_minutes": round(detector.get_regime_duration(), 1),
+        "onchain_signals": _build_onchain_signals(),
     }
 
 
@@ -1791,263 +1030,6 @@ async def health_check(
     return result
 
 
-@app.get("/legacy", response_class=HTMLResponse)
-async def legacy_dashboard():
-    """Render legacy HTML dashboard page (backward compatibility)."""
-    status = html.escape(str(_bot_state["status"]))
-    metrics = _bot_state["metrics"]
-    trades = _bot_state["trades"][-10:]
-    portfolio = _bot_state["portfolio"]
-    regime = _bot_state.get("regime")
-    open_positions = _bot_state.get("open_positions", [])
-    strategy_stats = _bot_state.get("strategy_stats", {})
-    equity_curve = _bot_state.get("equity_curve", [])
-
-    # Trades table
-    no_trades = '<tr><td colspan="5">No trades yet</td></tr>'
-    trades_html = ""
-    for trade in reversed(trades):
-        side_val = html.escape(str(trade.get('side', '')))
-        side_class = "buy" if side_val == "BUY" else "sell"
-        trades_html += (
-            f"<tr><td>{html.escape(str(trade.get('timestamp', '')))}</td>"
-            f"<td>{html.escape(str(trade.get('symbol', '')))}</td>"
-            f'<td class="{side_class}">{side_val}</td>'
-            f"<td>{html.escape(str(trade.get('quantity', '')))}</td>"
-            f"<td>{html.escape(str(trade.get('price', '')))}</td></tr>"
-        )
-    tbody_content = trades_html if trades_html else no_trades
-
-    # Open positions table
-    no_positions = '<tr><td colspan="7">No open positions</td></tr>'
-    positions_html = ""
-    for pos in open_positions:
-        entry_p = pos.get('entry_price', 0)
-        current_p = pos.get('current_price', 0)
-        upnl = pos.get('unrealized_pnl', 0)
-        sl_price = pos.get('stop_loss', 0)
-        tp_price = pos.get('take_profit', 0)
-        pnl_class = "positive" if upnl >= 0 else "negative"
-        positions_html += (
-            f"<tr><td>{html.escape(str(pos.get('symbol', '')))}</td>"
-            f"<td>{html.escape(str(pos.get('quantity', '')))}</td>"
-            f"<td>{html.escape(f'{entry_p:,.2f}')}</td>"
-            f"<td>{html.escape(f'{current_p:,.2f}')}</td>"
-            f'<td class="{pnl_class}">{html.escape(f"{upnl:+,.2f}")}</td>'
-            f"<td>{html.escape(f'{sl_price:,.2f}')}</td>"
-            f"<td>{html.escape(f'{tp_price:,.2f}')}</td></tr>"
-        )
-    positions_tbody = positions_html if positions_html else no_positions
-
-    # Market regime
-    regime_display = html.escape(str(regime)) if regime else "UNKNOWN"
-    regime_color = _regime_color(regime)
-
-    # Metrics
-    total_return = html.escape(str(metrics.get('total_return_pct', 0)))
-    win_rate = html.escape(str(metrics.get('win_rate', 0)))
-    total_trades = html.escape(str(metrics.get('total_trades', 0)))
-    max_drawdown = html.escape(str(metrics.get('max_drawdown_pct', 0)))
-    total_value = html.escape(f"{portfolio.get('total_value', 0):,.2f}")
-
-    # Strategy stats for bar chart
-    strat_names_js = _build_strategy_names_js(strategy_stats)
-    strat_pnl_js = _build_strategy_pnl_js(strategy_stats)
-    strat_colors_js = _build_strategy_colors_js(strategy_stats)
-
-    # Equity curve data for chart
-    eq_labels_js = _build_equity_labels_js(equity_curve)
-    eq_values_js = _build_equity_values_js(equity_curve)
-
-    # Trade markers for equity curve chart
-    trade_markers_js = _build_trade_markers_js(trades, equity_curve)
-
-    # Strategy list with toggle buttons
-    strategies_list_html = _build_strategies_list_html(strategy_stats)
-
-    return f"""<!DOCTYPE html>
-<html>
-<head>
-    <title>Trading Bot Dashboard</title>
-    <meta http-equiv="refresh" content="30">
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-    <style>
-        body {{ font-family: sans-serif; margin: 2em; background: #f5f5f5; }}
-        .card {{ background: white; padding: 1.5em; margin: 1em 0; border-radius: 8px;
-                 box-shadow: 0 1px 3px rgba(0,0,0,0.1); }}
-        .status {{ font-size: 1.2em; font-weight: bold;
-                   color: {'green' if status == 'running' else 'red'}; }}
-        table {{ width: 100%; border-collapse: collapse; }}
-        th, td {{ padding: 8px 12px; text-align: left; border-bottom: 1px solid #eee; }}
-        th {{ background: #f8f9fa; }}
-        .metric {{ display: inline-block; margin: 0 2em 1em 0; }}
-        .metric-value {{ font-size: 1.5em; font-weight: bold; }}
-        .metric-label {{ color: #666; font-size: 0.9em; }}
-        .buy {{ color: #22c55e; font-weight: bold; }}
-        .sell {{ color: #ef4444; font-weight: bold; }}
-        .positive {{ color: #22c55e; }}
-        .negative {{ color: #ef4444; }}
-        .regime-badge {{ display: inline-block; padding: 4px 12px; border-radius: 12px;
-                         color: white; font-weight: bold; font-size: 0.9em; }}
-        .chart-container {{ position: relative; height: 300px; }}
-        .grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 1em; }}
-        .strategy-item {{ display: flex; justify-content: space-between; align-items: center;
-                          padding: 8px 0; border-bottom: 1px solid #eee; }}
-        .toggle-btn {{ padding: 4px 12px; border: none; border-radius: 4px; cursor: pointer;
-                       font-size: 0.85em; }}
-        .toggle-btn.active {{ background: #22c55e; color: white; }}
-        .toggle-btn.inactive {{ background: #ef4444; color: white; }}
-    </style>
-</head>
-<body>
-    <h1>Trading Bot Dashboard (Legacy)</h1>
-
-    <div class="card">
-        <h2>Status</h2>
-        <p class="status">{status.upper()}</p>
-        <span class="regime-badge" style="background:{regime_color}">
-            Regime: {regime_display}
-        </span>
-    </div>
-
-    <div class="card">
-        <h2>Key Metrics</h2>
-        <div class="metric">
-            <div class="metric-value">{total_return}%</div>
-            <div class="metric-label">Total Return</div>
-        </div>
-        <div class="metric">
-            <div class="metric-value">{win_rate}%</div>
-            <div class="metric-label">Win Rate</div>
-        </div>
-        <div class="metric">
-            <div class="metric-value">{total_trades}</div>
-            <div class="metric-label">Total Trades</div>
-        </div>
-        <div class="metric">
-            <div class="metric-value">{max_drawdown}%</div>
-            <div class="metric-label">Max Drawdown</div>
-        </div>
-    </div>
-
-    <div class="card">
-        <h2>Portfolio</h2>
-        <p>Total Value: <strong>${total_value}</strong></p>
-    </div>
-
-    <div class="card">
-        <h2>Equity Curve</h2>
-        <div class="chart-container">
-            <canvas id="equityChart"></canvas>
-        </div>
-    </div>
-
-    <div class="grid">
-        <div class="card">
-            <h2>Strategy Performance</h2>
-            <div class="chart-container">
-                <canvas id="strategyChart"></canvas>
-            </div>
-        </div>
-        <div class="card">
-            <h2>Active Strategies</h2>
-            {strategies_list_html}
-        </div>
-    </div>
-
-    <div class="card">
-        <h2>Open Positions</h2>
-        <table>
-            <thead><tr>
-                <th>Symbol</th><th>Qty</th><th>Entry</th><th>Current</th>
-                <th>Unrealized PnL</th><th>Stop Loss</th><th>Take Profit</th>
-            </tr></thead>
-            <tbody>{positions_tbody}</tbody>
-        </table>
-    </div>
-
-    <div class="card">
-        <h2>Recent Trades</h2>
-        <table>
-            <thead><tr><th>Time</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Price</th></tr></thead>
-            <tbody>{tbody_content}</tbody>
-        </table>
-    </div>
-
-    <script>
-    // Equity Curve Chart
-    const eqCtx = document.getElementById('equityChart');
-    if (eqCtx) {{
-        new Chart(eqCtx, {{
-            type: 'line',
-            data: {{
-                labels: {eq_labels_js},
-                datasets: [
-                    {{
-                        label: 'Portfolio Value',
-                        data: {eq_values_js},
-                        borderColor: '#3b82f6',
-                        backgroundColor: 'rgba(59,130,246,0.1)',
-                        fill: true,
-                        tension: 0.3,
-                        pointRadius: 0,
-                    }},
-                    {trade_markers_js}
-                ]
-            }},
-            options: {{
-                responsive: true,
-                maintainAspectRatio: false,
-                scales: {{
-                    x: {{ display: true, title: {{ display: false }} }},
-                    y: {{ display: true, title: {{ display: true, text: 'Value ($)' }} }}
-                }},
-                plugins: {{ legend: {{ display: true }} }}
-            }}
-        }});
-    }}
-
-    // Strategy Performance Bar Chart
-    const stratCtx = document.getElementById('strategyChart');
-    if (stratCtx) {{
-        new Chart(stratCtx, {{
-            type: 'bar',
-            data: {{
-                labels: {strat_names_js},
-                datasets: [{{
-                    label: 'Total PnL',
-                    data: {strat_pnl_js},
-                    backgroundColor: {strat_colors_js},
-                }}]
-            }},
-            options: {{
-                responsive: true,
-                maintainAspectRatio: false,
-                scales: {{
-                    y: {{ title: {{ display: true, text: 'PnL ($)' }} }}
-                }},
-                plugins: {{ legend: {{ display: false }} }}
-            }}
-        }});
-    }}
-
-    // Strategy toggle
-    async function toggleStrategy(name) {{
-        try {{
-            const resp = await fetch('/api/strategies/' + name + '/toggle', {{ method: 'POST' }});
-            const data = await resp.json();
-            if (data.success) {{
-                location.reload();
-            }}
-        }} catch(e) {{
-            console.error('Toggle failed', e);
-        }}
-    }}
-    </script>
-</body>
-</html>"""
-
-
 # ---------------------------------------------------------------------------
 # SPA fallback — serve React frontend for non-API routes
 # ---------------------------------------------------------------------------
@@ -2059,17 +1041,24 @@ if _static_dir.exists() and (_static_dir / "assets").exists():
     app.mount("/assets", StaticFiles(directory=str(_static_dir / "assets")), name="static-assets")
 
 
+def _serve_index() -> FileResponse | HTMLResponse:
+    """Serve index.html with no-cache headers to prevent stale dashboard."""
+    index_file = _static_dir / "index.html"
+    if index_file.exists():
+        return FileResponse(
+            str(index_file),
+            headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+        )
+    return HTMLResponse(
+        "<h1>Frontend not built</h1>"
+        "<p>Run <code>cd frontend && npm run build</code> to build the React dashboard.</p>"
+    )
+
+
 @app.get("/", response_class=HTMLResponse)
 async def serve_root():
     """Serve React SPA index.html or fallback message."""
-    index_file = _static_dir / "index.html"
-    if index_file.exists():
-        return FileResponse(str(index_file))
-    return HTMLResponse(
-        "<h1>Frontend not built</h1>"
-        "<p>Run <code>make frontend-build</code> to build the React dashboard.</p>"
-        '<p>Or visit <a href="/legacy">/legacy</a> for the legacy HTML dashboard.</p>'
-    )
+    return _serve_index()
 
 
 @app.get("/{full_path:path}")
@@ -2080,355 +1069,4 @@ async def serve_spa(full_path: str):
     if static_file.exists() and static_file.is_file():
         return FileResponse(str(static_file))
     # Fall back to index.html for client-side routing
-    index_file = _static_dir / "index.html"
-    if index_file.exists():
-        return FileResponse(str(index_file))
-    return HTMLResponse(
-        "<h1>Frontend not built</h1>"
-        "<p>Run <code>make frontend-build</code> to build the React dashboard.</p>"
-        '<p>Or visit <a href="/legacy">/legacy</a> for the legacy HTML dashboard.</p>'
-    )
-
-
-# ---------------------------------------------------------------------------
-# Helper functions (private)
-# ---------------------------------------------------------------------------
-
-
-def _regime_color(regime) -> str:
-    """Return CSS color for market regime."""
-    if regime is None:
-        return "#6b7280"
-    regime_str = str(regime).upper()
-    if "TRENDING_UP" in regime_str:
-        return "#22c55e"
-    if "TRENDING_DOWN" in regime_str:
-        return "#ef4444"
-    if "RANGING" in regime_str:
-        return "#f59e0b"
-    if "HIGH_VOLATILITY" in regime_str or "VOLATILE" in regime_str:
-        return "#8b5cf6"
-    return "#6b7280"
-
-
-def _build_strategy_names_js(strategy_stats: dict) -> str:
-    """Build JS array of strategy names."""
-    if not strategy_stats:
-        return "[]"
-    names = [html.escape(str(k)) for k in strategy_stats.keys()]
-    return "[" + ",".join(f'"{n}"' for n in names) + "]"
-
-
-def _build_strategy_pnl_js(strategy_stats: dict) -> str:
-    """Build JS array of strategy PnL values."""
-    if not strategy_stats:
-        return "[]"
-    values = []
-    for stats in strategy_stats.values():
-        if isinstance(stats, dict):
-            values.append(str(stats.get("total_pnl", 0)))
-        else:
-            values.append("0")
-    return "[" + ",".join(values) + "]"
-
-
-def _build_strategy_colors_js(strategy_stats: dict) -> str:
-    """Build JS array of bar colors (green for positive, red for negative)."""
-    if not strategy_stats:
-        return "[]"
-    colors = []
-    for stats in strategy_stats.values():
-        pnl = 0
-        if isinstance(stats, dict):
-            pnl = stats.get("total_pnl", 0)
-        colors.append('"#22c55e"' if pnl >= 0 else '"#ef4444"')
-    return "[" + ",".join(colors) + "]"
-
-
-def _build_equity_labels_js(equity_curve: list) -> str:
-    """Build JS array of equity curve timestamps."""
-    if not equity_curve:
-        return "[]"
-    labels = []
-    for point in equity_curve:
-        ts = point.get("timestamp", "")
-        labels.append(f'"{html.escape(str(ts))}"')
-    return "[" + ",".join(labels) + "]"
-
-
-def _build_equity_values_js(equity_curve: list) -> str:
-    """Build JS array of equity curve values."""
-    if not equity_curve:
-        return "[]"
-    values = [str(point.get("total_value", 0)) for point in equity_curve]
-    return "[" + ",".join(values) + "]"
-
-
-def _build_trade_markers_js(trades: list, equity_curve: list) -> str:
-    """Build Chart.js dataset for trade markers on equity curve.
-
-    Creates scatter-style points: green triangles for BUY, red for SELL.
-    Maps trades to equity curve indices by timestamp proximity.
-    """
-    if not trades or not equity_curve:
-        return ""
-
-    buy_points = []
-    sell_points = []
-
-    eq_timestamps = [p.get("timestamp", "") for p in equity_curve]
-
-    for trade in trades:
-        trade_ts = str(trade.get("timestamp", ""))
-        side = str(trade.get("side", "")).upper()
-
-        # Find closest equity curve index
-        best_idx = _find_closest_index(trade_ts, eq_timestamps)
-        if best_idx is not None and best_idx < len(equity_curve):
-            val = equity_curve[best_idx].get("total_value", 0)
-            point = f'{{x:"{html.escape(eq_timestamps[best_idx])}",y:{val}}}'
-            if side == "BUY":
-                buy_points.append(point)
-            elif side == "SELL":
-                sell_points.append(point)
-
-    datasets = []
-    if buy_points:
-        datasets.append(
-            "{"
-            'label:"BUY",'
-            "data:[" + ",".join(buy_points) + "],"
-            'borderColor:"#22c55e",'
-            'backgroundColor:"#22c55e",'
-            'pointStyle:"triangle",'
-            "pointRadius:8,"
-            "showLine:false"
-            "}"
-        )
-    if sell_points:
-        datasets.append(
-            "{"
-            'label:"SELL",'
-            "data:[" + ",".join(sell_points) + "],"
-            'borderColor:"#ef4444",'
-            'backgroundColor:"#ef4444",'
-            'pointStyle:"triangle",'
-            "pointRadius:8,"
-            "pointRotation:180,"
-            "showLine:false"
-            "}"
-        )
-
-    return ",".join(datasets)
-
-
-def _find_closest_index(target_ts: str, timestamps: list[str]) -> int | None:
-    """Find the index of the closest timestamp in the list."""
-    if not timestamps or not target_ts:
-        return None
-    # Exact match first
-    if target_ts in timestamps:
-        return timestamps.index(target_ts)
-    # Simple linear scan — last index before or equal
-    for i in range(len(timestamps) - 1, -1, -1):
-        if timestamps[i] <= target_ts:
-            return i
-    return 0 if timestamps else None
-
-
-def _build_strategies_list_html(strategy_stats: dict) -> str:
-    """Build HTML list of strategies with toggle buttons."""
-    if not strategy_stats:
-        return '<p style="color:#666">No strategy data available</p>'
-
-    items = []
-    for name, stats in strategy_stats.items():
-        escaped_name = html.escape(str(name))
-        active = True
-        win_rate = 0
-        total_pnl = 0
-        if isinstance(stats, dict):
-            active = stats.get("active", True)
-            win_rate = stats.get("win_rate", 0)
-            total_pnl = stats.get("total_pnl", 0)
-
-        btn_class = "active" if active else "inactive"
-        btn_text = "Enabled" if active else "Disabled"
-        pnl_class = "positive" if total_pnl >= 0 else "negative"
-
-        items.append(
-            f'<div class="strategy-item">'
-            f"<div>"
-            f"<strong>{escaped_name}</strong><br>"
-            f'<small>Win: {html.escape(str(win_rate))}% | '
-            f'PnL: <span class="{pnl_class}">{html.escape(f"{total_pnl:+.2f}")}</span></small>'
-            f"</div>"
-            f'<button class="toggle-btn {btn_class}" '
-            f"onclick=\"toggleStrategy('{escaped_name}')\">{btn_text}</button>"
-            f"</div>"
-        )
-
-    return "\n".join(items)
-
-
-# ---------------------------------------------------------------------------
-# Analytics helper functions
-# ---------------------------------------------------------------------------
-
-
-def _filter_by_range(data: list[dict], range_str: str) -> list[dict]:
-    """Filter a list of dicts with 'timestamp' by date range."""
-    if range_str == "all" or not data:
-        return data
-
-    days_map = {"7d": 7, "30d": 30, "90d": 90}
-    days = days_map.get(range_str)
-    if days is None:
-        return data
-
-    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
-    cutoff_str = cutoff.isoformat()
-
-    filtered = []
-    for item in data:
-        ts = item.get("timestamp", "")
-        if ts >= cutoff_str:
-            filtered.append(item)
-    return filtered
-
-
-def _compute_drawdown_series(equity_curve: list[dict]) -> list[dict]:
-    """Compute drawdown percentage series from equity curve."""
-    if not equity_curve:
-        return []
-
-    series = []
-    peak = 0.0
-    for point in equity_curve:
-        value = point.get("total_value", 0)
-        if value > peak:
-            peak = value
-        dd_pct = ((peak - value) / peak * 100) if peak > 0 else 0.0
-        series.append({
-            "timestamp": point.get("timestamp", ""),
-            "drawdown_pct": round(dd_pct, 2),
-        })
-    return series
-
-
-def _compute_trade_markers(
-    trades: list[dict], equity_curve: list[dict]
-) -> list[dict]:
-    """Map trades to equity curve positions for chart overlay."""
-    if not trades or not equity_curve:
-        return []
-
-    eq_timestamps = [p.get("timestamp", "") for p in equity_curve]
-    markers = []
-
-    for trade in trades:
-        trade_ts = str(trade.get("timestamp", ""))
-        side = str(trade.get("side", "")).upper()
-        if side not in ("BUY", "SELL"):
-            continue
-
-        best_idx = _find_closest_index(trade_ts, eq_timestamps)
-        if best_idx is not None and best_idx < len(equity_curve):
-            markers.append({
-                "timestamp": equity_curve[best_idx].get("timestamp", ""),
-                "value": equity_curve[best_idx].get("total_value", 0),
-                "side": side,
-                "symbol": trade.get("symbol", ""),
-                "price": trade.get("price", 0),
-            })
-
-    return markers
-
-
-def _compute_monthly_returns(equity_curve: list[dict]) -> list[dict]:
-    """Compute monthly return percentages from equity curve."""
-    if len(equity_curve) < 2:
-        return []
-
-    # Group equity curve by year-month, take first and last value per month
-    monthly: dict[str, dict] = {}
-    for point in equity_curve:
-        ts = point.get("timestamp", "")
-        value = point.get("total_value", 0)
-        # Extract YYYY-MM from ISO timestamp
-        month_key = ts[:7] if len(ts) >= 7 else ""
-        if not month_key:
-            continue
-        if month_key not in monthly:
-            monthly[month_key] = {"first": value, "last": value}
-        else:
-            monthly[month_key]["last"] = value
-
-    results = []
-    for month_key in sorted(monthly.keys()):
-        data = monthly[month_key]
-        first_val = data["first"]
-        last_val = data["last"]
-        ret_pct = (
-            ((last_val - first_val) / first_val * 100) if first_val > 0 else 0.0
-        )
-        results.append({
-            "month": month_key,
-            "return_pct": round(ret_pct, 2),
-        })
-
-    return results
-
-
-def _compute_analytics_stats(
-    metrics: dict, trade_pnls: list[float]
-) -> dict:
-    """Compute extended analytics stats including Sortino ratio."""
-    sharpe = metrics.get("sharpe_ratio", 0.0)
-    max_dd = metrics.get("max_drawdown_pct", 0.0)
-    win_rate = metrics.get("win_rate", 0.0)
-    total_return = metrics.get("total_return_pct", 0.0)
-    total_trades = metrics.get("total_trades", 0)
-    winning_trades = metrics.get("winning_trades", 0)
-    losing_trades = metrics.get("losing_trades", 0)
-
-    # Profit factor
-    gross_profit = sum(p for p in trade_pnls if p > 0)
-    gross_loss = abs(sum(p for p in trade_pnls if p < 0))
-    profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else 0.0
-
-    # Average trade PnL
-    avg_trade_pnl = (
-        sum(trade_pnls) / len(trade_pnls) if trade_pnls else 0.0
-    )
-
-    # Best and worst trade
-    best_trade = max(trade_pnls) if trade_pnls else 0.0
-    worst_trade = min(trade_pnls) if trade_pnls else 0.0
-
-    # Sortino ratio (uses only downside deviation)
-    sortino = 0.0
-    if len(trade_pnls) > 1:
-        mean_return = sum(trade_pnls) / len(trade_pnls)
-        downside_returns = [r for r in trade_pnls if r < 0]
-        if downside_returns:
-            downside_sq = sum(r ** 2 for r in downside_returns) / len(trade_pnls)
-            downside_dev = math.sqrt(downside_sq)
-            sortino = (
-                mean_return / downside_dev if downside_dev > 0 else 0.0
-            )
-
-    return {
-        "sharpe_ratio": round(sharpe, 4),
-        "sortino_ratio": round(sortino, 4),
-        "max_drawdown_pct": round(max_dd, 2),
-        "profit_factor": round(profit_factor, 2),
-        "avg_trade_pnl": round(avg_trade_pnl, 2),
-        "best_trade": round(best_trade, 2),
-        "worst_trade": round(worst_trade, 2),
-        "total_return_pct": round(total_return, 2),
-        "total_trades": total_trades,
-        "winning_trades": winning_trades,
-        "losing_trades": losing_trades,
-        "win_rate": round(win_rate, 2),
-    }
+    return _serve_index()

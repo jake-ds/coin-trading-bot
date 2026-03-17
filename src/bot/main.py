@@ -303,6 +303,113 @@ class TradingBot:
             total_capital=capital,
         )
 
+    @staticmethod
+    def _get_ccxt(ex):
+        """Unwrap exchange adapters to get the underlying ccxt instance."""
+        obj = ex
+        for _ in range(5):
+            inner = getattr(obj, '_exchange', None)
+            if inner is None:
+                return None
+            if hasattr(inner, 'fetch_balance'):
+                return inner
+            obj = inner
+        return None
+
+    async def _calculate_portfolio(self) -> dict:
+        """Calculate portfolio value from exchange balances + ticker prices.
+
+        For live trading, values non-stablecoin assets using exchange
+        ticker prices. Falls back to engine positions for paper mode.
+        """
+        balances: dict[str, float] = {}
+        ccxt_for_ticker = None
+
+        seen_ccxt: set[int] = set()
+        all_exchanges = list(self._exchanges)
+        if self._engine_manager:
+            for engine in self._engine_manager.engines.values():
+                for ex in getattr(engine, '_exchanges', []):
+                    all_exchanges.append(ex)
+
+        for ex in all_exchanges:
+            ccxt_ex = self._get_ccxt(ex)
+            if ccxt_ex is None:
+                continue
+            if id(ccxt_ex) in seen_ccxt:
+                continue
+            seen_ccxt.add(id(ccxt_ex))
+            if ccxt_for_ticker is None:
+                ccxt_for_ticker = ccxt_ex
+            try:
+                raw = await ccxt_ex.fetch_balance()
+                for k, v in raw.get("total", {}).items():
+                    fv = float(v)
+                    if fv > 0:
+                        balances[k] = balances.get(k, 0) + fv
+            except Exception:
+                pass
+
+        _stables = {"USDT", "USD", "BUSD", "USDC"}
+        cash_value = sum(
+            v for k, v in balances.items() if k in _stables
+        )
+
+        # Value non-stablecoin assets using live ticker prices
+        position_value = 0.0
+        non_stable = {
+            k: v for k, v in balances.items()
+            if k not in _stables and v > 0
+        }
+        if non_stable and ccxt_for_ticker:
+            try:
+                pairs = [f"{a}/USDT" for a in non_stable]
+                tickers = await ccxt_for_ticker.fetch_tickers(pairs)
+                for asset, qty in non_stable.items():
+                    pair = f"{asset}/USDT"
+                    t = tickers.get(pair)
+                    if t:
+                        price = float(t.get("last", 0) or 0)
+                        position_value += qty * price
+            except Exception:
+                # Fallback: fetch tickers individually
+                for asset, qty in non_stable.items():
+                    try:
+                        pair = f"{asset}/USDT"
+                        t = await ccxt_for_ticker.fetch_ticker(pair)
+                        price = float(t.get("last", 0) or 0)
+                        position_value += qty * price
+                    except Exception:
+                        pass
+
+        # Fallback: if no exchange-based valuation (paper mode),
+        # use engine positions
+        if position_value == 0 and self._engine_manager:
+            for engine in self._engine_manager.engines.values():
+                for pos in engine.positions.values():
+                    qty = pos.get("quantity", 0)
+                    cur_price = pos.get(
+                        "current_price",
+                        pos.get("entry_price", 0),
+                    )
+                    position_value += qty * cur_price
+
+        total_upnl = 0.0
+        if self._engine_manager:
+            for engine in self._engine_manager.engines.values():
+                for pos in engine.positions.values():
+                    total_upnl += pos.get("unrealized_pnl", 0.0)
+
+        total_value = cash_value + position_value
+        return {
+            "balances": balances,
+            "total_value": round(total_value, 2),
+            "cash_value": round(cash_value, 2),
+            "position_value": round(position_value, 2),
+            "unrealized_pnl": round(total_upnl, 4),
+            "positions": [],
+        }
+
     async def _run_engine_mode(self) -> None:
         """Run the engine system — each engine runs its own async loop."""
         if not self._engine_manager:
@@ -338,55 +445,7 @@ class TradingBot:
                     # Build portfolio from exchange balances + engine positions
                     portfolio_data = dashboard_module.get_state()["portfolio"]
                     try:
-                        balances = {}
-
-                        def _get_ccxt(ex):
-                            obj = ex
-                            for _ in range(5):
-                                inner = getattr(obj, '_exchange', None)
-                                if inner is None:
-                                    return None
-                                if hasattr(inner, 'fetch_balance'):
-                                    return inner
-                                obj = inner
-                            return None
-
-                        seen_ccxt: set[int] = set()
-                        all_exchanges = list(self._exchanges)
-                        for engine in self._engine_manager.engines.values():
-                            for ex in getattr(engine, '_exchanges', []):
-                                all_exchanges.append(ex)
-                        for ex in all_exchanges:
-                            ccxt_ex = _get_ccxt(ex)
-                            if ccxt_ex is None:
-                                continue
-                            if id(ccxt_ex) in seen_ccxt:
-                                continue
-                            seen_ccxt.add(id(ccxt_ex))
-                            try:
-                                raw = await ccxt_ex.fetch_balance()
-                                for k, v in raw.get("total", {}).items():
-                                    fv = float(v)
-                                    if fv > 0:
-                                        balances[k] = balances.get(k, 0) + fv
-                            except Exception:
-                                pass
-                        cash_value = sum(
-                            v for k, v in balances.items()
-                            if k in ("USDT", "USD", "BUSD", "USDC")
-                        )
-                        total_upnl = 0.0
-                        for engine in self._engine_manager.engines.values():
-                            for pos in engine.positions.values():
-                                total_upnl += pos.get("unrealized_pnl", 0.0)
-                        total_value = cash_value + total_upnl
-                        portfolio_data = {
-                            "balances": balances,
-                            "total_value": round(total_value, 2),
-                            "cash_value": round(cash_value, 2),
-                            "unrealized_pnl": round(total_upnl, 4),
-                            "positions": [],
-                        }
+                        portfolio_data = await self._calculate_portfolio()
                     except Exception:
                         logger.debug("portfolio_update_error", exc_info=True)
 

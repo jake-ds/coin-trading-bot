@@ -5,6 +5,7 @@ import { useAuth } from '../hooks/useAuth'
 function Login() {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
+  const [rememberMe, setRememberMe] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const { login, authEnabled } = useAuth()
@@ -21,7 +22,7 @@ function Login() {
     setError(null)
     setLoading(true)
 
-    const result = await login(username, password)
+    const result = await login(username, password, rememberMe)
     setLoading(false)
 
     if (result.success) {
@@ -71,6 +72,19 @@ function Login() {
               className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white placeholder-gray-400 focus:outline-none focus:border-blue-500"
               required
             />
+          </div>
+
+          <div className="flex items-center">
+            <input
+              type="checkbox"
+              id="remember-me"
+              checked={rememberMe}
+              onChange={(e) => setRememberMe(e.target.checked)}
+              className="h-4 w-4 rounded border-gray-600 bg-gray-700 text-blue-600 focus:ring-blue-500 focus:ring-offset-gray-800"
+            />
+            <label htmlFor="remember-me" className="ml-2 text-sm text-gray-300">
+              Remember me
+            </label>
           </div>
 
           <button

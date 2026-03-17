@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 import structlog
 
 from bot.engines.base import BaseEngine, DecisionStep, EngineCycleResult
+from bot.models.base import OrderSide, OrderType
 from bot.onchain.alternative import FearGreedFetcher
 from bot.onchain.coingecko import CoinGeckoFetcher
 from bot.onchain.coinglass import CoinGlassFetcher
@@ -61,9 +62,16 @@ class OnChainTraderEngine(BaseEngine):
         )
 
         self._settings = settings
+        _default_symbols = [
+            "BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT",
+            "DOGE/USDT", "ADA/USDT", "AVAX/USDT", "LINK/USDT", "DOT/USDT",
+            "SUI/USDT", "NEAR/USDT", "ARB/USDT", "OP/USDT", "APT/USDT",
+            "PEPE/USDT", "UNI/USDT", "ATOM/USDT", "FIL/USDT", "LTC/USDT",
+            "TRX/USDT", "WIF/USDT", "AAVE/USDT", "RENDER/USDT", "MATIC/USDT",
+        ]
         self._symbols: list[str] = (
-            getattr(s, "onchain_symbols", ["BTC/USDT", "ETH/USDT", "SOL/USDT"])
-            if s else ["BTC/USDT", "ETH/USDT", "SOL/USDT"]
+            getattr(s, "onchain_symbols", _default_symbols)
+            if s else _default_symbols
         )
 
         # Signal thresholds
@@ -189,7 +197,14 @@ class OnChainTraderEngine(BaseEngine):
                 continue
 
             entry_price = pos["entry_price"]
+            quantity = pos.get("quantity", 0)
             pnl_pct = ((current_price - entry_price) / entry_price) * 100.0
+
+            # Update position with live data for dashboard display
+            pos["current_price"] = current_price
+            pos["unrealized_pnl"] = round((current_price - entry_price) * quantity, 4)
+            pos["pnl_pct"] = round(pnl_pct, 2)
+
             exit_reason = self._check_exit(symbol, pos, current_price, pnl_pct)
 
             if exit_reason:
@@ -411,6 +426,8 @@ class OnChainTraderEngine(BaseEngine):
                 side="buy",
                 quantity=quantity,
                 entry_price=price,
+                current_price=price,
+                unrealized_pnl=0.0,
                 high_price=price,
                 cost_usd=size_usd,
                 signal_score=signal.score,
@@ -429,8 +446,8 @@ class OnChainTraderEngine(BaseEngine):
             try:
                 order = await exchange.create_order(
                     symbol=symbol,
-                    side="buy",
-                    order_type="market",
+                    side=OrderSide.BUY,
+                    order_type=OrderType.MARKET,
                     quantity=quantity,
                 )
                 filled_price = order.filled_price if hasattr(order, "filled_price") else price
@@ -440,6 +457,8 @@ class OnChainTraderEngine(BaseEngine):
                     side="buy",
                     quantity=filled_qty,
                     entry_price=filled_price,
+                    current_price=filled_price,
+                    unrealized_pnl=0.0,
                     high_price=filled_price,
                     cost_usd=filled_qty * filled_price,
                     signal_score=signal.score,
@@ -499,8 +518,8 @@ class OnChainTraderEngine(BaseEngine):
                 exchange = self._exchanges[0]
                 await exchange.create_order(
                     symbol=symbol,
-                    side="sell",
-                    order_type="market",
+                    side=OrderSide.SELL,
+                    order_type=OrderType.MARKET,
                     quantity=quantity,
                 )
                 self._remove_position(symbol)

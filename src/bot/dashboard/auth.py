@@ -15,6 +15,7 @@ logger = structlog.get_logger()
 # Token expiry (seconds)
 ACCESS_TOKEN_EXPIRE = 3600  # 1 hour
 REFRESH_TOKEN_EXPIRE = 7 * 24 * 3600  # 7 days
+REFRESH_TOKEN_EXPIRE_REMEMBER = 30 * 24 * 3600  # 30 days
 
 ALGORITHM = "HS256"
 
@@ -78,15 +79,16 @@ def create_access_token(settings, username: str) -> str:
     return jwt.encode(payload, secret, algorithm=ALGORITHM)
 
 
-def create_refresh_token(settings, username: str) -> str:
+def create_refresh_token(settings, username: str, remember_me: bool = False) -> str:
     """Create a JWT refresh token with a unique jti for blacklisting."""
     secret = _get_jwt_secret(settings)
     jti = secrets.token_hex(16)
+    expire = REFRESH_TOKEN_EXPIRE_REMEMBER if remember_me else REFRESH_TOKEN_EXPIRE
     payload = {
         "sub": username,
         "type": "refresh",
         "jti": jti,
-        "exp": int(time.time()) + REFRESH_TOKEN_EXPIRE,
+        "exp": int(time.time()) + expire,
         "iat": int(time.time()),
     }
     return jwt.encode(payload, secret, algorithm=ALGORITHM)

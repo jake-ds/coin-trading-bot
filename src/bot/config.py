@@ -65,9 +65,15 @@ class Settings(BaseSettings):
 
     # ── OnChain Trader ──
     onchain_loop_interval: float = Field(default=300.0, gt=0)
-    onchain_max_positions: int = Field(default=5, ge=1)
+    onchain_max_positions: int = Field(default=10, ge=1)
     onchain_symbols: list[str] = Field(
-        default_factory=lambda: ["BTC/USDT", "ETH/USDT", "SOL/USDT"]
+        default_factory=lambda: [
+            "BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT",
+            "DOGE/USDT", "ADA/USDT", "AVAX/USDT", "LINK/USDT", "DOT/USDT",
+            "SUI/USDT", "NEAR/USDT", "ARB/USDT", "OP/USDT", "APT/USDT",
+            "PEPE/USDT", "UNI/USDT", "ATOM/USDT", "FIL/USDT", "LTC/USDT",
+            "TRX/USDT", "WIF/USDT", "AAVE/USDT", "RENDER/USDT", "MATIC/USDT",
+        ]
     )
     onchain_buy_threshold: float = Field(default=30.0)
     onchain_sell_threshold: float = Field(default=-30.0)

@@ -12,19 +12,44 @@ interface AuthState {
 }
 
 interface AuthContextType extends AuthState {
-  login: (username: string, password: string) => Promise<{ success: boolean; error?: string }>
+  login: (username: string, password: string, rememberMe?: boolean) => Promise<{ success: boolean; error?: string }>
   logout: () => void
   refreshAccessToken: () => Promise<boolean>
 }
 
 const AuthContext = createContext<AuthContextType | null>(null)
 
-// In-memory token storage (not localStorage for security)
+// In-memory token storage (access token never in localStorage)
 let _accessToken: string | null = null
 let _refreshToken: string | null = null
 
+const RT_KEY = 'rt'
+
+/** Get the saved refresh token from sessionStorage or localStorage */
+function getSavedRefreshToken(): string | null {
+  return sessionStorage.getItem(RT_KEY) || localStorage.getItem(RT_KEY)
+}
+
+/** Save refresh token — sessionStorage always, localStorage only for Remember Me */
+function saveRefreshToken(token: string, rememberMe: boolean): void {
+  sessionStorage.setItem(RT_KEY, token)
+  if (rememberMe) {
+    localStorage.setItem(RT_KEY, token)
+  }
+}
+
+/** Clear refresh token from all storage */
+function clearRefreshToken(): void {
+  sessionStorage.removeItem(RT_KEY)
+  localStorage.removeItem(RT_KEY)
+}
+
 export function getAccessToken(): string | null {
   return _accessToken
+}
+
+export function setAccessTokenDirect(token: string | null): void {
+  _accessToken = token
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -36,17 +61,53 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     username: null,
   })
 
-  // Check auth status on mount
+  // Check auth status on mount + try to restore session
   useEffect(() => {
     const checkAuth = async () => {
       try {
         const resp = await apiClient.get('/auth/status')
         const { auth_enabled } = resp.data
+
+        if (!auth_enabled) {
+          setState((prev) => ({
+            ...prev,
+            authEnabled: false,
+            isAuthenticated: true,
+          }))
+          return
+        }
+
+        // Try to restore refresh token from storage
+        const savedRT = getSavedRefreshToken()
+        if (savedRT) {
+          _refreshToken = savedRT
+          try {
+            const refreshResp = await apiClient.post('/auth/refresh', {
+              refresh_token: savedRT,
+            })
+            const { access_token } = refreshResp.data
+            _accessToken = access_token
+            // Re-save to sessionStorage (in case it was only in localStorage)
+            sessionStorage.setItem(RT_KEY, savedRT)
+            setState({
+              token: access_token,
+              refreshToken: savedRT,
+              isAuthenticated: true,
+              authEnabled: true,
+              username: null,
+            })
+            return
+          } catch {
+            // Saved refresh token is invalid — clear it
+            clearRefreshToken()
+            _refreshToken = null
+          }
+        }
+
         setState((prev) => ({
           ...prev,
           authEnabled: auth_enabled,
-          // If auth is disabled, consider user authenticated
-          isAuthenticated: !auth_enabled,
+          isAuthenticated: false,
         }))
       } catch {
         // If we can't reach the server, assume auth is disabled
@@ -60,12 +121,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     checkAuth()
   }, [])
 
-  const login = useCallback(async (username: string, password: string) => {
+  const login = useCallback(async (username: string, password: string, rememberMe = false) => {
     try {
-      const resp = await apiClient.post('/auth/login', { username, password })
+      const resp = await apiClient.post('/auth/login', {
+        username,
+        password,
+        remember_me: rememberMe,
+      })
       const { access_token, refresh_token } = resp.data
       _accessToken = access_token
       _refreshToken = refresh_token
+
+      // Always save to sessionStorage; localStorage only for Remember Me
+      saveRefreshToken(refresh_token, rememberMe)
+
       setState({
         token: access_token,
         refreshToken: refresh_token,
@@ -93,6 +162,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     _accessToken = null
     _refreshToken = null
+    clearRefreshToken()
     setState((prev) => ({
       ...prev,
       token: null,
@@ -119,6 +189,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // Refresh failed — force logout
       _accessToken = null
       _refreshToken = null
+      clearRefreshToken()
       setState((prev) => ({
         ...prev,
         token: null,

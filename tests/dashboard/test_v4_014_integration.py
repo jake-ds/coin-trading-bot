@@ -493,26 +493,6 @@ async def test_audit_trail_records_events(store, audit_logger):
 
 
 @pytest.mark.asyncio
-async def test_audit_trail_api_endpoint(store, audit_logger, auth_headers):
-    """GET /api/audit should return persisted audit logs."""
-    set_audit_logger(audit_logger)
-
-    await audit_logger.log_bot_started(mode="live", symbols=["BTC/USDT"])
-    await audit_logger.log_trade(
-        symbol="BTC/USDT", side="BUY", quantity=0.1, price=50000,
-    )
-
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as ac:
-        resp = await ac.get("/api/audit", headers=auth_headers)
-
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["total"] == 2
-    assert len(data["logs"]) == 2
-
-
-@pytest.mark.asyncio
 async def test_audit_trail_filter_by_severity(store, audit_logger):
     """Audit logs should be filterable by severity."""
     await audit_logger.log_event(
@@ -873,15 +853,6 @@ async def test_bot_emergency_resume_with_audit():
 
 
 @pytest.mark.asyncio
-async def test_audit_logs_protected_by_auth():
-    """GET /api/audit should require authentication when auth is enabled."""
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as ac:
-        resp = await ac.get("/api/audit")
-    assert resp.status_code == 401
-
-
-@pytest.mark.asyncio
 async def test_emergency_endpoints_protected_by_auth():
     """Emergency endpoints should require authentication."""
     transport = ASGITransport(app=app)
@@ -914,54 +885,3 @@ async def test_settings_endpoints_protected_by_auth():
         assert resp.status_code == 401
 
 
-# ---------------------------------------------------------------------------
-# 14. Preflight results accessible via API
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_preflight_api_endpoint(auth_headers):
-    """GET /api/preflight should return pre-flight results."""
-    update_state(
-        preflight={
-            "overall": "WARN",
-            "checks": [
-                {"name": "api_key_validity", "status": "PASS"},
-            ],
-        },
-    )
-
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as ac:
-        resp = await ac.get("/api/preflight", headers=auth_headers)
-
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["preflight"]["overall"] == "WARN"
-
-
-# ---------------------------------------------------------------------------
-# 15. Reconciliation results accessible via API
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_reconciliation_api_endpoint(auth_headers):
-    """GET /api/reconciliation should return reconciliation results."""
-    update_state(
-        reconciliation={
-            "timestamp": "2026-02-22T10:00:00+00:00",
-            "exchange_name": "binance",
-            "matched": ["BTC/USDT"],
-            "has_discrepancies": False,
-        },
-    )
-
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as ac:
-        resp = await ac.get("/api/reconciliation", headers=auth_headers)
-
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["reconciliation"]["has_discrepancies"] is False
-    assert "BTC/USDT" in data["reconciliation"]["matched"]

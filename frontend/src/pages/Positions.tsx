@@ -5,12 +5,6 @@ import { useWebSocket } from '../hooks/useWebSocket'
 
 const WS_URL = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/api/ws`
 
-interface FundingItem {
-  time: number
-  symbol: string
-  amount: number
-}
-
 function formatDuration(openedAt: string | undefined): string {
   if (!openedAt) return '--'
   const opened = new Date(openedAt).getTime()
@@ -30,8 +24,6 @@ function Positions() {
   const [positions, setPositions] = useState<Position[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [fundingIncome, setFundingIncome] = useState<FundingItem[]>([])
-  const [fundingTotal, setFundingTotal] = useState(0)
   const { data: wsMessage } = useWebSocket(WS_URL)
 
   // Apply WebSocket updates
@@ -66,20 +58,6 @@ function Positions() {
     fetchPositions()
   }, [])
 
-  // Fetch funding income
-  useEffect(() => {
-    const fetchFunding = async () => {
-      try {
-        const resp = await apiClient.get<{ income: FundingItem[]; total: number }>('/funding-income')
-        setFundingIncome(resp.data.income)
-        setFundingTotal(resp.data.total)
-      } catch { /* ignore */ }
-    }
-    fetchFunding()
-    const interval = setInterval(fetchFunding, 60000) // refresh every minute
-    return () => clearInterval(interval)
-  }, [])
-
   if (loading) {
     return (
       <div>
@@ -109,7 +87,6 @@ function Positions() {
 
   const totalPnl = positions.reduce((sum, p) => sum + (p.unrealized_pnl || 0), 0)
   const isTotalProfit = totalPnl >= 0
-  const isFundingProfit = fundingTotal >= 0
 
   return (
     <div>
@@ -176,49 +153,6 @@ function Positions() {
         </div>
       )}
 
-      {/* Funding Fee Income */}
-      <div className="mt-8">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-2xl font-bold">Funding Fee Income</h2>
-          <div className={`text-lg font-bold ${isFundingProfit ? 'text-green-400' : 'text-red-400'}`}>
-            Total: {isFundingProfit ? '+' : ''}{fundingTotal.toFixed(4)} USDT
-          </div>
-        </div>
-
-        {fundingIncome.length === 0 ? (
-          <div className="bg-gray-800 rounded-lg p-8 border border-gray-700 text-center">
-            <p className="text-gray-400">No funding fee income yet</p>
-          </div>
-        ) : (
-          <div className="bg-gray-800 rounded-lg border border-gray-700 overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-gray-700 text-gray-400">
-                  <th className="text-left px-4 py-3 font-medium">Time</th>
-                  <th className="text-left px-4 py-3 font-medium">Symbol</th>
-                  <th className="text-right px-4 py-3 font-medium">Amount</th>
-                </tr>
-              </thead>
-              <tbody>
-                {[...fundingIncome].reverse().map((item, idx) => {
-                  const isPositive = item.amount >= 0
-                  const dt = new Date(item.time)
-                  const timeStr = dt.toLocaleString(undefined, { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
-                  return (
-                    <tr key={`funding-${idx}`} className="border-b border-gray-700/50">
-                      <td className="px-4 py-3 text-gray-300">{timeStr}</td>
-                      <td className="px-4 py-3 font-medium text-white">{item.symbol}</td>
-                      <td className={`px-4 py-3 text-right font-medium ${isPositive ? 'text-green-400' : 'text-red-400'}`}>
-                        {isPositive ? '+' : ''}{item.amount.toFixed(4)} USDT
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
     </div>
   )
 }

@@ -581,53 +581,6 @@ class TestRunAllChecks:
 
 
 # ---------------------------------------------------------------------------
-# API endpoint tests
-# ---------------------------------------------------------------------------
-
-
-class TestPreflightEndpoint:
-    @pytest.mark.asyncio
-    async def test_empty_preflight(self, client):
-        resp = await client.get("/api/preflight")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert "preflight" in data
-        assert data["preflight"] == {}
-
-    @pytest.mark.asyncio
-    async def test_preflight_with_data(self, client):
-        update_state(preflight={
-            "overall": "PASS",
-            "checks": [
-                {"name": "api_key_validity", "status": "PASS", "message": "ok", "details": {}},
-            ],
-            "has_failures": False,
-            "has_warnings": False,
-        })
-        resp = await client.get("/api/preflight")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["preflight"]["overall"] == "PASS"
-        assert len(data["preflight"]["checks"]) == 1
-
-    @pytest.mark.asyncio
-    async def test_preflight_with_failures(self, client):
-        update_state(preflight={
-            "overall": "FAIL",
-            "checks": [
-                {"name": "stop_loss", "status": "FAIL", "message": "not configured", "details": {}},
-            ],
-            "has_failures": True,
-            "has_warnings": False,
-        })
-        resp = await client.get("/api/preflight")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["preflight"]["overall"] == "FAIL"
-        assert data["preflight"]["has_failures"] is True
-
-
-# ---------------------------------------------------------------------------
 # CheckStatus enum tests
 # ---------------------------------------------------------------------------
 

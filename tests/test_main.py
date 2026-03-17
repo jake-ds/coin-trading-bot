@@ -194,3 +194,206 @@ class TestEmergencyControls:
         state = bot.emergency_state
         assert state["active"] is False
         assert state["reason"] is None
+
+
+class TestCalculatePortfolio:
+    """Tests for TradingBot._calculate_portfolio() — TPV calculation."""
+
+    def _make_bot(self) -> TradingBot:
+        settings = make_settings()
+        bot = TradingBot(settings=settings)
+        bot._engine_manager = MagicMock()
+        bot._engine_manager.engines = {}
+        return bot
+
+    def _make_ccxt_exchange(self, balance_total: dict, tickers: dict | None = None):
+        """Create a mock exchange adapter wrapping a mock ccxt instance."""
+        ccxt_mock = AsyncMock()
+        ccxt_mock.fetch_balance = AsyncMock(return_value={"total": balance_total})
+        if tickers is not None:
+            ccxt_mock.fetch_tickers = AsyncMock(return_value=tickers)
+            ccxt_mock.fetch_ticker = AsyncMock(
+                side_effect=lambda pair: tickers.get(pair, {})
+            )
+        else:
+            ccxt_mock.fetch_tickers = AsyncMock(return_value={})
+
+        # Wrap in adapter-like object that _get_ccxt can unwrap
+        wrapper = MagicMock()
+        wrapper._exchange = ccxt_mock
+        return wrapper
+
+    @pytest.mark.asyncio
+    async def test_stablecoin_only(self):
+        """Exchange has only USDT — TPV equals cash."""
+        bot = self._make_bot()
+        bot._exchanges = [
+            self._make_ccxt_exchange({"USDT": 1000.0})
+        ]
+
+        result = await bot._calculate_portfolio()
+
+        assert result["cash_value"] == 1000.0
+        assert result["position_value"] == 0.0
+        assert result["total_value"] == 1000.0
+
+    @pytest.mark.asyncio
+    async def test_live_with_crypto_holdings(self):
+        """Exchange has USDT=850 + BTC=0.0015 + ETH=0.05.
+        TPV should include crypto valued via tickers."""
+        tickers = {
+            "BTC/USDT": {"last": 100000.0},
+            "ETH/USDT": {"last": 3000.0},
+        }
+        bot = self._make_bot()
+        bot._exchanges = [
+            self._make_ccxt_exchange(
+                {"USDT": 850.0, "BTC": 0.0015, "ETH": 0.05},
+                tickers=tickers,
+            )
+        ]
+
+        result = await bot._calculate_portfolio()
+
+        assert result["cash_value"] == 850.0
+        # BTC: 0.0015 * 100000 = 150, ETH: 0.05 * 3000 = 150
+        assert result["position_value"] == 300.0
+        assert result["total_value"] == 1150.0
+
+    @pytest.mark.asyncio
+    async def test_paper_mode_engine_positions_fallback(self):
+        """Paper mode: exchange has USDT only, engine tracks positions."""
+        bot = self._make_bot()
+        bot._exchanges = [
+            self._make_ccxt_exchange({"USDT": 900.0})
+        ]
+
+        # Simulate engine with a tracked position
+        mock_engine = MagicMock()
+        mock_engine.positions = {
+            "BTC/USDT": {
+                "quantity": 0.001,
+                "current_price": 100000.0,
+                "entry_price": 95000.0,
+                "unrealized_pnl": 5.0,
+            }
+        }
+        bot._engine_manager.engines = {"onchain_trader": mock_engine}
+
+        result = await bot._calculate_portfolio()
+
+        assert result["cash_value"] == 900.0
+        # 0.001 * 100000 = 100
+        assert result["position_value"] == 100.0
+        assert result["total_value"] == 1000.0
+        assert result["unrealized_pnl"] == 5.0
+
+    @pytest.mark.asyncio
+    async def test_engine_positions_uses_entry_price_fallback(self):
+        """Engine position without current_price falls back to entry_price."""
+        bot = self._make_bot()
+        bot._exchanges = [
+            self._make_ccxt_exchange({"USDT": 850.0})
+        ]
+
+        mock_engine = MagicMock()
+        mock_engine.positions = {
+            "BTC/USDT": {
+                "quantity": 0.001,
+                "entry_price": 100000.0,
+                # no current_price set
+            }
+        }
+        bot._engine_manager.engines = {"onchain_trader": mock_engine}
+
+        result = await bot._calculate_portfolio()
+
+        assert result["cash_value"] == 850.0
+        assert result["position_value"] == 100.0
+        assert result["total_value"] == 950.0
+
+    @pytest.mark.asyncio
+    async def test_fetch_tickers_failure_falls_back_to_individual(self):
+        """If fetch_tickers fails, should try individual fetch_ticker calls."""
+        bot = self._make_bot()
+
+        # Create ccxt mock where fetch_tickers fails but fetch_ticker works
+        ccxt_mock = AsyncMock()
+        ccxt_mock.fetch_balance = AsyncMock(
+            return_value={"total": {"USDT": 850.0, "BTC": 0.001}}
+        )
+        ccxt_mock.fetch_tickers = AsyncMock(side_effect=Exception("API error"))
+        ccxt_mock.fetch_ticker = AsyncMock(
+            return_value={"last": 100000.0}
+        )
+
+        wrapper = MagicMock()
+        wrapper._exchange = ccxt_mock
+        bot._exchanges = [wrapper]
+
+        result = await bot._calculate_portfolio()
+
+        assert result["cash_value"] == 850.0
+        assert result["position_value"] == 100.0  # 0.001 * 100000
+        assert result["total_value"] == 950.0
+
+    @pytest.mark.asyncio
+    async def test_no_exchange_available(self):
+        """No exchange connected — portfolio should be all zeros."""
+        bot = self._make_bot()
+        bot._exchanges = []
+
+        result = await bot._calculate_portfolio()
+
+        assert result["total_value"] == 0.0
+        assert result["cash_value"] == 0.0
+        assert result["position_value"] == 0.0
+
+    @pytest.mark.asyncio
+    async def test_multiple_stablecoins(self):
+        """Multiple stablecoins should all count as cash."""
+        bot = self._make_bot()
+        bot._exchanges = [
+            self._make_ccxt_exchange(
+                {"USDT": 500.0, "USDC": 300.0, "BUSD": 200.0}
+            )
+        ]
+
+        result = await bot._calculate_portfolio()
+
+        assert result["cash_value"] == 1000.0
+        assert result["total_value"] == 1000.0
+
+    @pytest.mark.asyncio
+    async def test_ticker_preferred_over_engine_positions(self):
+        """When exchange has crypto and tickers work, engine positions
+        should NOT be used (would double-count)."""
+        tickers = {"BTC/USDT": {"last": 100000.0}}
+        bot = self._make_bot()
+        bot._exchanges = [
+            self._make_ccxt_exchange(
+                {"USDT": 850.0, "BTC": 0.0015},
+                tickers=tickers,
+            )
+        ]
+
+        # Engine also tracks this position — should NOT be double counted
+        mock_engine = MagicMock()
+        mock_engine.positions = {
+            "BTC/USDT": {
+                "quantity": 0.0015,
+                "current_price": 100000.0,
+                "entry_price": 95000.0,
+                "unrealized_pnl": 7.5,
+            }
+        }
+        bot._engine_manager.engines = {"onchain_trader": mock_engine}
+
+        result = await bot._calculate_portfolio()
+
+        assert result["cash_value"] == 850.0
+        # Should be 150 from ticker, NOT 300 from double counting
+        assert result["position_value"] == 150.0
+        assert result["total_value"] == 1000.0
+        # unrealized_pnl still comes from engine positions
+        assert result["unrealized_pnl"] == 7.5
