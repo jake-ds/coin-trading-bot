@@ -180,6 +180,30 @@ def get_engine_manager():
     return _engine_manager
 
 
+def _get_cycle_metrics() -> dict:
+    """Build cycle metrics from the engine manager's actual state."""
+    if _engine_manager is None:
+        return _bot_state["cycle_metrics"]
+    total_cycles = 0
+    total_duration = 0.0
+    duration_count = 0
+    last_cycle_time = None
+    for engine in _engine_manager.engines.values():
+        total_cycles += engine.cycle_count
+        for result in engine.cycle_history[-10:]:
+            total_duration += result.duration_ms
+            duration_count += 1
+            ts = result.timestamp
+            if last_cycle_time is None or ts > last_cycle_time:
+                last_cycle_time = ts
+    avg_duration = (total_duration / duration_count) if duration_count else 0.0
+    return {
+        "cycle_count": total_cycles,
+        "average_cycle_duration": round(avg_duration, 1),
+        "last_cycle_time": last_cycle_time,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Auth request/response models
 # ---------------------------------------------------------------------------
@@ -361,7 +385,7 @@ async def get_status():
     result = {
         "status": _bot_state["status"],
         "started_at": _bot_state["started_at"],
-        "cycle_metrics": _bot_state["cycle_metrics"],
+        "cycle_metrics": _get_cycle_metrics(),
     }
     # Include rate limit info if available
     rate_limits = _bot_state.get("rate_limits")
@@ -892,7 +916,7 @@ def _build_full_state_payload() -> dict:
     return {
         "status": _bot_state["status"],
         "started_at": _bot_state["started_at"],
-        "cycle_metrics": _bot_state["cycle_metrics"],
+        "cycle_metrics": _get_cycle_metrics(),
         "portfolio": _bot_state["portfolio"],
         "metrics": _bot_state["metrics"],
         "trades": _bot_state["trades"][-50:],
