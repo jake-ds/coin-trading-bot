@@ -271,6 +271,7 @@ class TestGracefulShutdown:
         bot._running = True
         bot._telegram = None
         bot._exchanges = []
+        bot._futures_exchange = None
 
         mgr = MagicMock()
         mgr.stop_all = AsyncMock()
@@ -294,6 +295,7 @@ class TestGracefulShutdown:
         bot._ws_feed = None
         bot._dashboard_task = None
         bot._exchanges = []
+        bot._futures_exchange = None
         bot._store = None
         bot._audit_logger = MagicMock()
         bot._audit_logger.log_bot_stopped = AsyncMock()
@@ -324,6 +326,7 @@ class TestGracefulShutdown:
         bot._ws_feed = None
         bot._dashboard_task = None
         bot._exchanges = []
+        bot._futures_exchange = None
         bot._store = None
         bot._engine_manager = None
         bot._audit_logger = MagicMock()

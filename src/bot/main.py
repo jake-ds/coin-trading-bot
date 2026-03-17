@@ -11,6 +11,7 @@ from bot.config import Settings, TradingMode, load_settings
 from bot.dashboard import app as dashboard_module
 from bot.dashboard.websocket import ws_manager
 from bot.data.store import DataStore
+from bot.engines.futures_short import FuturesShortEngine
 from bot.engines.manager import EngineManager
 from bot.engines.onchain_trader import OnChainTraderEngine
 from bot.engines.portfolio_manager import PortfolioManager
@@ -33,6 +34,7 @@ class TradingBot:
         self._settings = settings or load_settings()
         self._running = False
         self._exchanges = []
+        self._futures_exchange = None  # BinanceFuturesAdapter
         self._store: DataStore | None = None
         self._risk_manager: RiskManager | None = None
         self._telegram: TelegramNotifier | None = None
@@ -116,8 +118,9 @@ class TradingBot:
         )
 
     def _init_exchanges(self) -> None:
-        """Create Binance spot adapter wrapped in ResilientExchange."""
+        """Create Binance spot and futures adapters."""
         import bot.exchanges.binance  # noqa: F401
+        import bot.exchanges.binance_futures  # noqa: F401
 
         if self._settings.binance_api_key:
             try:
@@ -135,6 +138,27 @@ class TradingBot:
                 ))
             except ValueError:
                 logger.warning("binance_adapter_not_available")
+
+        # Create Binance Futures adapter
+        futures_key = (
+            self._settings.binance_futures_api_key
+            or self._settings.binance_api_key
+        )
+        futures_secret = (
+            self._settings.binance_futures_secret_key
+            or self._settings.binance_secret_key
+        )
+        if futures_key and getattr(self._settings, "futures_short_enabled", True):
+            try:
+                from bot.exchanges.binance_futures import BinanceFuturesAdapter
+                self._futures_exchange = BinanceFuturesAdapter(
+                    api_key=futures_key,
+                    secret_key=futures_secret,
+                    testnet=self._settings.binance_futures_testnet,
+                )
+                logger.info("binance_futures_adapter_initialized")
+            except Exception as e:
+                logger.warning("binance_futures_init_failed", error=str(e))
 
     def _create_rate_limiter(self, exchange_name: str) -> RateLimiter | None:
         if not self._settings.rate_limit_enabled:
@@ -270,6 +294,31 @@ class TradingBot:
 
         engine.set_on_cycle_complete(_broadcast_engine_cycle)
 
+        # Register FuturesShortEngine
+        if getattr(self._settings, "futures_short_enabled", True):
+            futures_engine = FuturesShortEngine(
+                portfolio_manager=self._portfolio_mgr,
+                futures_exchange=self._futures_exchange,
+                paper_mode=is_paper,
+                settings=self._settings,
+            )
+            self._engine_manager.register(futures_engine)
+
+            if self._store is not None:
+                futures_engine.set_store(self._store)
+            if self._telegram is not None:
+                futures_engine.set_telegram(self._telegram)
+
+            async def _broadcast_futures_cycle(result):
+                try:
+                    await ws_manager.broadcast(
+                        {"type": "engine_cycle", "payload": result.to_dict()}
+                    )
+                except Exception:
+                    logger.debug("futures_cycle_broadcast_error", exc_info=True)
+
+            futures_engine.set_on_cycle_complete(_broadcast_futures_cycle)
+
         # Wire MetricsPersistence
         if (
             getattr(self._settings, "metrics_persistence_enabled", True)
@@ -296,6 +345,10 @@ class TradingBot:
             )
             self._engine_manager.set_regime_detector(detector)
             engine.set_regime_detector(detector)
+            # Also apply to futures engine if registered
+            futures_eng = self._engine_manager.get_engine("futures_short")
+            if futures_eng is not None:
+                futures_eng.set_regime_detector(detector)
 
         logger.info(
             "engine_mode_initialized",
@@ -489,6 +542,11 @@ class TradingBot:
         for exchange in self._exchanges:
             try:
                 await exchange.close()
+            except Exception:
+                pass
+        if self._futures_exchange:
+            try:
+                await self._futures_exchange.close()
             except Exception:
                 pass
         if self._telegram:

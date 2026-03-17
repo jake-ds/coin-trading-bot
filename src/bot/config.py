@@ -29,10 +29,15 @@ class Settings(BaseSettings):
     # Trading mode
     trading_mode: TradingMode = TradingMode.PAPER
 
-    # Binance (spot only)
+    # Binance (spot)
     binance_api_key: str = ""
     binance_secret_key: str = ""
     binance_testnet: bool = True
+
+    # Binance Futures
+    binance_futures_api_key: str = ""
+    binance_futures_secret_key: str = ""
+    binance_futures_testnet: bool = True
 
     # Database
     database_url: str = "sqlite+aiosqlite:///data/trading.db"
@@ -59,7 +64,8 @@ class Settings(BaseSettings):
     engine_max_drawdown_pct: float = Field(default=20.0, ge=0, le=100)
     engine_allocations: dict[str, float] = Field(
         default_factory=lambda: {
-            "onchain_trader": 1.0,
+            "onchain_trader": 0.70,
+            "futures_short": 0.30,
         }
     )
 
@@ -91,6 +97,26 @@ class Settings(BaseSettings):
             "derivatives": 0.25,
             "market_trend": 0.15,
         }
+    )
+
+    # ── Futures Short Engine ──
+    futures_short_enabled: bool = True
+    futures_short_loop_interval: float = Field(default=120.0, gt=0)
+    futures_short_max_positions: int = Field(default=10, ge=1)
+    futures_short_leverage: int = Field(default=2, ge=1, le=10)
+    futures_short_margin_mode: str = "isolated"
+    futures_short_sell_threshold: float = Field(default=-20.0)
+    futures_short_min_confidence: float = Field(default=0.35, ge=0, le=1.0)
+    futures_short_max_position_pct: float = Field(default=10.0, ge=0, le=100)
+    futures_short_stop_loss_pct: float = Field(default=4.0, ge=0, le=100)
+    futures_short_take_profit_pct: float = Field(default=5.0, ge=0, le=100)
+    futures_short_trailing_stop_pct: float = Field(default=2.5, ge=0, le=100)
+    futures_short_trailing_activate_pct: float = Field(default=1.5, ge=0, le=100)
+    futures_short_symbols: list[str] = Field(
+        default_factory=lambda: [
+            "BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT",
+            "DOGE/USDT", "ADA/USDT", "AVAX/USDT", "LINK/USDT", "DOT/USDT",
+        ]
     )
 
     # API keys for onchain data (free tier)
@@ -433,6 +459,73 @@ SETTINGS_METADATA: dict[str, dict[str, Any]] = {
         "type": "dict",
         "requires_restart": False,
     },
+    # Futures Short Engine settings
+    "futures_short_enabled": {
+        "section": "Futures Short",
+        "description": "Enable futures short engine",
+        "type": "bool",
+        "requires_restart": True,
+    },
+    "futures_short_loop_interval": {
+        "section": "Futures Short",
+        "description": "Seconds between futures short cycles",
+        "type": "float",
+        "requires_restart": False,
+    },
+    "futures_short_max_positions": {
+        "section": "Futures Short",
+        "description": "Maximum concurrent short positions",
+        "type": "int",
+        "requires_restart": False,
+    },
+    "futures_short_leverage": {
+        "section": "Futures Short",
+        "description": "Leverage multiplier (1-10x)",
+        "type": "int",
+        "requires_restart": False,
+    },
+    "futures_short_sell_threshold": {
+        "section": "Futures Short",
+        "description": "Composite score threshold for SHORT (negative = bearish)",
+        "type": "float",
+        "requires_restart": False,
+    },
+    "futures_short_min_confidence": {
+        "section": "Futures Short",
+        "description": "Minimum confidence to open short",
+        "type": "float",
+        "requires_restart": False,
+    },
+    "futures_short_max_position_pct": {
+        "section": "Futures Short",
+        "description": "Max position size as % of allocated capital",
+        "type": "float",
+        "requires_restart": False,
+    },
+    "futures_short_stop_loss_pct": {
+        "section": "Futures Short",
+        "description": "Stop-loss % for short positions (price moves UP)",
+        "type": "float",
+        "requires_restart": False,
+    },
+    "futures_short_take_profit_pct": {
+        "section": "Futures Short",
+        "description": "Take-profit % for short positions (price moves DOWN)",
+        "type": "float",
+        "requires_restart": False,
+    },
+    "futures_short_trailing_stop_pct": {
+        "section": "Futures Short",
+        "description": "Trailing stop distance %",
+        "type": "float",
+        "requires_restart": False,
+    },
+    "futures_short_trailing_activate_pct": {
+        "section": "Futures Short",
+        "description": "Trailing stop activation profit %",
+        "type": "float",
+        "requires_restart": False,
+    },
     "etherscan_api_key": {
         "section": "OnChain Trader",
         "description": "Etherscan API key for whale tracking",
@@ -516,6 +609,15 @@ ENGINE_DESCRIPTIONS: dict[str, dict[str, str]] = {
             "바이낸스 현물에서 자동으로 매수/매도합니다."
         ),
         "key_params": "buy_threshold, sell_threshold, signal_weights, stop_loss, take_profit",
+    },
+    "futures_short": {
+        "role_ko": "선물 숏 트레이딩 엔진",
+        "role_en": "Futures short trading engine",
+        "description_ko": (
+            "온체인 시그널 기반 약세 감지 시 바이낸스 USDT-M 선물에서 "
+            "숏 포지션을 자동 개설합니다. 격리 마진 + 2-3배 레버리지 사용."
+        ),
+        "key_params": "leverage, sell_threshold, stop_loss, take_profit, margin_mode",
     },
 }
 

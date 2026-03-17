@@ -134,7 +134,7 @@ class TestResilientExchangeWiring:
 class TestEngineMode:
     @pytest.mark.asyncio
     async def test_engine_manager_initialized(self):
-        """Engine manager should be initialized with OnChainTraderEngine."""
+        """Engine manager should be initialized with OnChainTraderEngine and FuturesShortEngine."""
         settings = make_settings()
         bot = TradingBot(settings=settings)
         await bot.initialize()
@@ -142,6 +142,19 @@ class TestEngineMode:
         assert bot._engine_manager is not None
         assert bot._portfolio_mgr is not None
         assert "onchain_trader" in bot._engine_manager.engines
+        assert "futures_short" in bot._engine_manager.engines
+
+        await bot.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_futures_engine_disabled(self):
+        """FuturesShortEngine should not be registered when disabled."""
+        settings = make_settings(futures_short_enabled=False)
+        bot = TradingBot(settings=settings)
+        await bot.initialize()
+
+        assert "onchain_trader" in bot._engine_manager.engines
+        assert "futures_short" not in bot._engine_manager.engines
 
         await bot.shutdown()
 
