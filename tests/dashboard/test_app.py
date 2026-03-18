@@ -66,13 +66,35 @@ class TestDashboardAPI:
 
     @pytest.mark.asyncio
     async def test_get_trades_with_data(self, client):
-        update_state(trades=[
-            {"symbol": "BTC/USDT", "side": "BUY", "quantity": 0.1, "price": 50000},
-        ])
-        resp = await client.get("/api/trades")
-        data = resp.json()
-        assert len(data["trades"]) == 1
-        assert data["trades"][0]["symbol"] == "BTC/USDT"
+        from unittest.mock import MagicMock
+
+        from bot.dashboard.app import set_engine_manager
+        from bot.engines.tracker import EngineTracker, TradeRecord
+
+        tracker = EngineTracker()
+        tracker.record_trade("onchain_trader", TradeRecord(
+            engine_name="onchain_trader",
+            symbol="BTC/USDT",
+            side="sell",
+            entry_price=50000,
+            exit_price=51000,
+            quantity=0.1,
+            pnl=100.0,
+            cost=0.0,
+            net_pnl=100.0,
+            entry_time="2026-03-18T00:00:00Z",
+            exit_time="2026-03-18T01:00:00Z",
+        ))
+        mgr = MagicMock()
+        mgr.tracker = tracker
+        set_engine_manager(mgr)
+        try:
+            resp = await client.get("/api/trades")
+            data = resp.json()
+            assert len(data["trades"]) == 1
+            assert data["trades"][0]["symbol"] == "BTC/USDT"
+        finally:
+            set_engine_manager(None)
 
     @pytest.mark.asyncio
     async def test_get_metrics_default(self, client):

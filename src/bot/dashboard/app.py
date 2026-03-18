@@ -401,7 +401,31 @@ async def get_trades(
     symbol: str | None = Query(None, description="Filter by symbol"),
 ):
     """Get trades with pagination and optional symbol filter."""
-    all_trades = _bot_state["trades"]
+    all_trades: list[dict] = []
+
+    # Read from EngineTracker (in-memory, restored from DB on startup)
+    if _engine_manager is not None:
+        for engine_name, trades in _engine_manager.tracker._trades.items():
+            for t in trades:
+                trade_dict = {
+                    "engine": t.engine_name,
+                    "symbol": t.symbol,
+                    "side": t.side,
+                    "entry_price": t.entry_price,
+                    "exit_price": t.exit_price,
+                    "quantity": t.quantity,
+                    "pnl": round(t.pnl, 4),
+                    "cost": round(t.cost, 4),
+                    "net_pnl": round(t.net_pnl, 4),
+                    "entry_time": t.entry_time,
+                    "exit_time": t.exit_time,
+                    "hold_time_seconds": t.hold_time_seconds,
+                    "mode": t.mode,
+                }
+                all_trades.append(trade_dict)
+
+    # Sort by exit_time
+    all_trades.sort(key=lambda t: t.get("exit_time", ""))
 
     # Apply symbol filter
     if symbol:
@@ -911,6 +935,29 @@ def _build_onchain_signals() -> dict:
     return engine.latest_signals
 
 
+def _build_recent_trades(limit: int = 50) -> list[dict]:
+    """Get recent trades from EngineTracker for WebSocket/API."""
+    if _engine_manager is None:
+        return []
+    trades = []
+    for engine_name, trade_list in _engine_manager.tracker._trades.items():
+        for t in trade_list:
+            trades.append({
+                "engine": t.engine_name,
+                "symbol": t.symbol,
+                "side": t.side,
+                "entry_price": t.entry_price,
+                "exit_price": t.exit_price,
+                "quantity": t.quantity,
+                "pnl": round(t.net_pnl, 4),
+                "entry_time": t.entry_time,
+                "exit_time": t.exit_time,
+                "mode": t.mode,
+            })
+    trades.sort(key=lambda t: t.get("exit_time", ""), reverse=True)
+    return trades[:limit]
+
+
 def _build_full_state_payload() -> dict:
     """Build a complete state payload for WebSocket broadcast."""
     return {
@@ -919,7 +966,7 @@ def _build_full_state_payload() -> dict:
         "cycle_metrics": _get_cycle_metrics(),
         "portfolio": _bot_state["portfolio"],
         "metrics": _bot_state["metrics"],
-        "trades": _bot_state["trades"][-50:],
+        "trades": _build_recent_trades(50),
         "open_positions": _get_all_positions(),
         "emergency": _bot_state.get("emergency", {"active": False}),
         "engine_performance": _build_engine_performance_summary(),

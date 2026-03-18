@@ -532,6 +532,13 @@ class OnChainTraderEngine(BaseEngine):
                     reason=reason,
                 )
             except Exception as e:
+                err_msg = str(e).lower()
+                # Insufficient funds: actual balance < tracked quantity
+                if "insufficient" in err_msg:
+                    await self._handle_insufficient_close(
+                        symbol, exchange, entry_price, current_price, quantity, reason
+                    )
+                    return 0.0
                 logger.error(
                     "close_order_failed",
                     symbol=symbol,
@@ -546,6 +553,83 @@ class OnChainTraderEngine(BaseEngine):
         )
 
         return pnl
+
+    async def _handle_insufficient_close(
+        self,
+        symbol: str,
+        exchange: Any,
+        entry_price: float,
+        current_price: float,
+        tracked_qty: float,
+        reason: str,
+    ) -> None:
+        """Handle 'Insufficient funds' on close by checking actual balance.
+
+        If actual balance is 0, remove the stale position.
+        If actual balance > 0 but < tracked, sell whatever we have.
+        """
+        base_asset = symbol.split("/")[0]  # e.g. "PEPE" from "PEPE/USDT"
+        try:
+            balances = await exchange.get_balance()
+            actual_qty = balances.get(base_asset, 0.0)
+        except Exception:
+            actual_qty = 0.0
+
+        logger.warning(
+            "insufficient_funds_close",
+            symbol=symbol,
+            tracked_qty=tracked_qty,
+            actual_qty=actual_qty,
+        )
+
+        if actual_qty <= 0:
+            # No actual balance — remove stale position
+            self._remove_position(symbol)
+            logger.info(
+                "stale_position_removed",
+                symbol=symbol,
+                tracked_qty=tracked_qty,
+                reason="actual balance is 0",
+            )
+            await self._send_alert(
+                f"STALE position removed: {symbol} "
+                f"(tracked {tracked_qty}, actual 0)"
+            )
+        else:
+            # Sell whatever we actually have
+            try:
+                await exchange.create_order(
+                    symbol=symbol,
+                    side=OrderSide.SELL,
+                    order_type=OrderType.MARKET,
+                    quantity=actual_qty,
+                )
+                pnl = (current_price - entry_price) * actual_qty
+                self._remove_position(symbol)
+                logger.info(
+                    "partial_position_closed",
+                    symbol=symbol,
+                    tracked_qty=tracked_qty,
+                    actual_qty=actual_qty,
+                    pnl=round(pnl, 4),
+                    reason=reason,
+                )
+                await self._send_alert(
+                    f"PARTIAL close: {symbol} sold {actual_qty} "
+                    f"(tracked {tracked_qty}), PnL={pnl:+.2f}"
+                )
+            except Exception as e2:
+                logger.error(
+                    "partial_close_also_failed",
+                    symbol=symbol,
+                    actual_qty=actual_qty,
+                    error=str(e2),
+                )
+                # Still remove the position to stop infinite retries
+                self._remove_position(symbol)
+                await self._send_alert(
+                    f"FORCE removed: {symbol} — close failed twice ({e2})"
+                )
 
     async def stop(self) -> None:
         """Clean up fetcher sessions on stop."""

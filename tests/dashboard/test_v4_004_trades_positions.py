@@ -1,9 +1,12 @@
 """Tests for V4-004: Trades and positions page with live updates."""
 
+from unittest.mock import MagicMock
+
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from bot.dashboard.app import app, update_state
+from bot.dashboard.app import app, set_engine_manager, update_state
+from bot.engines.tracker import EngineTracker, TradeRecord
 
 
 @pytest.fixture(autouse=True)
@@ -25,6 +28,9 @@ def reset_state():
         open_positions=[],
         regime=None,
     )
+    set_engine_manager(None)
+    yield
+    set_engine_manager(None)
 
 
 @pytest.fixture
@@ -34,20 +40,26 @@ async def client():
         yield c
 
 
-def _make_trades(n: int) -> list[dict]:
-    """Generate n sample trade dicts."""
-    trades = []
+def _populate_tracker(n: int) -> None:
+    """Create a mock engine_manager with n trades in its tracker."""
+    tracker = EngineTracker()
     for i in range(n):
-        trades.append({
-            "timestamp": f"2026-02-22T10:{i:02d}:00Z",
-            "symbol": "BTC/USDT" if i % 2 == 0 else "ETH/USDT",
-            "side": "BUY" if i % 3 != 0 else "SELL",
-            "quantity": 0.1 + i * 0.01,
-            "price": 50000 + i * 100,
-            "pnl": (i - n // 2) * 10.0,
-            "strategy": "ma_crossover" if i % 2 == 0 else "rsi",
-        })
-    return trades
+        tracker.record_trade("onchain_trader", TradeRecord(
+            engine_name="onchain_trader",
+            symbol="BTC/USDT" if i % 2 == 0 else "ETH/USDT",
+            side="BUY" if i % 3 != 0 else "SELL",
+            entry_price=50000 + i * 100,
+            exit_price=50100 + i * 100,
+            quantity=0.1 + i * 0.01,
+            pnl=(i - n // 2) * 10.0,
+            cost=0.0,
+            net_pnl=(i - n // 2) * 10.0,
+            entry_time=f"2026-02-22T09:{i:02d}:00Z",
+            exit_time=f"2026-02-22T10:{i:02d}:00Z",
+        ))
+    mgr = MagicMock()
+    mgr.tracker = tracker
+    set_engine_manager(mgr)
 
 
 class TestTradesPagination:
@@ -65,7 +77,7 @@ class TestTradesPagination:
 
     @pytest.mark.asyncio
     async def test_trades_default_page(self, client):
-        update_state(trades=_make_trades(5))
+        _populate_tracker(5)
         resp = await client.get("/api/trades")
         data = resp.json()
         assert len(data["trades"]) == 5
@@ -75,17 +87,15 @@ class TestTradesPagination:
 
     @pytest.mark.asyncio
     async def test_trades_returns_newest_first(self, client):
-        trades = _make_trades(5)
-        update_state(trades=trades)
+        _populate_tracker(5)
         resp = await client.get("/api/trades")
         data = resp.json()
-        # Newest trade (last in original list) should be first in response
-        assert data["trades"][0]["timestamp"] == trades[-1]["timestamp"]
-        assert data["trades"][-1]["timestamp"] == trades[0]["timestamp"]
+        # Newest trade should be first in response
+        assert data["trades"][0]["exit_time"] > data["trades"][-1]["exit_time"]
 
     @pytest.mark.asyncio
     async def test_trades_pagination_page_1(self, client):
-        update_state(trades=_make_trades(50))
+        _populate_tracker(50)
         resp = await client.get("/api/trades", params={"page": 1, "limit": 20})
         data = resp.json()
         assert len(data["trades"]) == 20
@@ -95,7 +105,7 @@ class TestTradesPagination:
 
     @pytest.mark.asyncio
     async def test_trades_pagination_page_2(self, client):
-        update_state(trades=_make_trades(50))
+        _populate_tracker(50)
         resp = await client.get("/api/trades", params={"page": 2, "limit": 20})
         data = resp.json()
         assert len(data["trades"]) == 20
@@ -103,7 +113,7 @@ class TestTradesPagination:
 
     @pytest.mark.asyncio
     async def test_trades_pagination_last_page(self, client):
-        update_state(trades=_make_trades(50))
+        _populate_tracker(50)
         resp = await client.get("/api/trades", params={"page": 3, "limit": 20})
         data = resp.json()
         assert len(data["trades"]) == 10  # 50 - 20 - 20 = 10
@@ -111,7 +121,7 @@ class TestTradesPagination:
 
     @pytest.mark.asyncio
     async def test_trades_pagination_beyond_last_page(self, client):
-        update_state(trades=_make_trades(5))
+        _populate_tracker(5)
         resp = await client.get("/api/trades", params={"page": 10, "limit": 20})
         data = resp.json()
         assert len(data["trades"]) == 0
@@ -119,7 +129,7 @@ class TestTradesPagination:
 
     @pytest.mark.asyncio
     async def test_trades_custom_limit(self, client):
-        update_state(trades=_make_trades(30))
+        _populate_tracker(30)
         resp = await client.get("/api/trades", params={"limit": 10})
         data = resp.json()
         assert len(data["trades"]) == 10
@@ -127,7 +137,7 @@ class TestTradesPagination:
 
     @pytest.mark.asyncio
     async def test_trades_symbol_filter(self, client):
-        update_state(trades=_make_trades(10))
+        _populate_tracker(10)
         resp = await client.get("/api/trades", params={"symbol": "BTC/USDT"})
         data = resp.json()
         # Only BTC/USDT trades (even-indexed: 0, 2, 4, 6, 8 = 5 trades)
@@ -136,7 +146,7 @@ class TestTradesPagination:
 
     @pytest.mark.asyncio
     async def test_trades_symbol_filter_no_match(self, client):
-        update_state(trades=_make_trades(5))
+        _populate_tracker(5)
         resp = await client.get("/api/trades", params={"symbol": "DOGE/USDT"})
         data = resp.json()
         assert data["trades"] == []
@@ -144,7 +154,7 @@ class TestTradesPagination:
 
     @pytest.mark.asyncio
     async def test_trades_symbol_filter_with_pagination(self, client):
-        update_state(trades=_make_trades(50))
+        _populate_tracker(50)
         resp = await client.get(
             "/api/trades", params={"symbol": "BTC/USDT", "page": 1, "limit": 5}
         )
