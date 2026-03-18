@@ -101,6 +101,7 @@ class Settings(BaseSettings):
 
     # ── Futures Short Engine ──
     futures_short_enabled: bool = True
+    futures_short_paper_mode: bool = True  # Paper mode for futures (independent of TRADING_MODE)
     futures_short_loop_interval: float = Field(default=120.0, gt=0)
     futures_short_max_positions: int = Field(default=10, ge=1)
     futures_short_leverage: int = Field(default=2, ge=1, le=10)
@@ -463,6 +464,12 @@ SETTINGS_METADATA: dict[str, dict[str, Any]] = {
     "futures_short_enabled": {
         "section": "Futures Short",
         "description": "Enable futures short engine",
+        "type": "bool",
+        "requires_restart": True,
+    },
+    "futures_short_paper_mode": {
+        "section": "Futures Short",
+        "description": "Paper mode for futures (independent of main TRADING_MODE). Set false only when Binance Futures wallet is funded.",
         "type": "bool",
         "requires_restart": True,
     },

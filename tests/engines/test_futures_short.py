@@ -104,13 +104,17 @@ class TestFuturesShortCycle:
         )
 
         # Inject a strong SELL signal
+        # Note: sentiment score +60 (contrarian BUY for Fear) gets flipped
+        # to -60 by the momentum adjustment, making overall score very negative
         sell_signal = CompositeSignal(
             symbol="BTC/USDT",
             action=SignalAction.SELL,
             score=-45.0,
             confidence=0.8,
             signals=[
-                SignalScore(name="sentiment", score=-60.0, confidence=0.7, reason="Fear"),
+                SignalScore(name="sentiment", score=60.0, confidence=0.7, reason="Fear contrarian"),
+                SignalScore(name="market_trend", score=-80.0, confidence=0.8, reason="24h: -5%"),
+                SignalScore(name="derivatives", score=-30.0, confidence=0.5, reason="Bearish OI"),
             ],
         )
 
@@ -313,8 +317,9 @@ class TestShortPositionSizing:
             confidence=0.8,
         )
 
-        result = await engine._open_short("BTC/USDT", signal, {"size_mult": 1.0})
+        result, fail = await engine._open_short("BTC/USDT", signal, {"size_mult": 1.0})
         assert result is not None
+        assert fail is None
         assert result["leverage"] == 2
         # Notional = margin * leverage
         assert result["notional"] > result["margin"]
@@ -334,8 +339,9 @@ class TestShortPositionSizing:
             confidence=0.5,
         )
 
-        result = await engine._open_short("BTC/USDT", signal, {"size_mult": 1.0})
+        result, fail = await engine._open_short("BTC/USDT", signal, {"size_mult": 1.0})
         assert result is None
+        assert fail is not None
 
 
 class TestShortClosePosition:
@@ -405,8 +411,9 @@ class TestLiveShortOpening:
             confidence=0.8,
         )
 
-        result = await engine._open_short("BTC/USDT", signal, {"size_mult": 1.0})
+        result, fail = await engine._open_short("BTC/USDT", signal, {"size_mult": 1.0})
         assert result is not None
+        assert fail is None
         assert result["action"] == "open_short"
 
         mock_futures_exchange.ensure_leverage_and_margin.assert_called_once_with(
@@ -433,8 +440,9 @@ class TestLiveShortOpening:
             confidence=0.8,
         )
 
-        result = await engine._open_short("BTC/USDT", signal, {"size_mult": 1.0})
+        result, fail = await engine._open_short("BTC/USDT", signal, {"size_mult": 1.0})
         assert result is None
+        assert fail is not None
 
 
 class TestCapacityCheck:

@@ -296,11 +296,14 @@ class TradingBot:
 
         # Register FuturesShortEngine
         if getattr(self._settings, "futures_short_enabled", True):
+            # Futures has its own paper_mode (default True) independent of main TRADING_MODE
+            futures_paper = getattr(self._settings, "futures_short_paper_mode", True) or is_paper
             futures_engine = FuturesShortEngine(
                 portfolio_manager=self._portfolio_mgr,
                 futures_exchange=self._futures_exchange,
-                paper_mode=is_paper,
+                paper_mode=futures_paper,
                 settings=self._settings,
+                signal_source=engine,  # Reuse onchain_trader signals
             )
             self._engine_manager.register(futures_engine)
 

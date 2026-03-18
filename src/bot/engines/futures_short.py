@@ -56,6 +56,7 @@ class FuturesShortEngine(BaseEngine):
         futures_exchange: BinanceFuturesAdapter | None = None,
         paper_mode: bool = True,
         settings: Settings | None = None,
+        signal_source: Any | None = None,
     ):
         s = settings
         loop_interval = (
@@ -124,7 +125,10 @@ class FuturesShortEngine(BaseEngine):
             getattr(s, "futures_short_trailing_activate_pct", 1.5) if s else 1.5
         )
 
-        # Data fetchers (shared with onchain_trader conceptually)
+        # Signal source: reuse onchain_trader's signals to avoid duplicate API calls
+        self._signal_source = signal_source  # OnChainTraderEngine reference
+
+        # Own fetchers as fallback (only used if no signal_source)
         self._coingecko = CoinGeckoFetcher()
         self._fear_greed = FearGreedFetcher()
         self._defillama = DeFiLlamaFetcher()
@@ -144,75 +148,193 @@ class FuturesShortEngine(BaseEngine):
 
     @property
     def description(self) -> str:
-        return f"Futures short trader ({self._leverage}x leverage, isolated margin)"
+        mode = "paper" if self._paper_mode else "live"
+        return f"Futures short trader ({self._leverage}x leverage, {mode})"
 
     @property
     def latest_signals(self) -> dict[str, dict]:
         return {k: v.to_dict() for k, v in self._latest_signals.items()}
+
+    def _get_shared_signals(self) -> dict[str, CompositeSignal] | None:
+        """Try to get signals from the shared signal source (onchain_trader).
+
+        When shared signals are available, re-evaluate action thresholds
+        using this engine's own sell_threshold (which is typically less
+        negative than onchain_trader's, to trigger shorts more easily).
+        """
+        if self._signal_source is None:
+            return None
+        try:
+            raw = self._signal_source._latest_signals
+            if not raw:
+                return None
+            # Re-evaluate action using this engine's thresholds
+            result: dict[str, CompositeSignal] = {}
+            for symbol, sig in raw.items():
+                action = SignalAction.HOLD
+                if (
+                    sig.score >= self._buy_threshold
+                    and sig.confidence >= self._min_confidence
+                ):
+                    action = SignalAction.BUY
+                elif (
+                    sig.score <= self._sell_threshold
+                    and sig.confidence >= self._min_confidence
+                ):
+                    action = SignalAction.SELL
+                result[symbol] = CompositeSignal(
+                    symbol=sig.symbol,
+                    action=action,
+                    score=sig.score,
+                    confidence=sig.confidence,
+                    signals=sig.signals,
+                    timestamp=sig.timestamp,
+                )
+            return result
+        except Exception:
+            pass
+        return None
 
     async def _run_cycle(self) -> EngineCycleResult:
         """Execute one trading cycle for futures shorts."""
         decisions: list[DecisionStep] = []
         actions: list[dict] = []
         pnl_update = 0.0
+        data_sources: list[str] = []
 
-        # 1. Fetch all on-chain data in parallel
-        decisions.append(DecisionStep(
-            label="데이터 수집 (선물숏)",
-            observation="모든 API 병렬 요청 시작",
-            threshold="N/A",
-            result="FETCHING",
-            category="evaluate",
-        ))
+        # 1. Try to reuse signals from onchain_trader (avoids duplicate API calls)
+        shared = self._get_shared_signals()
+        if shared:
+            # Reuse onchain_trader signals
+            for symbol in self._symbols:
+                sig = shared.get(symbol)
+                if sig is not None:
+                    self._latest_signals[symbol] = sig
 
-        (
-            market_data,
-            sentiment_data,
-            defi_data,
-            derivatives_data,
-            flow_data,
-        ) = await self._fetch_all_data()
+            decisions.append(DecisionStep(
+                label="시그널 공유 (선물숏)",
+                observation=f"onchain_trader 시그널 {len(shared)}개 재사용",
+                threshold="N/A",
+                result="OK",
+                category="evaluate",
+            ))
+            data_sources.append(f"shared({len(shared)})")
+        else:
+            # Fallback: fetch own data
+            decisions.append(DecisionStep(
+                label="데이터 수집 (선물숏)",
+                observation="모든 API 병렬 요청 시작",
+                threshold="N/A",
+                result="FETCHING",
+                category="evaluate",
+            ))
 
-        data_sources = []
-        if market_data:
-            data_sources.append(f"CoinGecko({len(market_data)})")
-        if sentiment_data:
-            data_sources.append(f"F&G({sentiment_data.value})")
-        if defi_data:
-            data_sources.append("DeFiLlama")
-        if derivatives_data:
-            data_sources.append(f"CoinGlass({len(derivatives_data)})")
-        if flow_data:
-            data_sources.append(f"Flow({len(flow_data)})")
+            (
+                market_data,
+                sentiment_data,
+                defi_data,
+                derivatives_data,
+                flow_data,
+            ) = await self._fetch_all_data()
 
-        decisions[-1] = DecisionStep(
-            label="데이터 수집 (선물숏)",
-            observation=f"수집 완료: {', '.join(data_sources) if data_sources else 'None'}",
-            threshold="최소 1개 소스",
-            result="OK" if data_sources else "NO_DATA",
-            category="evaluate",
-        )
+            if market_data:
+                data_sources.append(f"CoinGecko({len(market_data)})")
+            if sentiment_data:
+                data_sources.append(f"F&G({sentiment_data.value})")
+            if defi_data:
+                data_sources.append("DeFiLlama")
+            if derivatives_data:
+                data_sources.append(f"CoinGlass({len(derivatives_data)})")
+            if flow_data:
+                data_sources.append(f"Flow({len(flow_data)})")
 
-        # 2. Compute composite signals for each symbol
-        for symbol in self._symbols:
-            market = market_data.get(symbol) if market_data else None
-            deriv = derivatives_data.get(symbol) if derivatives_data else None
-            flow = flow_data.get(symbol) if flow_data else None
-
-            signal = compute_composite_signal(
-                symbol=symbol,
-                market=market,
-                sentiment=sentiment_data,
-                defi=defi_data,
-                derivatives=deriv,
-                whale_flow=flow,
-                weights=self._signal_weights,
-                buy_threshold=self._buy_threshold,
-                sell_threshold=self._sell_threshold,
-                min_confidence=self._min_confidence,
+            decisions[-1] = DecisionStep(
+                label="데이터 수집 (선물숏)",
+                observation=f"수집 완료: {', '.join(data_sources) if data_sources else 'None'}",
+                threshold="최소 1개 소스",
+                result="OK" if data_sources else "NO_DATA",
+                category="evaluate",
             )
-            self._latest_signals[symbol] = signal
 
+            # Compute composite signals for each symbol
+            for symbol in self._symbols:
+                market = market_data.get(symbol) if market_data else None
+                deriv = derivatives_data.get(symbol) if derivatives_data else None
+                flow = flow_data.get(symbol) if flow_data else None
+
+                signal = compute_composite_signal(
+                    symbol=symbol,
+                    market=market,
+                    sentiment=sentiment_data,
+                    defi=defi_data,
+                    derivatives=deriv,
+                    whale_flow=flow,
+                    weights=self._signal_weights,
+                    buy_threshold=self._buy_threshold,
+                    sell_threshold=self._sell_threshold,
+                    min_confidence=self._min_confidence,
+                )
+                self._latest_signals[symbol] = signal
+
+        # 2. Apply momentum-based sentiment adjustment for shorts
+        # The default signal uses contrarian sentiment (Fear=BUY).
+        # For short trading, we want momentum: Fear = bearish = SHORT.
+        # Flip the sentiment component for short-side evaluation.
+        for symbol in list(self._latest_signals.keys()):
+            sig = self._latest_signals[symbol]
+            sentiment_sig = None
+            for s in sig.signals:
+                if s.name == "sentiment":
+                    sentiment_sig = s
+                    break
+            if sentiment_sig and sentiment_sig.confidence > 0:
+                # Reverse the contrarian sentiment for shorts
+                # Original: Fear=+60, Greed=-60
+                # Momentum: Fear=-60 (bearish), Greed=+60 (bullish)
+                flipped_score = -sentiment_sig.score
+                # Recompute weighted score with flipped sentiment
+                w = self._signal_weights or {
+                    "whale_flow": 0.25, "sentiment": 0.15,
+                    "defi_flow": 0.20, "derivatives": 0.25,
+                    "market_trend": 0.15,
+                }
+                total_weight = 0.0
+                weighted_score = 0.0
+                weighted_conf = 0.0
+                for s in sig.signals:
+                    weight = w.get(s.name, 0.0)
+                    if s.confidence > 0:
+                        sc = flipped_score if s.name == "sentiment" else s.score
+                        weighted_score += sc * weight
+                        weighted_conf += s.confidence * weight
+                        total_weight += weight
+                if total_weight > 0:
+                    new_score = weighted_score / total_weight
+                    new_conf = weighted_conf / total_weight
+                else:
+                    new_score = sig.score
+                    new_conf = sig.confidence
+
+                action = SignalAction.HOLD
+                if new_score >= self._buy_threshold and new_conf >= self._min_confidence:
+                    action = SignalAction.BUY
+                elif new_score <= self._sell_threshold and new_conf >= self._min_confidence:
+                    action = SignalAction.SELL
+
+                self._latest_signals[symbol] = CompositeSignal(
+                    symbol=sig.symbol,
+                    action=action,
+                    score=new_score,
+                    confidence=new_conf,
+                    signals=sig.signals,
+                    timestamp=sig.timestamp,
+                )
+
+        # 3. Log signal decisions
+        for symbol in self._symbols:
+            signal = self._latest_signals.get(symbol)
+            if signal is None:
+                continue
             decisions.append(DecisionStep(
                 label=f"{symbol} 숏 시그널",
                 observation=f"점수={signal.score:+.1f}, 신뢰도={signal.confidence:.2f}",
@@ -317,7 +439,7 @@ class FuturesShortEngine(BaseEngine):
                     ))
                     continue
 
-                entry_result = await self._open_short(symbol, signal, regime_adj)
+                entry_result, fail_reason = await self._open_short(symbol, signal, regime_adj)
                 if entry_result:
                     actions.append(entry_result)
                     decisions.append(DecisionStep(
@@ -332,6 +454,14 @@ class FuturesShortEngine(BaseEngine):
                         ),
                         result=f"OPEN_SHORT — ${entry_result.get('notional', 0):.2f} ({self._leverage}x)",
                         category="execute",
+                    ))
+                elif fail_reason:
+                    decisions.append(DecisionStep(
+                        label=f"{symbol} 숏 진입 실패",
+                        observation=f"SELL 시그널 (점수={signal.score:+.1f})",
+                        threshold=fail_reason,
+                        result="FAILED",
+                        category="skip",
                     ))
 
         return EngineCycleResult(
@@ -441,8 +571,13 @@ class FuturesShortEngine(BaseEngine):
 
     async def _open_short(
         self, symbol: str, signal: CompositeSignal, regime_adj: dict
-    ) -> dict | None:
-        """Open a new SHORT futures position."""
+    ) -> tuple[dict | None, str | None]:
+        """Open a new SHORT futures position.
+
+        Returns:
+            (result_dict, None) on success
+            (None, fail_reason) on failure
+        """
         # Get current price
         price = None
         if self._futures_exchange:
@@ -451,14 +586,15 @@ class FuturesShortEngine(BaseEngine):
                 price = ticker.get("last", 0.0)
             except Exception as e:
                 logger.warning("futures_ticker_error", symbol=symbol, error=str(e))
+                return None, f"가격 조회 실패: {e}"
 
         if not price or price <= 0:
-            return None
+            return None, "가격 없음 (거래소 미연결)"
 
         # Calculate position size
         capital = self._allocated_capital
         if capital <= 0:
-            return None
+            return None, f"배정 자본 부족 (${capital:.2f})"
 
         # Base size: max_position_pct of capital
         base_size_usd = capital * (self._max_position_pct / 100.0)
@@ -481,7 +617,7 @@ class FuturesShortEngine(BaseEngine):
                 symbol=symbol,
                 notional=notional,
             )
-            return None
+            return None, f"최소 주문금액 미달 (${notional:.2f} < $10)"
 
         quantity = notional / price
 
@@ -514,7 +650,7 @@ class FuturesShortEngine(BaseEngine):
         else:
             if self._futures_exchange is None:
                 logger.error("no_futures_exchange_for_live_short")
-                return None
+                return None, "선물 거래소 미연결"
 
             try:
                 # Ensure leverage and margin mode are set
@@ -576,7 +712,7 @@ class FuturesShortEngine(BaseEngine):
                     "short_order_failed", symbol=symbol, error=str(e)
                 )
                 await self._send_alert(f"SHORT ORDER FAILED: {symbol} — {e}")
-                return None
+                return None, f"주문 실패: {e}"
 
         await self._send_alert(
             f"SHORT opened: {symbol} @ {price:.2f}, "
@@ -595,7 +731,7 @@ class FuturesShortEngine(BaseEngine):
             "leverage": self._leverage,
             "signal_score": round(signal.score, 1),
             "signal_confidence": round(signal.confidence, 3),
-        }
+        }, None
 
     async def _close_position(
         self, symbol: str, current_price: float, reason: str
